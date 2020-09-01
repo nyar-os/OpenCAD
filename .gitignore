@@ -15,5 +15,14 @@ Cargo.lock
 node_modules
 *.ps1
 
+# Node
+dist/
+*.tsbuildinfo
+*.node
+pnpm-debug.log*
+
+# VMZ
+.cache/
+
 # Mathematica
 *.nb

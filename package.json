@@ -1,19 +1,40 @@
 {
+    "name": "open-cad-workspace",
     "private": true,
+    "type": "module",
+    "packageManager": "pnpm@10.28.0",
+    "description": "OpenCAD workspace: drawings, layers, constraints and exchange formats on one native model",
+    "keywords": [
+        "cad",
+        "drawing",
+        "dwg",
+        "dxf",
+        "step",
+        "wae"
+    ],
+    "license": "Apache-2.0",
+    "repository": "https://github.com/nyar-os/OpenCAD",
     "scripts": {
-        "build": "cargo build --release",
-        "test": "cargo test --release",
+        "build:rust": "cargo build --release",
+        "test:rust": "cargo test --release",
         "fmt": "cargo fmt --all",
         "push": "wee test && git push",
         "reset": "git reset Head~ --soft",
         "pub": "cargo-publish-all --yes --allow-dirty",
 
-        "pest:build": "cargo test --color=always --package sm_parser --lib pre_build::gen_parser --no-fail-fast -- --ignored --exact -Z unstable-options --format=json --show-output",
-        "pest:fmt": "cargo fmt --package sm_parser",
-        "pest": "wee pest:build && wee pest:fmt -t",
-
-        "gh:new" : "git subtree push --prefix projects/sm-playground origin gh-pages",
-
-        "book": "vuepress dev projects/sm-book/docs"
+        "check:rust": "cargo fmt -p open-cad-drawing -p open-cad-napi -- --check && cargo clippy -p open-cad-drawing -p open-cad-napi --all-targets -- -D warnings && cargo test -p open-cad-drawing -p open-cad-napi",
+        "build:napi": "wae native build",
+        "build:ts": "pnpm --filter @wae/open-cad run build",
+        "build:ui": "pnpm --filter @wae/open-cad-ui run build",
+        "build": "wae build",
+        "stage:native": "wae native stage",
+        "typecheck": "pnpm -r --filter \"./projects/packages/*\" run typecheck",
+        "test": "pnpm -r --filter \"./projects/packages/*\" run test",
+        "gui": "pnpm run build && pnpm --filter @wae/open-cad exec node ./dist/cli.js gui"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "@wae/wae": "0.0.6",
+        "typescript": "^5.9.2"
     }
 }

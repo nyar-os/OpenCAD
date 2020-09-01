@@ -1,16 +1,27 @@
 [workspace]
-members = ["projects/*"]
-default-members = [
-    "projects/sm-ast",
-    "projects/sm-parser",
-    "projects/sm-playground",
-    "projects/sm-algorithm"
-]
-exclude = [
-    "projects/.DS_Store",
-    "projects/sm-std",
-    "projects/sm-book",
-]
+resolver = "2"
+members = ["projects/crates/*"]
+default-members = ["projects/crates/cad-model", "projects/crates/cad-napi"]
+exclude = ["projects/.DS_Store"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+authors = ["OpenCAD Authors"]
+repository = "https://github.com/nyar-os/OpenCAD"
+
+[workspace.dependencies]
+# Atomic file publish, pinned to the boost.rs `dev` revision so local builds
+# and CI resolve the same commit.
+boost-fs = { git = "https://github.com/oovm/boost.rs.git", rev = "94f5f65572965951f76f9c70668d5250e6ce52cc" }
+# Shared host facade for the Node-API and WebView surfaces. Cross-repo git
+# dependencies pin the full 40-character revision so local builds and CI resolve
+# the same commit.
+wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "f92f818fde7174154d77a87b55a5e44b367034c9", default-features = false, features = ["webview"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 lto = true
