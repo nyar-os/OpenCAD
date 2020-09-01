@@ -1,7 +1,0 @@
-use .constants.{Infinity}
-let alias oo  = Infinity;
-let alias inf = Infinity;
-
-use .function.{numeric}
-let alias N = numeric
-let alias O = Order

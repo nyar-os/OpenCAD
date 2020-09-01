@@ -1,4 +1,0 @@
-trait Integer {
-	def is_integer(self);
-}
-

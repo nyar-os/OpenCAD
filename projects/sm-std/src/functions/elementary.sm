@@ -1,2 +1,0 @@
-def inner sin(x: any);
-def inner cos(x: any);
