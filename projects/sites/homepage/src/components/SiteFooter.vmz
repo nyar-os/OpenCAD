@@ -1,0 +1,147 @@
+<template>
+    <footer class="site-footer">
+        <div class="site-footer__inner">
+            <div class="site-footer__brand">
+                <span class="site-footer__mark">OpenCAD</span>
+                <p class="site-footer__tag">
+                    Technical drawings on one declared model: layers, constraints,
+                    dimensions and exchange.
+                </p>
+            </div>
+
+            <nav aria-label="Product" class="footer-group">
+                <b>Product</b>
+                <Link to="FeaturesPage">
+                    Features
+                </Link>
+                <Link to="RoadmapPage">
+                    Roadmap
+                </Link>
+                <Link to="IndexPage">
+                    Overview
+                </Link>
+            </nav>
+
+            <nav aria-label="Developers" class="footer-group">
+                <b>Developers</b>
+                <a href="https://github.com/nyar-os/OpenCAD" rel="noopener">
+                    CLI
+                </a>
+                <a href="https://github.com/nyar-os/OpenCAD" rel="noopener">
+                    SDK
+                </a>
+                <a href="https://github.com/nyar-os/OpenCAD" rel="noopener">
+                    Skills
+                </a>
+            </nav>
+
+            <nav aria-label="Project" class="footer-group">
+                <b>Project</b>
+                <a href="https://github.com/nyar-os/OpenCAD" rel="noopener">
+                    Source code
+                </a>
+                <a href="https://github.com/nyar-os/OpenCAD/issues" rel="noopener">
+                    Issues
+                </a>
+                <a href="https://github.com/nyar-os/OpenCAD/releases" rel="noopener">
+                    Releases
+                </a>
+            </nav>
+
+            <div class="site-footer__bottom">
+                <span>Apache-2.0 licensed · Built with VMZ</span>
+                <span>No public release yet</span>
+            </div>
+        </div>
+    </footer>
+</template>
+
+<style>
+.site-footer {
+    border-top: 1px solid var(--ocd-line);
+    background: var(--ocd-surface);
+    margin-top: 64px;
+}
+
+.site-footer__inner {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 32px;
+    max-width: var(--ocd-maxw);
+    margin: 0 auto;
+    padding: 42px 24px 30px;
+}
+
+.site-footer__mark {
+    font-family: var(--ocd-mono);
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.site-footer__tag {
+    margin: 8px 0 0;
+    max-width: 280px;
+    color: var(--ocd-muted);
+    font-size: 14px;
+}
+
+.footer-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.footer-group b {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ocd-muted);
+    margin-bottom: 4px;
+}
+
+.footer-group a {
+    color: var(--ocd-ink);
+    font-size: 14px;
+}
+
+.footer-group a:hover {
+    color: var(--ocd-accent);
+}
+
+.site-footer__bottom {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ocd-line);
+    color: var(--ocd-muted);
+    font-size: 13px;
+}
+
+@media (max-width: 900px) {
+    .site-footer__inner {
+        grid-template-columns: 1fr 1fr;
+        gap: 26px;
+    }
+}
+
+@media (max-width: 620px) {
+    .site-footer__inner {
+        grid-template-columns: 1fr;
+        padding: 32px 18px 24px;
+    }
+
+    .site-footer__bottom {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+    }
+}
+</style>
+
+<script client>
+export default class SiteFooter {}
+</script>

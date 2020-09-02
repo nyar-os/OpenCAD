@@ -1,0 +1,367 @@
+<template>
+    <SiteShell page="roadmap">
+        <div class="page-head">
+            <h1>Roadmap</h1>
+            <p class="lead">
+                The phases below are gates, not marketing dates. A phase is done
+                when its evidence exists; until then, the capability matrix says
+                so.
+            </p>
+            <ul class="legend" aria-label="Phase states">
+                <li><span class="status-dot status-dot--on"></span> Done</li>
+                <li><span class="status-dot status-dot--active"></span> Active</li>
+                <li><span class="status-dot status-dot--off"></span> Planned</li>
+            </ul>
+        </div>
+
+        <section class="notice">
+            <b>No public release or installer yet.</b>
+            The source can create, edit, undo/redo, manage layers, import a
+            declared DXF subset, inspect and export a drawing today. The
+            interactive viewport, the constraint solver, DWG/STEP import, a full
+            DXF reader and STEP/STL output are still being built, and the
+            capability matrix says so.
+        </section>
+
+        <ol class="phases">
+            <li data-state="done">
+                <span class="phase__id">P0</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>Freeze the drawing contracts</h2>
+                        <span class="chip chip--available">done</span>
+                    </div>
+                    <p>
+                        Drawing, layer, entity and dimension identities, revisions,
+                        the project container, API surface, error codes and the
+                        format capability matrix.
+                    </p>
+                </div>
+            </li>
+            <li data-state="done">
+                <span class="phase__id">P1</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>Drawing document core</h2>
+                        <span class="chip chip--available">done</span>
+                    </div>
+                    <p>
+                        Create and open a `.ocad` project, declare units, edit
+                        lines, circles, polylines, text and dimensions, undo and
+                        redo, manage layers, save and reopen at the same revision,
+                        inspect it and export SVG, DXF or PDF. The CLI and SDK
+                        share the same handle store.
+                    </p>
+                </div>
+            </li>
+            <li data-state="active">
+                <span class="phase__id">P2</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>Interactive viewport</h2>
+                        <span class="chip chip--planned">active</span>
+                    </div>
+                    <p>
+                        A native viewport that paints the entity list, with pan,
+                        zoom, selection and snapping. Until it lands, the studio
+                        shows an empty model space.
+                    </p>
+                </div>
+            </li>
+            <li data-state="active">
+                <span class="phase__id">P3</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>DXF import and full exchange</h2>
+                        <span class="chip chip--planned">active</span>
+                    </div>
+                    <p>
+                        ASCII DXF import now covers the LAYER table and LINE,
+                        CIRCLE, TEXT, LWPOLYLINE and POLYLINE, with warnings for
+                        everything it skips. PDF export writes a minimal vector
+                        sheet. A full DXF reader, an independent reopen check and
+                        a per-object support matrix remain planned.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P4</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>Constraints and associative dimensions</h2>
+                        <span class="chip chip--planned">planned</span>
+                    </div>
+                    <p>
+                        Linear dimensions are entities today. A solver for the
+                        declared constraint set, associative dimensions and
+                        `constraints`/`references` inspection remain planned.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P5</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>Skills acceptance</h2>
+                        <span class="chip chip--planned">planned</span>
+                    </div>
+                    <p>
+                        Install the skills package in a clean environment and
+                        finish real drawing tasks with verified output.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P6</span>
+                <div>
+                    <div class="phase__head">
+                        <h2>STEP, mesh and print output</h2>
+                        <span class="chip chip--planned">planned</span>
+                    </div>
+                    <p>
+                        STEP and STL exchange, PNG output and the remaining format
+                        adapters. PDF already ships as a vector page.
+                    </p>
+                </div>
+            </li>
+        </ol>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Working today</h2>
+                <span class="chip chip--available">verified in the workspace</span>
+            </div>
+            <div class="table-wrap">
+                <table class="matrix">
+                    <thead>
+                        <tr>
+                            <th>Area</th>
+                            <th>Status</th>
+                            <th>Evidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="name">Drawing document</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Create, open, edit, save and reopen a `.ocad` project at the same revision.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Undo and layers</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>32 bounded snapshots per handle, plus layer add, rename, visibility and lock.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Entity editing</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Add, list, move, update and delete; locked layers refuse with `drawing/layer-locked`.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">CLI</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Create, add/move/update entities, undo/redo, manage layers, import DXF, inspect and export.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">SDK</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Handle-backed document with undo/redo, layers, editing, import, inspection, save and export.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Inspection</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Units, layers, geometry and dimensions produce per-object findings.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">SVG export</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Layers, strokes, circles, polylines, text and dimensions with a derived viewBox.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">DXF export</td>
+                            <td><span class="chip chip--available">partial</span></td>
+                            <td>ASCII R12 with HEADER, LAYER table and LINE/CIRCLE/TEXT entities plus losses.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">DXF import</td>
+                            <td><span class="chip chip--available">partial</span></td>
+                            <td>ASCII subset: LAYER table and LINE, CIRCLE, TEXT, LWPOLYLINE and POLYLINE. Skips are reported as warnings.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">PDF export</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Minimal vector PDF 1.4 with an A4 landscape MediaBox, layer colours, shapes and text.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Studio shell</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Window, undo/redo, layer controls, DXF import, inspector, inspection and export; no viewport renderer.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Skills</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Executable commands with the honest limits of this build.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Interactive viewport</td>
+                            <td><span class="chip chip--blocked">not implemented</span></td>
+                            <td>The studio shows a frame and an empty model space.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Constraint solver</td>
+                            <td><span class="chip chip--blocked">not implemented</span></td>
+                            <td>Linear dimensions exist; constraints and references remain unsupported.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">DWG/STEP import and STEP/STL export</td>
+                            <td><span class="chip chip--blocked">not implemented</span></td>
+                            <td>Those routes return <code>capability/not-implemented</code>.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Where the tests live</h2>
+                <span class="chip">product suite</span>
+            </div>
+            <p>
+                Drawing corpora, visual baselines, independent round trips and
+                skill tasks belong to the product test suite. The shared workspace
+                keeps only basic smoke checks, so a green build is not presented as
+                a finished product.
+            </p>
+        </section>
+
+        <p class="cta-line">
+            Follow the work in the
+            <a href="https://github.com/nyar-os/OpenCAD" rel="noopener">
+                source repository
+            </a>
+            .
+        </p>
+    </SiteShell>
+</template>
+
+<style>
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ocd-muted);
+    font-family: var(--ocd-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-dot--active {
+    border-color: var(--ocd-accent);
+    background: var(--ocd-accent-soft);
+    box-shadow: inset 0 0 0 1px var(--ocd-accent);
+}
+
+.notice {
+    margin-top: 28px;
+    padding: 18px 22px;
+    border: 1px solid var(--ocd-line);
+    border-left: 3px solid var(--ocd-accent);
+    border-radius: var(--ocd-radius);
+    background: var(--ocd-surface);
+    color: var(--ocd-muted);
+    font-size: 15px;
+}
+
+.notice b {
+    color: var(--ocd-ink);
+}
+
+.phases {
+    margin: 32px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 14px;
+}
+
+.phases li {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid var(--ocd-line);
+    border-radius: var(--ocd-radius);
+    background: var(--ocd-surface);
+}
+
+.phase__id {
+    font-family: var(--ocd-mono);
+    font-size: 18px;
+    color: var(--ocd-muted);
+}
+
+.phase__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 4px;
+}
+
+.phases h2 {
+    margin: 0;
+    font-size: 17px;
+}
+
+.phases p {
+    margin: 0;
+    color: var(--ocd-muted);
+    font-size: 14px;
+}
+
+.phases li[data-state="done"] {
+    border-left: 3px solid var(--ocd-accent);
+}
+
+.phases li[data-state="done"] .phase__id {
+    color: var(--ocd-accent);
+}
+
+.phases li[data-state="active"] {
+    border-left: 3px solid var(--ocd-accent);
+    background: linear-gradient(90deg, var(--ocd-accent-soft), var(--ocd-surface) 55%);
+}
+
+.phases li[data-state="active"] .phase__id {
+    color: var(--ocd-accent);
+}
+
+@media (max-width: 620px) {
+    .phases li {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+}
+</style>
+
+<script client>
+export default class RoadmapPage {
+    static meta() {
+        return {
+            title: "Roadmap — OpenCAD",
+            description:
+                "The P0–P6 gates for OpenCAD: drawing contracts and document core are done, the interactive viewport and the declared DXF import/PDF exchange work are active, and constraints plus STEP/STL output remain planned.",
+        };
+    }
+}
+</script>

@@ -1,0 +1,85 @@
+<template>
+    <div class="studio-root">
+        <slot />
+    </div>
+</template>
+
+<style>
+:root {
+    --ocd-bg: #e7e9ea;
+    --ocd-surface: #f8f9f9;
+    --ocd-surface-2: #dfe3e4;
+    --ocd-ink: #1b1f24;
+    --ocd-muted: #5f6b76;
+    --ocd-line: #c2c9cc;
+    --ocd-accent: #0b7285;
+    --ocd-accent-soft: #d7e7e9;
+    --ocd-danger: #a4262c;
+    --ocd-danger-soft: #f4e0e1;
+    --ocd-on-accent: #f2fbfc;
+    --ocd-radius: 2px;
+    --ocd-chrome: #191d20;
+    --ocd-chrome-2: #22272b;
+    --ocd-chrome-line: #0b0e10;
+    --ocd-chrome-ink: #dfe4e6;
+    --ocd-chrome-muted: #8b979e;
+    --ocd-chrome-hover: #2b3237;
+    --ocd-mono: "Cascadia Mono", "Consolas", monospace;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: var(--ocd-bg);
+    color: var(--ocd-ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+}
+
+h1,
+h2,
+h3 {
+    margin: 0;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+input,
+textarea,
+select {
+    font: inherit;
+    color: inherit;
+}
+
+.studio-root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+</style>
+
+<script client>
+export default class Application {}
+</script>

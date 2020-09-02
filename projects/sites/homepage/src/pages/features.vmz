@@ -1,0 +1,287 @@
+<template>
+    <SiteShell page="features">
+        <div class="page-head">
+            <h1>Features</h1>
+            <p class="lead">
+                One drawing model behind inspection, exchange and agent
+                authoring. Create, edit, undo/redo, manage layers, import a
+                declared DXF subset, save, inspect and export a drawing today;
+                the interactive viewport and STEP/STL output are labelled as
+                unfinished instead of being implied by a suffix.
+            </p>
+            <div class="head-tags">
+                <span class="chip chip--available">document core available</span>
+                <span class="chip chip--blocked">viewport not implemented</span>
+            </div>
+        </div>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Contracts</h2>
+                <span class="chip chip--available">available</span>
+            </div>
+            <div class="grid-2">
+                <article class="card">
+                    <span class="chip chip--available">available</span>
+                    <h3>Handle API</h3>
+                    <p>
+                        Create, open, save, undo/redo, layer and entity editing,
+                        DXF import, inspect, export and close all take a handle.
+                        The SDK returns a document wrapper, so one drawing is
+                        mutated instead of a path being re-guessed at each step.
+                    </p>
+                </article>
+                <article class="card">
+                    <span class="chip chip--available">available</span>
+                    <h3>Revisions</h3>
+                    <p>
+                        Every mutation increments the revision, and saved files
+                        reopen at the revision they were written with. Inspection
+                        findings carry the revision they were computed from.
+                    </p>
+                </article>
+                <article class="card">
+                    <span class="chip chip--available">available</span>
+                    <h3>Stable error codes</h3>
+                    <p>
+                        Failures carry a code such as <code>format/invalid</code>
+                        or <code>capability/not-implemented</code>. The studio
+                        parses the code, keeps the message and never turns a
+                        rejection into a success state.
+                    </p>
+                </article>
+                <article class="card">
+                    <span class="chip chip--declared">measured</span>
+                    <h3>Per-format matrix</h3>
+                    <p>
+                        DWG, DXF, STEP, STP, IGES, IGS, STL, OBJ, SVG, PDF, PNG
+                        and JPG are registered. SVG, DXF and PDF are supported
+                        export targets; DXF also has a declared ASCII import
+                        subset. Nothing else imports.
+                    </p>
+                </article>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Feature areas</h2>
+                <span class="chip chip--blocked">read the status</span>
+            </div>
+            <div class="grid-3">
+                <article class="feature">
+                    <span class="chip chip--available">available</span>
+                    <h3>Drawing document</h3>
+                    <p>
+                        `.ocad` projects hold ordered layers, a revision, a unit
+                        and a flat entity list. Save writes a temporary file and
+                        renames it into place; open validates tag, version,
+                        identity and coordinates.
+                    </p>
+                </article>
+                <article class="feature">
+                    <span class="chip chip--available">available</span>
+                    <h3>Entity editing</h3>
+                    <p>
+                        Lines, circles, polylines, text and linear dimensions can
+                        be added, listed, moved, updated and deleted through the
+                        SDK, the CLI and the native JSON-RPC surface. Geometry on
+                        a locked layer refuses with <code>drawing/layer-locked</code>.
+                    </p>
+                </article>
+                <article class="feature">
+                    <span class="chip chip--available">available</span>
+                    <h3>Undo and layers</h3>
+                    <p>
+                        Each handle keeps 32 bounded snapshots. Undo and redo
+                        restore a snapshot, bump the revision and report
+                        <code>canUndo</code>/<code>canRedo</code>. Layers can be
+                        added, renamed with atomic reference updates, hidden and
+                        locked.
+                    </p>
+                </article>
+                <article class="feature">
+                    <span class="chip chip--available">available</span>
+                    <h3>Inspection</h3>
+                    <p>
+                        Units, layers, geometry and dimensions run today and
+                        report per-object findings, including hidden or locked
+                        layers, duplicate layer names, empty text and zero-length
+                        segments. Constraints and references refuse.
+                    </p>
+                </article>
+                <article class="feature">
+                    <span class="chip chip--available">partial</span>
+                    <h3>Exchange</h3>
+                    <p>
+                        SVG keeps layer colours and every entity. DXF is ASCII R12
+                        with a HEADER, LAYER table and LINE/CIRCLE/TEXT entities,
+                        plus a loss report. PDF is a minimal vector A4 landscape
+                        page. DXF import reads only the declared subset.
+                    </p>
+                </article>
+                <article class="feature">
+                    <span class="chip chip--available">shell only</span>
+                    <h3>Studio</h3>
+                    <p>
+                        Titlebar, path field, layer rail with visibility and lock
+                        controls, undo/redo, DXF import, inspector tabs and status
+                        bar work against the native host. The viewport is still a
+                        frame and says so.
+                    </p>
+                </article>
+                <article class="feature">
+                    <span class="chip chip--available">executable</span>
+                    <h3>Agent skills</h3>
+                    <p>
+                        The skill document lists the real commands and the real
+                        limits. It never presents the viewport or STEP/STL output
+                        as available, and it states the DXF import subset.
+                    </p>
+                </article>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Command surface</h2>
+                <span class="chip">today</span>
+            </div>
+            <div class="table-wrap">
+                <table class="matrix">
+                    <thead>
+                        <tr>
+                            <th>Surface</th>
+                            <th>Today</th>
+                            <th>Behaviour</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="name">CLI</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Creates, edits, undoes/redoes, manages layers, imports DXF, inspects and exports drawings. Editing commands save the file in place.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">SDK</td>
+                            <td><span class="chip chip--available">available</span></td>
+                            <td>Returns a handle-backed document with undo/redo, layers, entity editing, import, inspect, save, export, delete and list.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Studio</td>
+                            <td><span class="chip chip--declared">shell only</span></td>
+                            <td>Sends the documented JSON-RPC requests, offers undo/redo, import and layer controls, and never paints geometry.</td>
+                        </tr>
+                        <tr>
+                            <td class="name">Skills</td>
+                            <td><span class="chip chip--available">executable</span></td>
+                            <td>Records the routing rules and the exact commands that work in this build.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Format honesty</h2>
+                <span class="chip chip--declared">measured</span>
+            </div>
+            <p>
+                The format registry classifies DWG, DXF, STEP, STP, IGES, IGS, STL,
+                OBJ, SVG, PDF, PNG and JPG, but classification is not a support
+                claim. <code>capabilities()</code> reports SVG, DXF, PDF, STL and
+                STEP as supported export targets, DXF and STEP as partial
+                formats, the native project as partial, and the PNG renderer as
+                unsupported. STEP output is a faceted BREP projection of closed
+                profiles, not a modelling kernel.
+            </p>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Current state</h2>
+                <span class="chip chip--available">inspectable</span>
+            </div>
+            <div class="grid-2">
+                <article class="card">
+                    <span class="status-dot status-dot--on"></span>
+                    <h3>In place</h3>
+                    <ul>
+                        <li>Drawing document and atomic `.ocad` persistence</li>
+                        <li>Line, circle, polyline, text and dimension editing</li>
+                        <li>Undo/redo with a 32-snapshot bound per handle</li>
+                        <li>Layer add, rename, visibility and lock</li>
+                        <li>Inspection findings with layer and object locators</li>
+                        <li>SVG and ASCII DXF export plus vector PDF output</li>
+                        <li>ASCII DXF import for the declared subset</li>
+                        <li>CLI and SDK on the same native handle store</li>
+                    </ul>
+                </article>
+                <article class="card">
+                    <span class="status-dot status-dot--off"></span>
+                    <h3>Not implemented</h3>
+                    <ul>
+                        <li>Interactive viewport, selection and snapping</li>
+                        <li>Constraint solver and associative dimensions</li>
+                        <li>DWG and STEP import; a full DXF reader</li>
+                        <li>STEP and STL export</li>
+                        <li>PNG rendering</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+
+        <p class="cta-line">
+            Curious what is already settled?
+            <Link to="RoadmapPage">
+                Read the roadmap
+            </Link>
+        </p>
+    </SiteShell>
+</template>
+
+<style>
+.head-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.feature {
+    padding: 20px 18px;
+    border: 1px solid var(--ocd-line);
+    border-radius: var(--ocd-radius);
+    background: var(--ocd-surface);
+}
+
+.feature h3 {
+    margin: 9px 0 7px;
+    font-size: 16px;
+}
+
+.feature p {
+    margin: 0;
+    color: var(--ocd-muted);
+    font-size: 13px;
+}
+
+@media (max-width: 900px) {
+    .feature {
+        padding: 18px 16px;
+    }
+}
+</style>
+
+<script client>
+export default class FeaturesPage {
+    static meta() {
+        return {
+            title: "Features — OpenCAD",
+            description:
+                "The working OpenCAD drawing document, undo/redo, layer and entity editing, DXF import subset and SVG/DXF/PDF export, with the viewport and STEP/STL clearly marked as unfinished.",
+        };
+    }
+}
+</script>

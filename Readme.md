@@ -1,19 +1,122 @@
-Simple Math
-===========
+OpenCAD workspace
+=================
 
-A computer algebra system (CAS) written in Rust. [![Netlify Status](https://api.netlify.com/api/v1/badges/d09ddb19-da8b-42d0-b789-3ab2784dee67/deploy-status)](https://app.netlify.com/sites/sm-lang/deploys)
+OpenCAD is a drawing workspace built around one model of a drawing: layers,
+geometry, dimensions and references. This repository holds the product surface
+around that model — the command-line tool and SDK, the studio window, the agent
+skills package and the product website.
 
-- Try Online: [PlayGround](https://galaster.github.io/SimpleMath/)
-- Document: [SM Language](https://sm-lang.netlify.app/)
+Status
+------
 
+Working document core. A `.ocad` project can be created, opened, edited, saved
+and reopened; lines, circles, arcs, ellipses, polylines, text and linear
+dimensions are real entities; transform (translate/rotate/scale/mirror), copy
+and measure are supported; each handle keeps a 32-snapshot undo/redo history;
+layers can be added, renamed, hidden and locked; inspection reports per-object
+findings;
+SVG, ASCII DXF, vector PDF, ASCII STL and STEP export work, and a declared ASCII
+DXF subset can be imported. The interactive viewport, DWG/STEP import, a full
+DXF reader, the STL reader, the constraint solver and a modelling kernel are not
+implemented and return the stable `capability/not-implemented` code. STEP output
+is a faceted BREP projection of closed profiles, not a solid model.
 
+What is here
+------------
 
-### Functions
+| Surface        | Package                        | Purpose                                                              |
+| :------------- | :----------------------------- | :------------------------------------------------------------------- |
+| SDK and CLI    | `@wae/open-cad`                | `new OpenCAD()` session, handle-backed document and `open-cad` command |
+| Studio         | `@wae/open-cad-ui`             | Desktop window with undo/redo, layer controls, import and inspector  |
+| Skills         | `@wae/open-cad-skills`         | Agent routing and executable drawing commands                         |
+| Website        | `@wae/open-cad-homepage`       | Product pages: overview, features, roadmap                            |
+| Platform addon | `@wae/open-cad-<platform>-<arch>` | Prebuilt binaries for Windows, macOS and Linux                   |
 
+Try the command line
+--------------------
 
-| Icon |               |
-| :--- | :------------ |
-| 📑    | License       |
-| 🖋    | Syntax change |
-| 📖    | Document      |
-| 🔧    | Bug fix       |
+```bash
+open-cad capabilities
+open-cad create --out plan.ocad --title "Site plan" --units mm
+open-cad entity add-line plan.ocad --layer 0 --from 0,0 --to 100,40
+open-cad entity add-circle plan.ocad --layer 0 --center 50,50 --radius 20
+open-cad arc add plan.ocad --layer 0 --center 50,50 --radius 20 --start 0 --end 90
+open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotation 15
+open-cad entity move plan.ocad --id entity-1 --dx 10 --dy 5
+open-cad transform plan.ocad --ids entity-1,entity-2 --rotate 45 --center 0,0
+open-cad transform plan.ocad --layer 0 --translate 10,5
+open-cad transform plan.ocad --all --mirror x --mirror-at 0
+open-cad copy plan.ocad --ids entity-1 --dx 10 --dy 0 --count 3
+open-cad measure plan.ocad
+open-cad undo plan.ocad
+open-cad redo plan.ocad
+open-cad layer add plan.ocad --name Walls --color "#a4262c"
+open-cad layer rename plan.ocad --name Walls --to Structure
+open-cad layer lock plan.ocad --name Structure --locked on
+open-cad entity list plan.ocad
+open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions
+open-cad export plan.ocad --format svg --out plan.svg
+open-cad export plan.ocad --format dxf --out plan.dxf
+open-cad export plan.ocad --format pdf --out plan.pdf
+open-cad export plan.ocad --format stl --out plan.stl
+open-cad export plan.ocad --format step --out plan.step
+open-cad import site.dxf --out site.ocad
+```
+
+Entity, layer and history commands open the document, mutate it and let the
+SDK write it back. `new OpenCAD({ history: 'sidecar' })` records the previous
+document in a `<file>.history.json` sidecar (up to 32 steps, atomic writes), so
+`open-cad undo` and `open-cad redo` keep working across separate CLI processes;
+a restore bumps the revision relative to the current file. `create` and `import`
+save through the SDK, which adopts the new target and clears its stale sidecar.
+The default `history: 'memory'` session keeps snapshots inside the native handle
+only. The CLI uses only the session and document methods (`capabilities`,
+`create`, `open`, `importDxf`, `inspect`, `save`, `export`, `undo`, `redo`,
+entity and layer editing, `close`); it has no direct `service` access. The studio
+window is opened with `open-cad gui`; it reads documents and capabilities from
+the native host, but it does not paint geometry yet.
+
+What this build does NOT do
+---------------------------
+
+- No DWG or STEP import, and no full DXF reader. `import` accepts the declared
+  ASCII subset only: `$INSUNITS`, the LAYER table, BLOCKS/INSERT expansion, and
+  LINE, CIRCLE, ARC, ELLIPSE, POINT, TEXT, LWPOLYLINE (including bulge) and
+  POLYLINE/VERTEX/SEQEND. ARC and ELLIPSE stay analytic; only bulge arcs are
+  flattened. Every approximation and skip is reported as a loss with a stable
+  code, a severity (`notice` or `warning`) and a detail.
+- No STEP reader or PNG writer, and no STL reader. STL export extrudes closed
+  profiles along +Z (default thickness 1.0 drawing units) into caps and side
+  walls; arcs and ellipses are sampled at five-degree steps, and a full ellipse
+  is a closed profile. It is not a surface or solid modeller and performs no
+  boolean operations. Open profiles are skipped with `stl/open-profile`;
+  degenerate triangles are skipped with `stl/degenerate-triangle`. PDF export
+  exists as a minimal vector page and approximates arcs and ellipses with cubic
+  Bezier segments; SVG and DXF export also work.
+- STEP export (`export --format step`) writes ISO-10303-21 AP203-style text and
+  reuses the same closed-profile extrusion and ear-clipping triangulation as
+  STL. Every triangle becomes one planar `ADVANCED_FACE`, and each closed
+  profile becomes its own faceted solid (`CLOSED_SHELL` inside a
+  `MANIFOLD_SOLID_BREP`), so disjoint profiles stay separate; there are no
+  booleans, analytic surfaces or features. Open profiles are skipped with
+  `step/open-profile` and never become a fabricated solid. STEP import is not
+  implemented.
+- No interactive viewport, selection or snapping.
+- No constraint solver or associative dimensions; `constraints` and `references`
+  checks are reported as unsupported.
+- No layer deletion.
+- `capabilities()` reports `project: partial`, SVG/PDF/STEP/STL export as
+  supported, DXF as partial because of its import subset, STEP as partial
+  because only export is implemented, STL import and DWG as unsupported, and the
+  unimplemented routes as `unsupported`. Its `entities` matrix lists line,
+  circle, arc, ellipse, point, polyline, text and dimension as supported; its
+  `operations` matrix lists transform, copy and measure as supported while
+  constraint solving and a 3D kernel stay unsupported. Document checks:
+  `units`, `layers`, `geometry`, `polylines` and `dimensions` run;
+  `constraints` and `references` stay unsupported. `units` is conservative: it
+  warns only when a dimension's explicit label carries a unit word or inch
+  symbol that conflicts with the document unit.
+- `measure` sums line segments, polyline edges and analytic arc lengths; ellipse
+  length is sampled at five-degree steps, so it is approximate. Area covers
+  closed polylines (shoelace), full circles and full ellipses; partial curves
+  and self-intersecting polylines are not exact.

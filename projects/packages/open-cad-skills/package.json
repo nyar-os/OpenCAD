@@ -1,0 +1,26 @@
+{
+    "name": "@wae/open-cad-skills",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Agent skills for OpenCAD: drawing, layer, constraint and exchange tasks",
+    "license": "Apache-2.0",
+    "type": "module",
+    "engines": {
+        "node": ">=18"
+    },
+    "files": [
+        "skills"
+    ],
+    "keywords": [
+        "open-cad",
+        "cad",
+        "drawing",
+        "skills",
+        "agent"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nyar-os/OpenCAD.git",
+        "directory": "projects/packages/open-cad-skills"
+    }
+}

@@ -1,0 +1,1064 @@
+<template>
+    <div class="studio">
+        <header class="winbar" :class="customChrome ? 'winbar custom' : 'winbar'">
+            <div class="winbar__brand" data-drag>
+                <span class="winbar__mark" aria-hidden="true">C</span>
+                <span class="winbar__name">OpenCAD Studio</span>
+                <span class="winbar__divider" aria-hidden="true"></span>
+                <span class="winbar__doc" :title="docTitle()">{{ docTitle() }}</span>
+            </div>
+
+            <div class="cmd-groups">
+                <div class="cmd-group" role="group" aria-label="File">
+                    <span class="cmd-label">FILE</span>
+                    <button type="button" class="cmd-btn" @click="create" :disabled="!hostReady" title="Ctrl/Cmd+N">New</button>
+                    <button type="button" class="cmd-btn" @click="open" :disabled="!hostReady" title="Ctrl/Cmd+O">Open</button>
+                    <span class="export-wrap">
+                        <button type="button" class="cmd-btn" @click="toggleImport" :disabled="!hostReady" title="Import an ASCII DXF file">Import</button>
+                        <div class="popover import-panel" v-if="importOpen">
+                            <p class="popover-title">Import ASCII DXF</p>
+                            <label class="export-field">
+                                <span>Source</span>
+                                <input class="path-input" :value="importPath" @input="onImportPathInput" placeholder="C:\drawings\site.dxf" spellcheck="false" />
+                            </label>
+                            <p class="export-target">A new drawing handle is created; save it to a .ocad path afterwards.</p>
+                            <p class="note">Reads the LAYER table and LINE, CIRCLE, TEXT, LWPOLYLINE and POLYLINE. Other entities are skipped and reported as warnings.</p>
+                            <div class="popover-actions">
+                                <button type="button" class="btn btn-primary" @click="importDxf" :disabled="!hostReady">Import</button>
+                                <button type="button" class="btn btn-ghost" @click="closePanels">Cancel</button>
+                            </div>
+                        </div>
+                    </span>
+                    <button type="button" class="cmd-btn" @click="save" :disabled="!hostReady" title="Ctrl/Cmd+S">Save</button>
+                    <span class="export-wrap">
+                        <button type="button" class="cmd-btn" @click="toggleExport" :disabled="!canExport()" title="Ctrl/Cmd+E">Export</button>
+                        <div class="popover export-panel" v-if="exportOpen">
+                            <p class="popover-title">Export drawing</p>
+                            <label class="export-field">
+                                <span>Format</span>
+                                <select class="select" :value="exportFormat" @change="onExportFormatChange" :disabled="!canExport()">
+                                    <option v-for="option in exportFormatOptions()" :key="option.key" :value="option.value">{{ option.label }}</option>
+                                </select>
+                            </label>
+                            <p class="export-target">Target {{ exportTargetPath() }}</p>
+                            <p class="note" v-if="!hasExportFormats()">No export targets were declared by the host.</p>
+                            <p class="note" v-else-if="!anyExportTargetSupported()">The host declares no supported export target.</p>
+                            <p class="note" v-else>Available writers: {{ exportSummary() }}. Other declared targets are refused.</p>
+                            <div class="popover-actions">
+                                <button type="button" class="btn btn-primary" @click="exportCurrent" :disabled="!canExport()">Export</button>
+                                <button type="button" class="btn btn-ghost" @click="closePanels">Cancel</button>
+                            </div>
+                        </div>
+                    </span>
+                </div>
+
+                <span class="cmd-sep" aria-hidden="true"></span>
+
+                <div class="cmd-group" role="group" aria-label="Document">
+                    <span class="cmd-label">DOC</span>
+                    <button type="button" class="cmd-btn" @click="undoDrawing" :disabled="!canUndo()" title="Ctrl/Cmd+Z">Undo</button>
+                    <button type="button" class="cmd-btn" @click="redoDrawing" :disabled="!canRedo()" title="Ctrl/Cmd+Shift+Z or Ctrl+Y">Redo</button>
+                    <button type="button" class="cmd-btn" @click="closeDrawing" :disabled="!hostReady">Close drawing</button>
+                </div>
+
+                <span class="cmd-sep" aria-hidden="true"></span>
+
+                <div class="cmd-group" role="group" aria-label="View">
+                    <span class="cmd-label">VIEW</span>
+                    <button type="button" class="cmd-btn" disabled title="Viewport renderer is not implemented">Fit</button>
+                    <button type="button" class="cmd-btn" disabled title="Viewport renderer is not implemented">Zoom out</button>
+                    <button type="button" class="cmd-btn readout" disabled title="Viewport renderer is not implemented">100%</button>
+                    <button type="button" class="cmd-btn" disabled title="Viewport renderer is not implemented">Zoom in</button>
+                </div>
+            </div>
+
+            <div class="winbar__spacer" data-drag></div>
+
+            <div class="winbar__right">
+                <span class="popover-wrap">
+                    <button type="button" class="winbar__shortcuts" @click="toggleShortcuts" :aria-expanded="shortcutsOpen ? 'true' : 'false'" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
+                    <div class="popover shortcuts" v-if="shortcutsOpen">
+                        <p class="popover-title">Keyboard shortcuts</p>
+                        <ul class="keylist">
+                            <li class="keyrow"><span>New drawing</span><kbd>Ctrl / Cmd + N</kbd></li>
+                            <li class="keyrow"><span>Open drawing</span><kbd>Ctrl / Cmd + O</kbd></li>
+                            <li class="keyrow"><span>Save drawing</span><kbd>Ctrl / Cmd + S</kbd></li>
+                            <li class="keyrow"><span>Undo drawing</span><kbd>Ctrl / Cmd + Z</kbd></li>
+                            <li class="keyrow"><span>Redo drawing</span><kbd>Ctrl / Cmd + Shift + Z</kbd></li>
+                            <li class="keyrow"><span>Redo drawing</span><kbd>Ctrl + Y</kbd></li>
+                            <li class="keyrow"><span>Export panel</span><kbd>Ctrl / Cmd + E</kbd></li>
+                            <li class="keyrow"><span>Close drawing</span><kbd>Ctrl / Cmd + W</kbd></li>
+                            <li class="keyrow"><span>Properties tab</span><kbd>Ctrl + 1</kbd></li>
+                            <li class="keyrow"><span>Capabilities tab</span><kbd>Ctrl + 2</kbd></li>
+                            <li class="keyrow"><span>Diagnostics tab</span><kbd>Ctrl + 3</kbd></li>
+                            <li class="keyrow"><span>Dismiss panels</span><kbd>Esc</kbd></li>
+                        </ul>
+                    </div>
+                </span>
+                <span class="winbar__led" :class="hostReady ? 'winbar__led live' : 'winbar__led'" aria-hidden="true"></span>
+                <span class="winbar__mode">{{ hostReady ? "NATIVE" : "PREVIEW" }}</span>
+                <div class="winbar__controls" :class="customChrome ? 'winbar__controls custom' : 'winbar__controls'">
+                    <button type="button" class="winbtn" @click="windowMinimize" aria-label="Minimize window" title="Minimize">
+                        <svg class="winbtn__icon" viewBox="0 0 10 10" aria-hidden="true"><line x1="2" y1="5" x2="8" y2="5" /></svg>
+                    </button>
+                    <button type="button" class="winbtn" @click="windowToggleMaximize" aria-label="Maximize or restore window" title="Maximize or restore">
+                        <svg class="winbtn__icon" viewBox="0 0 10 10" aria-hidden="true"><rect x="2.5" y="2.5" width="5" height="5" /></svg>
+                    </button>
+                    <button type="button" class="winbtn winbtn--close" @click="windowClose" aria-label="Close window" title="Close">
+                        <svg class="winbtn__icon" viewBox="0 0 10 10" aria-hidden="true"><line x1="2.5" y1="2.5" x2="7.5" y2="7.5" /><line x1="7.5" y1="2.5" x2="2.5" y2="7.5" /></svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <div class="contextbar">
+            <label class="path-field">
+                <span class="field-label">Path</span>
+                <input class="path-input" data-field="path" :value="path" @input="onPathInput" placeholder="C:\drawings\plan.ocad" spellcheck="false" />
+            </label>
+            <span class="context-hint">Type a path; the native file picker is not implemented.</span>
+            <span class="ctx-pill">{{ hostReady ? "native host" : "preview" }}</span>
+            <span class="ctx-pill muted" v-if="!engineConnected()">engine not connected</span>
+            <span class="ctx-pill" v-else>engine {{ capabilities.project }}</span>
+        </div>
+
+        <div class="preview-banner" v-if="!hostReady">
+            Preview mode has no native host. No drawing can be created, opened, saved or exported from this tab.
+        </div>
+
+        <div class="workspace">
+            <aside class="sidebar">
+                <section class="panel">
+                    <h2 class="panel-head">Drawing</h2>
+                    <dl class="facts" v-if="drawing">
+                        <div class="fact"><dt>Title</dt><dd>{{ drawing.title || "Untitled drawing" }}</dd></div>
+                        <div class="fact"><dt>Id</dt><dd>{{ drawing.id }}</dd></div>
+                        <div class="fact"><dt>Revision</dt><dd>{{ drawing.revision }}</dd></div>
+                        <div class="fact"><dt>Units</dt><dd>{{ unitLabel() }}</dd></div>
+                        <div class="fact"><dt>Path</dt><dd :title="projectPath">{{ projectPath || "unsaved" }}</dd></div>
+                        <div class="fact"><dt>Layers</dt><dd>{{ layerCount() }}</dd></div>
+                        <div class="fact"><dt>Entities</dt><dd>{{ drawing.entities }}</dd></div>
+                    </dl>
+                    <p class="empty" v-else>Nothing is open.</p>
+                </section>
+
+                <section class="panel">
+                    <h2 class="panel-head">Layers <span class="head-count">{{ layerCount() }}</span></h2>
+                    <div class="layer" v-for="layer in layerList()" :key="layer.id" :class="layerClass(layer)" @click="selectLayer(layer.id)">
+                        <span class="dot" :class="layer.visible ? 'dot on' : 'dot'"></span>
+                        <input v-if="layerEditId === layer.id" class="layer-input" :value="layerEditName" @input="onLayerEditInput" @keydown.enter="commitLayerRename" @blur="commitLayerRename" aria-label="Layer name" />
+                        <span v-else class="layer-name" :title="layer.name">{{ layer.name }}</span>
+                        <span class="layer-count">{{ layer.entityCount }}</span>
+                        <span class="layer-actions">
+                            <button type="button" class="icon-btn" @click="toggleLayerVisible(layer)" :aria-label="layer.visible ? 'Hide layer ' + layer.name : 'Show layer ' + layer.name" :title="layer.visible ? 'Hide layer' : 'Show layer'">
+                                <svg viewBox="0 0 12 10" aria-hidden="true"><path d="M1 5s2-3.4 5-3.4S11 5 11 5 9 8.4 6 8.4 1 5 1 5Z" /><circle cx="6" cy="5" r="1.5" /><line v-if="!layer.visible" x1="1.5" y1="8.5" x2="10.5" y2="1.5" /></svg>
+                            </button>
+                            <button type="button" class="icon-btn" @click="toggleLayerLocked(layer)" :aria-label="layer.locked ? 'Unlock layer ' + layer.name : 'Lock layer ' + layer.name" :title="layer.locked ? 'Unlock layer' : 'Lock layer'">
+                                <svg viewBox="0 0 10 12" aria-hidden="true"><rect x="1.5" y="5.5" width="7" height="5" /><path v-if="layer.locked" d="M3.2 5.5V3.8a1.8 1.8 0 0 1 3.6 0v1.7" /><path v-else d="M3.2 5.5V3.8a1.8 1.8 0 0 1 3.6 0" /></svg>
+                            </button>
+                            <button type="button" class="icon-btn" @click="startLayerRename(layer)" :aria-label="'Rename layer ' + layer.name" title="Rename layer">
+                                <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 10l.9-2.8 5.6-5.6 1.9 1.9-5.6 5.6L2 10Z" /><line x1="7.4" y1="2.7" x2="9.3" y2="4.6" /></svg>
+                            </button>
+                        </span>
+                    </div>
+                    <p class="empty" v-if="layerCount() === 0">No layers. Open a drawing to list the layers the host reports.</p>
+                    <div class="layer-add" v-if="drawing">
+                        <button type="button" class="btn btn-small" @click="toggleLayerAdd" :disabled="!hostReady">{{ layerAddOpen ? "Cancel" : "Add layer" }}</button>
+                        <template v-if="layerAddOpen">
+                            <input class="layer-input" :value="layerAddName" @input="onLayerAddNameInput" placeholder="Layer name" aria-label="New layer name" />
+                            <input class="layer-input color-input" :value="layerAddColor" @input="onLayerAddColorInput" placeholder="#a4262c" aria-label="New layer colour" />
+                            <button type="button" class="btn btn-small btn-primary" @click="commitLayerAdd" :disabled="!hostReady">Add</button>
+                        </template>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <h2 class="panel-head">Export targets</h2>
+                    <div class="target-row" v-for="target in exportTargets()" :key="target.name">
+                        <span class="dot" :class="target.supported ? 'dot on' : 'dot'"></span>
+                        <span class="target-name">{{ target.name }}</span>
+                        <span class="target-status">{{ target.supported ? "supported" : "unsupported" }}</span>
+                    </div>
+                    <p class="empty" v-if="exportTargets().length === 0">No export targets were reported.</p>
+                    <p class="note" v-if="showExportNote()">The host reports no supported export target.</p>
+                    <p class="note">This build writes SVG, DXF, PDF, STL and STEP. STL and STEP are faceted extrusions of closed profiles, not analytic solids.</p>
+                </section>
+            </aside>
+
+            <main class="viewport">
+                <div class="viewport-bar">
+                    <span class="vp-title">Model space</span>
+                    <span class="vp-meta">zoom {{ zoom }}%</span>
+                    <span class="vp-chip">renderer offline</span>
+                </div>
+
+                <div class="canvas">
+                    <div class="ruler ruler-x" aria-hidden="true">
+                        <span class="tick" v-for="tick in hRulerTicks()" :key="tick.key">{{ tick.label }}</span>
+                    </div>
+                    <div class="ruler ruler-y" aria-hidden="true">
+                        <span class="tick" v-for="tick in vRulerTicks()" :key="tick.key">{{ tick.label }}</span>
+                    </div>
+
+                    <div class="grid-surface">
+                        <span class="axis axis-x"></span>
+                        <span class="axis axis-y"></span>
+
+                        <div class="sheet" v-if="drawing">
+                            <p class="sheet-eyebrow">model space · not rendered</p>
+                            <h2 class="sheet-title">{{ drawing.title || "Untitled drawing" }}</h2>
+                            <p class="sheet-meta">units {{ unitLabel() }} · {{ layerCount() }} layers · {{ drawing.entities }} entities</p>
+                            <p class="sheet-note">The viewport renderer is not implemented, so no geometry is painted.</p>
+                            <span class="sheet-id">{{ drawing.id }}</span>
+                        </div>
+
+                        <div class="empty-state" v-else>
+                            <span class="empty-mark">C</span>
+                            <p class="empty-title">No drawing open</p>
+                            <p class="empty-hint">{{ emptyHint() }}</p>
+                            <div class="empty-actions">
+                                <button type="button" class="btn btn-primary" @click="create" :disabled="!hostReady">New drawing</button>
+                                <button type="button" class="btn" @click="open" :disabled="!hostReady">Open path</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="toolstrip">
+                        <button type="button" class="tool" v-for="tool in tools()" :key="tool.id" disabled :title="tool.title">{{ tool.label }}</button>
+                        <span class="tool-badge">viewport renderer not implemented</span>
+                    </div>
+                </div>
+            </main>
+
+            <aside class="inspector">
+                <div class="tabs" role="tablist" aria-label="Inspector">
+                    <button type="button" class="tab" role="tab" @click="setTab('properties')" :class="tabClass('properties')" :aria-selected="activeTab === 'properties' ? 'true' : 'false'">Properties</button>
+                    <button type="button" class="tab" role="tab" @click="setTab('capabilities')" :class="tabClass('capabilities')" :aria-selected="activeTab === 'capabilities' ? 'true' : 'false'">Capabilities</button>
+                    <button type="button" class="tab" role="tab" @click="setTab('diagnostics')" :class="tabClass('diagnostics')" :aria-selected="activeTab === 'diagnostics' ? 'true' : 'false'">Diagnostics</button>
+                </div>
+
+                <div class="tab-body" v-if="activeTab === 'properties'">
+                    <h3 class="group-head">Drawing</h3>
+                    <dl class="facts" v-if="drawing">
+                        <div class="fact"><dt>Title</dt><dd>{{ drawing.title || "Untitled drawing" }}</dd></div>
+                        <div class="fact"><dt>Id</dt><dd>{{ drawing.id }}</dd></div>
+                        <div class="fact"><dt>Revision</dt><dd>{{ drawing.revision }}</dd></div>
+                        <div class="fact"><dt>Units</dt><dd>{{ unitLabel() }}</dd></div>
+                        <div class="fact"><dt>Layers</dt><dd>{{ layerCount() }}</dd></div>
+                        <div class="fact"><dt>Entities</dt><dd>{{ drawing.entities }}</dd></div>
+                        <div class="fact"><dt>Path</dt><dd :title="projectPath">{{ projectPath || "unsaved" }}</dd></div>
+                    </dl>
+                    <p class="empty" v-else>Nothing is open.</p>
+
+                    <div class="card">
+                        <h3 class="group-head">Selection</h3>
+                        <p class="empty">No entity selected. Selection needs the viewport renderer.</p>
+                    </div>
+
+                    <div class="card">
+                        <h3 class="group-head">Inspection</h3>
+                        <button type="button" class="btn" @click="inspect" :disabled="!canInspect()">Run inspection</button>
+                        <p class="note" v-if="!canInspect()">Requires an open drawing handle.</p>
+                        <p class="note">Checks run by this build: {{ checkSummary() }}.</p>
+                        <div class="outcome" v-if="inspection">
+                            <p class="outcome-head">{{ inspection.outcome }}</p>
+                            <p class="outcome-body">{{ inspection.detail }}</p>
+                            <ul class="log" v-if="inspection.issues && inspection.issues.length">
+                                <li class="log-row" v-for="issue in inspection.issues" :key="issue.code + (issue.objectId || '')">
+                                    <span class="log-time">{{ issue.severity }}</span>
+                                    <span class="log-type" :title="issue.message">{{ issue.code }}</span>
+                                    <span class="log-outcome">{{ issue.objectId || issue.layerId || '-' }}</span>
+                                </li>
+                            </ul>
+                            <span class="outcome-time">{{ inspection.time }}</span>
+                        </div>
+                        <p class="note" v-else>The last inspection outcome appears here.</p>
+                    </div>
+                </div>
+
+                <div class="tab-body" v-if="activeTab === 'capabilities'">
+                    <p class="empty" v-if="!capabilities">No capability matrix. Connect the native host to read it.</p>
+                    <div v-else>
+                        <h3 class="group-head">Engine</h3>
+                        <dl class="facts">
+                            <div class="fact"><dt>Package</dt><dd>{{ capabilities.engine.package }}</dd></div>
+                            <div class="fact"><dt>Version</dt><dd>{{ capabilities.engine.version }}</dd></div>
+                            <div class="fact"><dt>Project</dt><dd>{{ capabilities.project }}</dd></div>
+                        </dl>
+
+                        <div class="status-grid">
+                            <div class="status-card" v-for="item in capabilityCounts()" :key="item.id">
+                                <span class="status-label">{{ item.label }}</span>
+                                <span class="status-value">{{ item.value }}</span>
+                                <span class="status-chip">{{ item.status }}</span>
+                            </div>
+                        </div>
+
+                        <h3 class="group-head">Formats</h3>
+                        <div class="chip-row">
+                            <span class="status-chip" v-for="chip in mapChips(capabilities.formats, 'format')" :key="chip.key">{{ chip.label }} · {{ chip.status }}</span>
+                        </div>
+
+                        <h3 class="group-head">Checks and renderers</h3>
+                        <div class="chip-row">
+                            <span class="status-chip" v-for="chip in mapChips(capabilities.checks, 'check')" :key="chip.key">{{ chip.label }} · {{ chip.status }}</span>
+                        </div>
+                        <div class="chip-row">
+                            <span class="status-chip quiet" v-for="chip in mapChips(capabilities.renderers, 'renderer')" :key="chip.key">{{ chip.label }} · {{ chip.status }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-body" v-if="activeTab === 'diagnostics'">
+                    <h3 class="group-head">Host</h3>
+                    <dl class="facts">
+                        <div class="fact"><dt>Host</dt><dd>{{ hostReady ? "native" : "preview" }}</dd></div>
+                        <div class="fact"><dt>Connection</dt><dd>{{ connectionLabel() }}</dd></div>
+                        <div class="fact"><dt>Requests</dt><dd>{{ requestCount }}</dd></div>
+                        <div class="fact"><dt>Last type</dt><dd>{{ lastRequestType || "none" }}</dd></div>
+                        <div class="fact"><dt>Last id</dt><dd>{{ lastRequestId || "none" }}</dd></div>
+                        <div class="fact"><dt>Error code</dt><dd>{{ lastErrorCode || "none" }}</dd></div>
+                    </dl>
+                    <p class="note mono">{{ lastErrorMessage || "No error recorded." }}</p>
+
+                    <div class="card">
+                        <h3 class="group-head">Request log</h3>
+                        <p class="empty" v-if="!hasLog()">No requests yet.</p>
+                        <ul class="log" v-else>
+                            <li class="log-row" v-for="entry in log" :key="entry.key">
+                                <span class="log-time">{{ entry.time }}</span>
+                                <span class="log-type">{{ entry.type }}</span>
+                                <span class="log-outcome" :class="entry.bad ? 'log-outcome bad' : 'log-outcome'">{{ entry.outcome }}</span>
+                            </li>
+                        </ul>
+                        <div class="row-actions">
+                            <button type="button" class="btn btn-small" @click="copyLog" :disabled="!hasLog()">Copy</button>
+                            <button type="button" class="btn btn-small btn-ghost" @click="clearLog" :disabled="!hasLog()">Clear</button>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <footer class="statusbar">
+            <span class="status" :class="errorText ? 'status bad' : 'status'">{{ errorText || status }}</span>
+            <span class="spacer"></span>
+            <span class="sb-item">{{ drawingSummary() }}</span>
+            <span class="sb-item">{{ hostReady ? "native host" : "preview" }}</span>
+            <span class="sb-item">{{ engineState() }}</span>
+            <span class="sb-item">zoom {{ zoom }}%</span>
+        </footer>
+
+        <div class="toast" v-if="toast" role="status" :class="toastClass()">
+            <div class="toast-head">
+                <span class="toast-title">{{ toast.title }}</span>
+                <button type="button" class="toast-close" @click="dismissToast" aria-label="Dismiss">×</button>
+            </div>
+            <p class="toast-message">{{ toast.message }}</p>
+            <span class="toast-tone">{{ toast.tone }}</span>
+        </div>
+    </div>
+</template>
+
+<style>
+/* Shell only. Every drawing, layer and capability readout comes from the host. */
+.studio { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--ocd-bg); color: var(--ocd-ink); overflow: hidden; }
+
+/* Window chrome: one 38px bar replaces the OS title bar and the old command bar. */
+.winbar { position: relative; z-index: 20; display: flex; align-items: center; flex: 0 0 38px; height: 38px; min-width: 0; padding: 0 120px 0 10px; border-bottom: 1px solid var(--ocd-chrome-line); background: var(--ocd-chrome); color: var(--ocd-chrome-ink); font-size: 11px; }
+.winbar.custom { padding-right: 246px; }
+.winbar__brand { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; min-width: 0; padding-right: 12px; }
+.winbar__mark { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--ocd-chrome-muted); color: var(--ocd-chrome-ink); font-family: var(--ocd-mono); font-size: 12px; font-weight: 700; line-height: 1; }
+.winbar__name { font-size: 12px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
+.winbar__divider { width: 1px; height: 16px; background: var(--ocd-chrome-hover); }
+.winbar__doc { max-width: 280px; overflow: hidden; color: var(--ocd-chrome-muted); font-family: var(--ocd-mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.winbar__spacer { flex: 1 1 24px; align-self: stretch; min-width: 16px; }
+.winbar__right { position: absolute; top: 0; right: 0; z-index: 1; display: flex; height: 38px; padding: 0 10px 0 8px; align-items: center; gap: 8px; background: var(--ocd-chrome); }
+.winbar__shortcuts { display: grid; flex: 0 0 auto; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ocd-chrome-muted); font-family: var(--ocd-mono); font-size: 11px; }
+.winbar__shortcuts:hover { border-color: var(--ocd-chrome-hover); background: var(--ocd-chrome-hover); color: var(--ocd-chrome-ink); }
+.winbar__led { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 0; background: var(--ocd-chrome-muted); }
+.winbar__led.live { background: var(--ocd-accent); }
+.winbar__mode { flex: 0 0 auto; color: var(--ocd-chrome-muted); font-family: var(--ocd-mono); font-size: 9px; letter-spacing: 0.12em; }
+.winbar__controls { display: none; flex: 0 0 auto; height: 38px; margin: 0 -10px 0 4px; }
+.winbar__controls.custom { display: flex; }
+.winbtn { display: grid; place-items: center; width: 44px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ocd-chrome-ink); }
+.winbtn:hover { background: var(--ocd-chrome-hover); }
+.winbtn--close:hover { background: var(--ocd-danger); color: #ffffff; }
+.winbtn__icon { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
+
+.cmd-groups { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
+.cmd-group { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; min-width: 0; }
+.cmd-label { flex: 0 0 auto; margin: 0 5px 0 6px; color: var(--ocd-chrome-muted); font-family: var(--ocd-mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; }
+.cmd-sep { flex: 0 0 auto; width: 1px; height: 18px; margin: 0 6px; background: var(--ocd-chrome-hover); }
+.cmd-btn { flex: 0 0 auto; height: 24px; padding: 0 7px; border: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ocd-chrome-ink); font-family: inherit; font-size: 11px; line-height: 1; white-space: nowrap; }
+.cmd-btn:hover:not([disabled]) { border-color: var(--ocd-chrome-hover); background: var(--ocd-chrome-hover); }
+.cmd-btn[disabled] { color: var(--ocd-chrome-muted); cursor: not-allowed; opacity: 0.55; }
+.cmd-btn[aria-expanded="true"] { border-color: var(--ocd-chrome-hover); background: var(--ocd-chrome-hover); }
+
+.btn { height: 24px; padding: 0 10px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface); font-size: 11px; line-height: 1; white-space: nowrap; }
+.btn:hover:not([disabled]) { border-color: var(--ocd-accent); }
+.btn[disabled] { color: var(--ocd-muted); cursor: not-allowed; opacity: 0.62; }
+.btn-primary { border-color: var(--ocd-accent); background: var(--ocd-accent); color: var(--ocd-on-accent); }
+.btn-primary:hover:not([disabled]) { border-color: var(--ocd-ink); }
+.btn-ghost { background: transparent; }
+.btn-small { height: 22px; padding: 0 7px; font-size: 10px; }
+.readout { font-family: var(--ocd-mono); font-variant-numeric: tabular-nums; }
+
+.popover-wrap, .export-wrap { position: relative; display: inline-flex; }
+.popover { position: absolute; top: calc(100% + 6px); z-index: 30; padding: 10px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface); color: var(--ocd-ink); font-size: 12px; }
+.export-panel { right: 0; left: auto; width: 268px; }
+.import-panel { right: 0; left: auto; width: 320px; }
+.import-panel .path-input { min-width: 180px; }
+.shortcuts { right: 0; width: 250px; }
+.popover-title { margin: 0 0 9px; color: var(--ocd-ink); font-family: var(--ocd-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.popover-actions { display: flex; gap: 6px; margin-top: 10px; }
+.export-field { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.export-field span { color: var(--ocd-muted); }
+.select { flex: 1; min-width: 0; height: 22px; padding: 0 5px; border: 1px solid var(--ocd-line); border-radius: 0; background: var(--ocd-surface); font-family: var(--ocd-mono); font-size: 11px; }
+.export-target { margin: 8px 0 0; overflow: hidden; color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.keylist { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.keyrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ocd-muted); font-size: 11px; }
+kbd { padding: 1px 5px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface-2); color: var(--ocd-ink); font-family: var(--ocd-mono); font-size: 9px; white-space: nowrap; }
+
+.contextbar { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; height: 32px; padding: 0 10px; border-bottom: 1px solid var(--ocd-line); background: var(--ocd-surface-2); }
+.path-field { display: flex; align-items: center; gap: 8px; flex: 0 1 400px; min-width: 0; }
+.field-label { color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+.path-input { flex: 1; min-width: 120px; height: 22px; padding: 0 6px; border: 1px solid var(--ocd-line); border-radius: 0; background: var(--ocd-surface); font-family: var(--ocd-mono); font-size: 11px; user-select: text; }
+.context-hint { overflow: hidden; color: var(--ocd-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-pill { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface); color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.ctx-pill.muted { border-style: dashed; }
+.preview-banner { padding: 5px 10px; border-bottom: 1px solid var(--ocd-line); background: var(--ocd-accent-soft); color: var(--ocd-accent); font-size: 10px; letter-spacing: 0.02em; }
+
+.workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; }
+.sidebar { display: flex; flex-direction: column; gap: 2px; min-height: 0; padding: 10px; overflow: auto; border-right: 1px solid var(--ocd-line); background: var(--ocd-surface-2); }
+.panel { padding: 8px 6px 10px; border-bottom: 1px solid var(--ocd-line); }
+.panel:last-child { border-bottom: 0; }
+.panel-head, .group-head { margin: 0 0 6px; color: var(--ocd-muted); font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+.head-count { margin-left: 4px; color: var(--ocd-accent); font-family: var(--ocd-mono); font-variant-numeric: tabular-nums; }
+.layer { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; width: 100%; margin-top: 3px; padding: 4px 6px; border: 1px solid transparent; border-radius: var(--ocd-radius); background: transparent; font-size: 12px; text-align: left; cursor: default; }
+.layer:hover { border-color: var(--ocd-line); background: var(--ocd-surface); }
+.layer.active { border-color: var(--ocd-accent); background: var(--ocd-surface); }
+.layer-actions { display: inline-flex; align-items: center; gap: 1px; }
+.icon-btn { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ocd-muted); }
+.icon-btn:hover { border-color: var(--ocd-line); color: var(--ocd-ink); }
+.icon-btn svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1; }
+.layer-input { min-width: 0; width: 100%; height: 20px; padding: 0 4px; border: 1px solid var(--ocd-accent); border-radius: 0; background: var(--ocd-surface); font-family: var(--ocd-mono); font-size: 11px; }
+.layer-add { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+.layer-add .layer-input { flex: 1 1 88px; width: auto; border-color: var(--ocd-line); }
+.layer-add .color-input { flex: 0 0 76px; }
+.dot { width: 6px; height: 6px; border: 1px solid var(--ocd-line); border-radius: 0; }
+.dot.on { border-color: var(--ocd-accent); background: var(--ocd-accent-soft); }
+.layer-name, .target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-count { color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+.target-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 2px; font-size: 12px; }
+.target-status { color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; text-transform: uppercase; }
+.facts { display: grid; gap: 3px; margin: 0; }
+.fact { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 8px; font-size: 11px; }
+.fact dt { color: var(--ocd-muted); }
+.fact dd { margin: 0; overflow: hidden; font-family: var(--ocd-mono); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.empty { margin: 0; color: var(--ocd-muted); font-size: 11px; }
+.note { margin: 6px 0 0; color: var(--ocd-muted); font-size: 10px; }
+.note.mono { font-family: var(--ocd-mono); }
+
+.viewport { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--ocd-bg); }
+.viewport-bar { display: flex; align-items: center; gap: 10px; padding: 5px 12px; border-bottom: 1px solid var(--ocd-line); background: var(--ocd-surface); font-size: 11px; }
+.vp-title { font-weight: 600; }
+.vp-meta { color: var(--ocd-muted); font-family: var(--ocd-mono); font-variant-numeric: tabular-nums; }
+.vp-chip { margin-left: auto; padding: 1px 6px; border: 1px dashed var(--ocd-line); border-radius: var(--ocd-radius); color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; text-transform: uppercase; }
+.canvas { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--ocd-surface-2); }
+.ruler { position: absolute; display: flex; gap: 4px; color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 8px; font-variant-numeric: tabular-nums; }
+.ruler-x { top: 0; left: 22px; right: 0; height: 22px; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--ocd-line); background: var(--ocd-surface); }
+.ruler-y { top: 22px; left: 0; bottom: 0; width: 22px; flex-direction: column; justify-content: space-between; padding: 8px 0; border-right: 1px solid var(--ocd-line); background: var(--ocd-surface); }
+.ruler-y .tick { writing-mode: vertical-rl; }
+.grid-surface {
+    position: absolute; inset: 22px 0 0 22px; overflow: hidden;
+    background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M24 0H0V24' fill='none' stroke='%23969ea2' stroke-opacity='.32' stroke-width='1'/%3E%3C/svg%3E") 0 0 / 24px 24px,
+        var(--ocd-surface);
+}
+.axis { position: absolute; background: var(--ocd-accent); opacity: 0.28; }
+.axis-x { top: 50%; left: 0; right: 0; height: 1px; }
+.axis-y { top: 0; bottom: 0; left: 50%; width: 1px; }
+.sheet { position: absolute; left: 50%; top: 50%; width: min(520px, 74%); padding: 24px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface); transform: translate(-50%, -50%); text-align: center; }
+.sheet-eyebrow { margin: 0 0 8px; color: var(--ocd-accent); font-family: var(--ocd-mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; }
+.sheet-title { margin: 0 0 6px; font-size: 14px; }
+.sheet-meta { margin: 0 0 10px; color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+.sheet-note { margin: 0; padding-top: 10px; border-top: 1px dashed var(--ocd-line); color: var(--ocd-muted); font-size: 11px; }
+.sheet-id { display: inline-block; margin-top: 10px; padding: 1px 6px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface-2); color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; }
+.empty-state { position: absolute; left: 50%; top: 50%; width: min(340px, 82%); padding: 22px; text-align: center; transform: translate(-50%, -50%); }
+.empty-mark { display: inline-grid; place-items: center; width: 38px; height: 38px; margin-bottom: 10px; border: 1px solid var(--ocd-line); border-radius: 0; color: var(--ocd-accent); font-family: var(--ocd-mono); font-size: 16px; }
+.empty-title { margin: 0 0 6px; font-family: var(--ocd-mono); font-size: 13px; font-weight: 600; }
+.empty-hint { margin: 0; color: var(--ocd-muted); font-size: 11px; }
+.empty-actions { display: flex; justify-content: center; gap: 6px; margin-top: 14px; }
+.toolstrip { position: absolute; left: 34px; bottom: 12px; display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface); }
+.tool { padding: 4px 9px; border: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ocd-muted); font-size: 11px; }
+.tool[disabled] { cursor: not-allowed; opacity: 0.7; }
+.tool-badge { margin-left: 4px; padding: 2px 6px; border-radius: var(--ocd-radius); background: var(--ocd-surface-2); color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; }
+
+.inspector { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--ocd-line); background: var(--ocd-surface); }
+.tabs { display: flex; gap: 3px; padding: 8px 8px 0; border-bottom: 1px solid var(--ocd-line); }
+.tab { padding: 5px 8px; border: 1px solid transparent; border-bottom: 0; border-radius: 0; background: transparent; color: var(--ocd-muted); font-size: 11px; }
+.tab:hover { color: var(--ocd-ink); }
+.tab.active { border-color: var(--ocd-line); background: var(--ocd-surface); box-shadow: inset 0 -2px 0 var(--ocd-accent); color: var(--ocd-accent); }
+.tab-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 12px; overflow: auto; }
+.card { margin-top: 6px; padding: 10px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface-2); }
+.card .group-head { margin-top: 0; }
+.status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
+.status-card { display: flex; flex-direction: column; gap: 2px; padding: 7px 8px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface); }
+.status-label { color: var(--ocd-muted); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+.status-value { font-family: var(--ocd-mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+.status-chip { align-self: flex-start; padding: 1px 5px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; white-space: nowrap; }
+.status-chip.quiet { border-style: dashed; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.outcome { margin-top: 8px; padding: 8px; border: 1px solid var(--ocd-line); border-radius: var(--ocd-radius); background: var(--ocd-surface-2); }
+.outcome-head { margin: 0; font-family: var(--ocd-mono); font-size: 11px; }
+.outcome-body { margin: 3px 0; color: var(--ocd-muted); font-size: 10px; }
+.outcome-time { color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; }
+.log { display: flex; flex-direction: column; gap: 3px; margin: 6px 0 0; padding: 0; list-style: none; }
+.log-row { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 6px; font-family: var(--ocd-mono); font-size: 9px; font-variant-numeric: tabular-nums; }
+.log-time, .log-type { color: var(--ocd-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-outcome { color: var(--ocd-accent); white-space: nowrap; }
+.log-outcome.bad { color: var(--ocd-danger); }
+.row-actions { display: flex; gap: 5px; margin-top: 8px; }
+
+.statusbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 4px 12px; border-top: 1px solid var(--ocd-line); background: var(--ocd-surface); color: var(--ocd-muted); font-size: 10px; }
+.status { overflow: hidden; max-width: 44%; text-overflow: ellipsis; white-space: nowrap; }
+.status.bad { color: var(--ocd-danger); }
+.spacer { flex: 1; }
+.sb-item { font-family: var(--ocd-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.toast { position: fixed; right: 14px; bottom: 32px; z-index: 50; width: min(288px, calc(100vw - 28px)); padding: 10px 12px; border: 1px solid var(--ocd-line); border-left: 3px solid var(--ocd-accent); border-radius: var(--ocd-radius); background: var(--ocd-surface); animation: toast-in 140ms ease-out; }
+.toast.error { border-left-color: var(--ocd-danger); background: var(--ocd-danger-soft); }
+.toast.warning { border-left-color: var(--ocd-muted); }
+.toast-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.toast-title { font-family: var(--ocd-mono); font-size: 11px; font-weight: 600; }
+.toast-close { padding: 0 4px; border: 0; background: transparent; color: var(--ocd-muted); font-size: 14px; line-height: 1; }
+.toast-message { margin: 4px 0 0; color: var(--ocd-muted); font-size: 11px; }
+.toast-tone { display: inline-block; margin-top: 6px; color: var(--ocd-muted); font-family: var(--ocd-mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+.cmd-btn:focus-visible, .winbar__shortcuts:focus-visible, .winbtn:focus-visible, .btn:focus-visible, .tab:focus-visible, .layer:focus-visible, .tool:focus-visible, .toast-close:focus-visible, .path-input:focus-visible, .select:focus-visible {
+    outline: 1px solid var(--ocd-accent);
+    outline-offset: 1px;
+}
+
+@media (max-width: 1180px) {
+    .workspace { grid-template-columns: 240px minmax(0, 1fr) 260px; }
+    .context-hint { display: none; }
+    .winbar__doc { max-width: 180px; }
+}
+
+@media (max-width: 1000px) {
+    .workspace { grid-template-columns: 240px minmax(0, 1fr); }
+    .inspector { display: none; }
+    .winbar__doc { display: none; }
+}
+
+@media (max-width: 820px) {
+    .workspace { grid-template-columns: minmax(0, 1fr); }
+    .sidebar { display: none; }
+    .cmd-label { display: none; }
+    .winbar__right { margin-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .toast { animation: none; }
+    * { scroll-behavior: auto; }
+}
+</style>
+
+<script client>
+export default class StudioPage {
+    hostReady = false;
+    customChrome = false;
+    status = "Starting";
+    errorText = "";
+    projectPath = "";
+    path = "";
+    handle = 0;
+    drawing = null;
+    capabilities = null;
+    seq = 0;
+    pending = {};
+    activeLayerId = "";
+    activeTab = "properties";
+    shortcutsOpen = false;
+    exportOpen = false;
+    exportFormat = "";
+    importOpen = false;
+    importPath = "";
+    layerEditId = "";
+    layerEditName = "";
+    layerAddOpen = false;
+    layerAddName = "";
+    layerAddColor = "#4c6ef5";
+    zoom = 100;
+    inspection = null;
+    requestCount = 0;
+    lastRequestType = "";
+    lastRequestId = "";
+    lastErrorCode = "";
+    lastErrorMessage = "";
+    log = [];
+    logSeq = 0;
+    toast = null;
+    toastTimer = 0;
+    dragTimer = 0;
+    dragObserver = null;
+
+    onMount() {
+        // Static render (build-time SSR) has no window; the client mount below
+        // takes over in the WebView or a regular browser tab.
+        if (typeof window === "undefined") {
+            return;
+        }
+        const webview = window.chrome && window.chrome.webview;
+        if (webview) {
+            this.hostReady = true;
+            webview.addEventListener("message", (event) => this.onHostMessage(event));
+            void this.start();
+        } else {
+            this.hostReady = false;
+            this.status = "Preview mode — native window unavailable";
+        }
+        window.addEventListener("keydown", (event) => this.onKeyDown(event));
+        window.addEventListener("resize", () => this.scheduleDragRegions());
+        if (typeof ResizeObserver !== "undefined") {
+            const bar = document.querySelector(".winbar");
+            if (bar) {
+                this.dragObserver = new ResizeObserver(() => this.reportDragRegions());
+                this.dragObserver.observe(bar);
+            }
+        }
+    }
+
+    layerList() { return this.drawing && this.drawing.layers ? this.drawing.layers : []; }
+    layerCount() { return this.layerList().length; }
+    unitLabel() { return this.drawing && this.drawing.units ? this.drawing.units : "not declared"; }
+    docTitle() {
+        if (!this.drawing) return "No drawing open";
+        return this.drawing.title || "Untitled drawing";
+    }
+    drawingSummary() {
+        return this.drawing ? "r" + this.drawing.revision + " · " + this.layerCount() + " layers · " + this.drawing.entities + " entities" : "no drawing";
+    }
+    emptyHint() {
+        return this.hostReady ? "Create a drawing or type a .ocad path above. The native file picker is not implemented." : "The native host is unavailable, so no drawing can be created or opened here.";
+    }
+    layerClass(layer) { return layer.id === this.activeLayerId ? "layer active" : "layer"; }
+    tabClass(name) { return this.activeTab === name ? "tab active" : "tab"; }
+    setTab(name) { this.activeTab = name; }
+    selectLayer(id) { this.activeLayerId = id; }
+    canUndo() { return !!(this.drawing && this.drawing.canUndo); }
+    canRedo() { return !!(this.drawing && this.drawing.canRedo); }
+
+    tools() {
+        return [
+            { id: "select", label: "Select", title: "Interactive viewport is not implemented" },
+            { id: "line", label: "Line", title: "Interactive viewport is not implemented" },
+            { id: "dimension", label: "Dimension", title: "Interactive viewport is not implemented" },
+            { id: "pan", label: "Pan", title: "Interactive viewport is not implemented" },
+        ];
+    }
+
+    hRulerTicks() { const ticks = []; for (let i = 0; i <= 8; i += 1) ticks.push({ key: "h" + i, label: String(i * 200) }); return ticks; }
+    vRulerTicks() { const ticks = []; for (let i = 0; i <= 6; i += 1) ticks.push({ key: "v" + i, label: String(i * 200) }); return ticks; }
+    engineConnected() { return !!this.capabilities && this.capabilities.project !== "unsupported"; }
+    engineState() { return this.engineConnected() ? "engine " + this.capabilities.project : "engine not connected"; }
+    connectionLabel() { return this.hostReady ? "native host connected" : "preview mode"; }
+    mapKeys(map) { return map ? Object.keys(map) : []; }
+    mapStatus(map, name) { return map && map[name] ? map[name] : "unknown"; }
+    count(map) { return this.mapKeys(map).length; }
+    supported(map) {
+        let total = 0;
+        for (const key of this.mapKeys(map)) if (map[key] === "supported") total += 1;
+        return total;
+    }
+    capabilityCounts() {
+        const formats = this.capabilities ? this.capabilities.formats : null;
+        const supportedFormats = this.supported(formats);
+        const checks = this.capabilities ? this.capabilities.checks : null;
+        const renderers = this.capabilities ? this.capabilities.renderers : null;
+        const targets = this.capabilities ? this.capabilities.exportTargets : null;
+        const checksStatus = this.supported(checks) > 0 ? "supported" : "unsupported";
+        const renderersStatus = this.supported(renderers) > 0 ? "supported" : "unsupported";
+        const targetsStatus = this.supported(targets) > 0 ? "supported" : "unsupported";
+        return [
+            { id: "formats", label: "Formats declared", value: String(this.count(formats)), status: supportedFormats > 0 ? "supported" : "unsupported" },
+            { id: "supported", label: "Formats supported", value: String(supportedFormats), status: supportedFormats > 0 ? "supported" : "unsupported" },
+            { id: "checks", label: "Checks declared", value: String(this.count(checks)), status: checksStatus },
+            { id: "renderers", label: "Renderers declared", value: String(this.count(renderers)), status: renderersStatus },
+            { id: "targets", label: "Export targets", value: String(this.count(targets)), status: targetsStatus },
+        ];
+    }
+    exportTargets() {
+        const map = this.capabilities ? this.capabilities.exportTargets : null;
+        const rows = [];
+        for (const name of this.mapKeys(map)) rows.push({ name, supported: map[name] === "supported" });
+        return rows;
+    }
+    exportFormats() { return this.mapKeys(this.capabilities ? this.capabilities.exportTargets : null); }
+    exportFormatOptions() { return this.exportFormats().map((name) => ({ key: name, value: name, label: name })); }
+    capabilityNames(map, level) {
+        return this.mapKeys(map).filter((name) => map[name] === level);
+    }
+    checkSummary() {
+        const names = this.capabilityNames(this.capabilities ? this.capabilities.checks : null, "supported");
+        return names.length > 0 ? names.join(", ") : "none";
+    }
+    exportSummary() {
+        const names = this.capabilityNames(this.capabilities ? this.capabilities.exportTargets : null, "supported");
+        return names.length > 0 ? names.join(", ") : "none";
+    }
+    mapChips(map, prefix) { return this.mapKeys(map).map((name) => ({ key: prefix + "-" + name, label: name, status: this.mapStatus(map, name) })); }
+    hasExportFormats() { return this.exportFormats().length > 0; }
+    anyExportTargetSupported() { return this.supported(this.capabilities ? this.capabilities.exportTargets : null) > 0; }
+    showExportNote() { return this.exportTargets().length > 0 && !this.anyExportTargetSupported(); }
+    exportTargetPath() { return this.path.trim() || this.projectPath || "no target path"; }
+    canExport() { return this.hostReady && this.drawing !== null && this.capabilities !== null; }
+    canInspect() { return this.hostReady && this.handle > 0; }
+    hasLog() { return this.log.length > 0; }
+    toastClass() { return this.toast ? "toast " + this.toast.tone : "toast"; }
+
+    toggleShortcuts() { this.shortcutsOpen = !this.shortcutsOpen; this.exportOpen = false; this.importOpen = false; }
+    toggleExport() { this.exportOpen = !this.exportOpen; this.shortcutsOpen = false; this.importOpen = false; }
+    toggleImport() {
+        this.importOpen = !this.importOpen;
+        this.shortcutsOpen = false;
+        this.exportOpen = false;
+        if (this.importOpen && !this.importPath) this.importPath = this.path.trim();
+    }
+    closePanels() { this.exportOpen = false; this.shortcutsOpen = false; this.importOpen = false; }
+    notify(tone, title, message) {
+        this.toast = { tone, title, message };
+        clearTimeout(this.toastTimer);
+        this.toastTimer = setTimeout(() => this.dismissToast(), 7000);
+    }
+    dismissToast() { this.toast = null; clearTimeout(this.toastTimer); this.toastTimer = 0; }
+    record(type, outcome, bad) {
+        this.logSeq += 1;
+        this.log = [{ key: "l" + this.logSeq, type, outcome, time: new Date().toTimeString().slice(0, 8), bad }].concat(this.log).slice(0, 8);
+    }
+    parseCode(message) {
+        const text = String(message || "");
+        const match = text.match(/^([a-z0-9-]+\/[a-z0-9-]+)\s*:?\s*([\s\S]*)$/i);
+        return match ? { code: match[1], detail: match[2] || match[1] } : { code: "", detail: text };
+    }
+    fail(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const parsed = this.parseCode(message);
+        this.errorText = message;
+        this.lastErrorCode = parsed.code || "unexpected";
+        this.lastErrorMessage = parsed.detail || message;
+        this.status = "Failed";
+        this.notify("error", parsed.code || "Request failed", parsed.detail || message);
+    }
+    warn(code, title, message) {
+        this.errorText = message;
+        this.lastErrorCode = code;
+        this.lastErrorMessage = message;
+        this.status = title;
+        this.notify("warning", title, message);
+    }
+    warnPath(message) { this.warn("invalid/path", "Path required", message); }
+
+    rpc(type, payload) {
+        const webview = window.chrome && window.chrome.webview;
+        if (!webview) return Promise.reject(new Error("native window unavailable"));
+        const id = `q${++this.seq}`;
+        this.requestCount += 1;
+        this.lastRequestType = type;
+        this.lastRequestId = id;
+        return new Promise((resolve, reject) => {
+            this.pending[id] = { resolve, reject, type };
+            webview.postMessage(JSON.stringify(Object.assign({ type, id }, payload || {})));
+        });
+    }
+    onHostMessage(event) {
+        let data = event.data;
+        if (typeof data === "string") { try { data = JSON.parse(data); } catch { return; } }
+        if (!data || typeof data !== "object" || typeof data.id !== "string") return;
+        const entry = this.pending[data.id];
+        if (!entry) return;
+        delete this.pending[data.id];
+        if (typeof data.type === "string" && data.type.endsWith("Error")) {
+            const parsed = this.parseCode(data.message || data.type);
+            this.record(entry.type, parsed.code || "error", true);
+            entry.reject(new Error(data.message || data.type));
+        } else {
+            this.record(entry.type, "ok", false);
+            entry.resolve(data);
+        }
+    }
+    async start() {
+        this.status = "Connecting";
+        try {
+            const ready = await this.rpc("ready", {});
+            this.customChrome = !!(ready && ready.window && ready.window.customChrome);
+            this.reportDragRegions();
+            const response = await this.rpc("capabilities", {});
+            this.capabilities = response.capabilities || null;
+            this.exportFormat = this.hasExportFormats() ? this.exportFormats()[0] : "";
+            this.status = "Ready — no drawing open";
+            this.errorText = "";
+        } catch (error) { this.fail(error); }
+    }
+    adopt(response, path) {
+        if (!response || !response.drawing) throw new Error("The host returned no drawing; nothing was opened.");
+        this.handle = response.handle || 0;
+        this.drawing = response.drawing;
+        this.projectPath = path;
+        const layers = this.layerList();
+        this.activeLayerId = layers.length > 0 ? layers[0].id : "";
+        this.inspection = null;
+    }
+    applyDrawing(drawing) {
+        if (!drawing) return;
+        this.drawing = drawing;
+        const layers = this.layerList();
+        if (!layers.some((layer) => layer.id === this.activeLayerId)) this.activeLayerId = layers.length > 0 ? layers[0].id : "";
+    }
+    async history(type) {
+        if (!this.handle) { this.warn("invalid/state", "No drawing", "Open or create a drawing before undoing."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; " + type + " was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting " + type;
+        try {
+            const response = await this.rpc(type, { handle: this.handle });
+            this.applyDrawing(response.drawing);
+            this.inspection = null;
+            this.status = type + " completed at revision " + response.revision;
+            this.notify("info", type, "canUndo=" + String(response.canUndo) + " canRedo=" + String(response.canRedo));
+        } catch (error) { this.fail(error); }
+    }
+    undoDrawing() { return this.history("drawing.undo"); }
+    redoDrawing() { return this.history("drawing.redo"); }
+
+    async importDxf() {
+        const source = this.importPath.trim();
+        if (!source) { this.warnPath("Type an ASCII DXF path before importing."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.importDxf was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.importDxf";
+        try {
+            const response = await this.rpc("drawing.importDxf", { source });
+            this.adopt(response, "");
+            this.importOpen = false;
+            const warnings = response.warnings || [];
+            const imported = response.imported || { entities: 0, layers: 0 };
+            this.status = "Imported " + imported.entities + " entities and " + imported.layers + " layers";
+            this.notify(warnings.length > 0 ? "warning" : "info", "drawing.importDxf", "Imported " + imported.entities + " entities from " + source + (warnings.length > 0 ? " with " + warnings.length + " warning(s)." : "."));
+        } catch (error) { this.fail(error); }
+    }
+
+    async updateLayer(id, patch) {
+        if (!this.handle) { this.warn("invalid/state", "No drawing", "Open a drawing before editing layers."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.updateLayer was not sent.")); return; }
+        this.errorText = "";
+        try {
+            const request = Object.assign({ layerId: id }, patch);
+            const response = await this.rpc("drawing.updateLayer", { handle: this.handle, request });
+            this.applyDrawing(response.drawing);
+            this.status = "drawing.updateLayer completed";
+            this.notify("info", "drawing.updateLayer", "Layer " + id + " updated.");
+        } catch (error) { this.fail(error); }
+    }
+    toggleLayerVisible(layer) { return this.updateLayer(layer.id, { visible: !layer.visible }); }
+    toggleLayerLocked(layer) { return this.updateLayer(layer.id, { locked: !layer.locked }); }
+    startLayerRename(layer) { this.layerEditId = layer.id; this.layerEditName = layer.name; this.layerAddOpen = false; }
+    async commitLayerRename() {
+        const id = this.layerEditId;
+        const name = this.layerEditName.trim();
+        this.layerEditId = "";
+        if (!id || !name || name === id) return;
+        await this.updateLayer(id, { name });
+    }
+    toggleLayerAdd() {
+        this.layerAddOpen = !this.layerAddOpen;
+        this.layerAddName = "";
+        this.layerEditId = "";
+    }
+    async commitLayerAdd() {
+        const name = this.layerAddName.trim();
+        if (!name) { this.warn("invalid/name", "Layer name required", "Type a non-empty layer name."); return; }
+        if (!this.handle) { this.warn("invalid/state", "No drawing", "Open a drawing before adding a layer."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.addLayer was not sent.")); return; }
+        this.errorText = "";
+        try {
+            const color = this.layerAddColor.trim();
+            const response = await this.rpc("drawing.addLayer", { handle: this.handle, request: { name, color: color || undefined } });
+            this.applyDrawing(response.drawing);
+            this.layerAddOpen = false;
+            this.layerAddName = "";
+            this.status = "drawing.addLayer completed";
+            this.notify("info", "drawing.addLayer", "Layer " + name + " added at revision " + response.revision + ".");
+        } catch (error) { this.fail(error); }
+    }
+
+    async create() {
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.create was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.create";
+        try {
+            const response = await this.rpc("drawing.create", { request: { title: "Untitled drawing" } });
+            this.adopt(response, "");
+            this.status = "drawing.create completed";
+            this.notify("info", "drawing.create", "The host returned a drawing handle.");
+        } catch (error) { this.fail(error); }
+    }
+    async open() {
+        const target = this.path.trim();
+        if (!target) { this.warnPath("Type a drawing path before opening."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.open was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.open";
+        try {
+            const response = await this.rpc("drawing.open", { path: target });
+            this.adopt(response, target);
+            this.status = "drawing.open completed";
+            this.notify("info", "drawing.open", "The host returned a drawing handle.");
+        } catch (error) { this.fail(error); }
+    }
+    async save() {
+        if (!this.handle) { this.warn("invalid/state", "No drawing", "Open or create a drawing before saving."); return; }
+        const target = this.path.trim() || this.projectPath;
+        if (!target) { this.warnPath("Type a drawing path before saving."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.save was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.save";
+        try {
+            const response = await this.rpc("drawing.save", { handle: this.handle, path: target, overwrite: true });
+            this.projectPath = target;
+            const report = response.report;
+            this.status = report ? "Saved " + report.bytes + " bytes at revision " + report.revision : "drawing.save completed";
+            this.notify("info", "drawing.save", "The host accepted the save request.");
+        } catch (error) { this.fail(error); }
+    }
+    async exportCurrent() {
+        if (!this.drawing) { this.warn("invalid/state", "No drawing", "Open a drawing before exporting."); return; }
+        if (!this.capabilities) { this.warn("invalid/state", "No capabilities", "No export target is declared."); return; }
+        const format = this.exportFormat || (this.hasExportFormats() ? this.exportFormats()[0] : "");
+        if (!format) { this.warn("invalid/format", "No target", "The host declared no export targets."); return; }
+        const target = this.path.trim() || this.projectPath;
+        if (!target) { this.warnPath("Type a target path before exporting."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.export was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.export";
+        try {
+            const response = await this.rpc("drawing.export", { handle: this.handle, format, target, overwrite: true });
+            const report = response.report;
+            this.exportOpen = false;
+            this.status = report ? "Exported " + report.format + " to " + report.target + " (" + report.losses.length + " loss(es))" : "drawing.export completed";
+            this.notify("info", "drawing.export", report ? "Wrote " + report.target + " at revision " + report.revision + "." : "The host accepted the export request.");
+        } catch (error) { this.fail(error); }
+    }
+    async inspect() {
+        if (!this.canInspect()) { this.warn("invalid/state", "No drawing", "Inspection needs an open drawing handle."); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.inspect";
+        const time = new Date().toTimeString().slice(0, 8);
+        try {
+            const response = await this.rpc("drawing.inspect", { handle: this.handle });
+            const report = response.report;
+            const issues = report && report.issues ? report.issues : [];
+            const detail = issues.length > 0 ? issues.length + " finding(s) at revision " + report.revision : "No findings at revision " + (report ? report.revision : "?");
+            this.inspection = { outcome: report && report.passed ? "Inspection passed" : "Inspection reported findings", detail, time, issues };
+            this.status = this.inspection.outcome;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.inspection = { outcome: "drawing.inspect failed", detail: this.parseCode(message).detail || message, time, issues: [] };
+            this.fail(error);
+        }
+    }
+    async closeDrawing() {
+        if (!this.handle) { this.warn("invalid/state", "No drawing", "No drawing is open."); return; }
+        if (!this.hostReady) { this.fail(new Error("Native host unavailable; drawing.close was not sent.")); return; }
+        this.errorText = "";
+        this.status = "Requesting drawing.close";
+        try {
+            await this.rpc("drawing.close", { handle: this.handle });
+            this.handle = 0;
+            this.drawing = null;
+            this.projectPath = "";
+            this.activeLayerId = "";
+            this.inspection = null;
+            this.status = "drawing.close completed";
+            this.notify("info", "drawing.close", "The drawing handle was closed.");
+        } catch (error) { this.fail(error); }
+    }
+    scheduleDragRegions() {
+        if (typeof window === "undefined") return;
+        clearTimeout(this.dragTimer);
+        this.dragTimer = setTimeout(() => this.reportDragRegions(), 120);
+    }
+    reportDragRegions() {
+        if (!this.hostReady || !this.customChrome) return;
+        if (typeof document === "undefined") return;
+        const rects = [];
+        const nodes = document.querySelectorAll("[data-drag]");
+        nodes.forEach((node) => {
+            const rect = node.getBoundingClientRect();
+            const width = Math.round(rect.width);
+            const height = Math.round(rect.height);
+            if (width <= 0 || height <= 0) return;
+            rects.push({ x: Math.round(rect.left), y: Math.round(rect.top), width, height });
+        });
+        if (rects.length === 0) return;
+        try { this.rpc("window.dragRegions", { rects }).catch(() => {}); } catch { /* ignore */ }
+    }
+    windowMinimize() {
+        if (!this.hostReady) return;
+        try { this.rpc("window.minimize", {}).catch(() => {}); } catch { /* ignore */ }
+    }
+    windowToggleMaximize() {
+        if (!this.hostReady) return;
+        try { this.rpc("window.toggleMaximize", {}).catch(() => {}); } catch { /* ignore */ }
+    }
+    windowClose() {
+        if (!this.hostReady) return;
+        try { this.rpc("window.close", {}).catch(() => {}); } catch { /* ignore */ }
+    }
+
+    onPathInput(event) { if (event.target) this.path = event.target.value; }
+    onExportFormatChange(event) { if (event.target) this.exportFormat = event.target.value; }
+    onImportPathInput(event) { if (event.target) this.importPath = event.target.value; }
+    onLayerEditInput(event) { if (event.target) this.layerEditName = event.target.value; }
+    onLayerAddNameInput(event) { if (event.target) this.layerAddName = event.target.value; }
+    onLayerAddColorInput(event) { if (event.target) this.layerAddColor = event.target.value; }
+    copyLog() {
+        if (!this.hasLog()) return;
+        const text = this.log.map((entry) => entry.time + " " + entry.type + " " + entry.outcome).join("\n");
+        try {
+            if (typeof navigator === "undefined" || !navigator.clipboard || !navigator.clipboard.writeText) {
+                this.notify("warning", "Clipboard unavailable", "Copy is not available in this context.");
+                return;
+            }
+            navigator.clipboard.writeText(text).then(
+                () => this.notify("info", "Request log copied", "The last requests were copied to the clipboard."),
+                () => this.notify("warning", "Clipboard blocked", "The clipboard write was refused.")
+            );
+        } catch { this.notify("warning", "Clipboard unavailable", "Copy is not available in this context."); }
+    }
+    clearLog() { this.log = []; }
+    onKeyDown(event) {
+        const target = event.target;
+        const typing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
+        if (event.key === "Escape") { this.closePanels(); this.dismissToast(); return; }
+        const mod = event.ctrlKey || event.metaKey;
+        const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+        if (mod && event.ctrlKey && (key === "1" || key === "2" || key === "3")) {
+            event.preventDefault();
+            this.setTab(key === "1" ? "properties" : key === "2" ? "capabilities" : "diagnostics");
+            return;
+        }
+        if (!mod || (typing && key !== "w")) return;
+        if (key === "z") { event.preventDefault(); if (event.shiftKey) void this.redoDrawing(); else void this.undoDrawing(); }
+        else if (key === "y") { event.preventDefault(); void this.redoDrawing(); }
+        else if (key === "n") { event.preventDefault(); void this.create(); }
+        else if (key === "o") { event.preventDefault(); void this.open(); }
+        else if (key === "s") { event.preventDefault(); void this.save(); }
+        else if (key === "e") { event.preventDefault(); if (this.canExport()) { this.exportOpen = !this.exportOpen; this.shortcutsOpen = false; } }
+        else if (key === "w") { event.preventDefault(); void this.closeDrawing(); }
+    }
+}
+</script>

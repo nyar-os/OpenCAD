@@ -1,0 +1,368 @@
+/**
+ * Smoke tests for the drawing surface.
+ *
+ * They assert shell semantics when the addon is absent and the real document
+ * core when a built addon is installed: create, edit, save/open round trip,
+ * inspection and SVG/DXF export.
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { drawingFormats, formatFromPath, formatInfo, OpenCAD, OpenCADError } from './index.js';
+import type { DrawingInput } from './index.js';
+import { nativeBinding } from './native.js';
+import * as service from './service.js';
+
+const installed = (() => {
+    try {
+        return nativeBinding() !== undefined;
+    } catch {
+        return false;
+    }
+})();
+const withoutAddon = installed ? 'a built addon is installed' : false;
+const withAddon = installed ? false : 'no built addon is installed';
+
+test('session construction is synchronous and side-effect free', async () => {
+    const cad = new OpenCAD();
+    assert.equal(cad.locale, 'en');
+    assert.equal(cad.history, 'memory');
+    assert.equal(cad.disposed, false);
+    await cad.dispose();
+    assert.equal(cad.disposed, true);
+});
+
+test('a sidecar session is declared without touching the disk', async () => {
+    const cad = new OpenCAD({ history: 'sidecar' });
+    assert.equal(cad.history, 'sidecar');
+    assert.equal(cad.disposed, false);
+    await cad.dispose();
+});
+
+test('without an installed addon engine calls keep capability/not-implemented', { skip: withoutAddon }, async () => {
+    const cad = new OpenCAD({ locale: 'zh-CN' });
+    assert.equal(cad.locale, 'zh-CN');
+    const calls: (() => Promise<unknown>)[] = [
+        () => cad.capabilities(),
+        () => cad.create({ title: 'Site plan' }),
+        () => cad.open({ path: 'plan.ocad' }),
+        () => cad.inspect({ path: 'plan.dxf' }),
+    ];
+    for (const call of calls) {
+        await assert.rejects(call, (error: unknown) => {
+            assert.ok(error instanceof OpenCADError);
+            assert.equal(error.code, 'capability/not-implemented');
+            assert.ok(error.details.feature);
+            return true;
+        });
+    }
+    await cad.dispose();
+});
+
+test('dispose is idempotent and closes the session', async () => {
+    const cad = new OpenCAD();
+    await cad.dispose();
+    await cad.dispose();
+    await assert.rejects(cad.capabilities(), (error: unknown) => error instanceof OpenCADError && error.code === 'session/disposed');
+});
+
+test('a disposed session refuses create and open', async () => {
+    const cad = new OpenCAD();
+    await cad.dispose();
+    await assert.rejects(cad.create({ title: 'Site plan' }), (error: unknown) => error instanceof OpenCADError && error.code === 'session/disposed');
+    await assert.rejects(cad.open({ path: 'plan.ocad' }), (error: unknown) => error instanceof OpenCADError && error.code === 'session/disposed');
+});
+
+test('open rejects ambiguous input before reaching the engine', async () => {
+    const cad = new OpenCAD();
+    const inputs = [
+        {} as unknown as DrawingInput,
+        { path: '' } as unknown as DrawingInput,
+        { path: 42 } as unknown as DrawingInput,
+    ];
+    for (const input of inputs) {
+        await assert.rejects(
+            cad.open(input),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+    }
+    await cad.dispose();
+});
+
+test('format registry classifies the drawing format family', () => {
+    const expected = ['dwg', 'dxf', 'step', 'stp', 'iges', 'igs', 'stl', 'obj', 'svg', 'pdf', 'png', 'jpg'];
+    assert.deepEqual([...drawingFormats].sort(), [...expected].sort());
+
+    assert.equal(formatInfo('dwg').family, 'native');
+    assert.equal(formatInfo('dwg').exchangeTarget, false);
+    assert.equal(formatInfo('dxf').exchangeTarget, true);
+    assert.equal(formatInfo('step').family, 'exchange');
+    assert.equal(formatInfo('stl').family, 'mesh');
+    assert.equal(formatInfo('svg').markup, 'xml');
+    assert.equal(formatInfo('pdf').family, 'document');
+    assert.equal(formatInfo('png').family, 'raster');
+
+    assert.equal(formatFromPath('Site-Plan.DXF'), 'dxf');
+    assert.equal(formatFromPath('plan.ocad'), undefined);
+    assert.equal(formatFromPath('no-extension'), undefined);
+});
+
+test('capability matrix matches the implemented core', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    const matrix = await cad.capabilities();
+    assert.equal(matrix.project, 'partial');
+    assert.equal(matrix.formats.svg, 'supported');
+    assert.equal(matrix.formats.pdf, 'supported');
+    assert.equal(matrix.formats.dxf, 'partial');
+    assert.equal(matrix.formats.dwg, 'unsupported');
+    for (const check of ['units', 'layers', 'geometry', 'dimensions'] as const) {
+        assert.equal(matrix.checks[check], 'supported');
+    }
+    for (const check of ['constraints', 'references'] as const) {
+        assert.equal(matrix.checks[check], 'unsupported');
+    }
+    assert.equal(matrix.renderers.svg, 'supported');
+    assert.equal(matrix.renderers.pdf, 'unsupported');
+    assert.equal(matrix.exportTargets.svg, 'supported');
+    assert.equal(matrix.exportTargets.dxf, 'supported');
+    assert.equal(matrix.exportTargets.pdf, 'supported');
+    assert.equal(matrix.exportTargets.stl, 'supported');
+    assert.equal(matrix.exportTargets.step, 'supported');
+    assert.equal(matrix.formats.stl, 'unsupported', 'the STL reader stays unsupported');
+    assert.equal(matrix.formats.step, 'partial', 'STEP is export-only');
+    await cad.dispose();
+});
+
+test('drawing core round trip, inspection and export', { skip: withAddon }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-sdk-'));
+    const file = path.join(dir, 'plan.ocad');
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Site plan', units: 'mm' });
+        assert.equal(document.units, 'mm');
+        assert.equal(document.layers.length, 2);
+        assert.equal(document.layers[0]?.id, '0');
+        assert.equal(document.layers[1]?.id, 'dimensions');
+
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [100, 40] });
+        assert.equal(line.id, 'entity-1');
+        assert.equal(line.kind.type, 'line');
+        const circle = document.addCircle({ layer: '0', center: [50, 50], radius: 20 });
+        assert.equal(circle.id, 'entity-2');
+        document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10]], closed: true });
+        document.addText({ layer: '0', at: [5, 5], height: 2.5, content: 'Site' });
+        document.addDimension({ layer: 'dimensions', from: [0, 0], to: [100, 0], offset: 10 });
+        assert.equal(document.entities, 5);
+        assert.equal(document.listEntities().length, 5);
+
+        const report = document.inspect();
+        assert.equal(report.passed, true);
+        assert.equal(report.issues.length, 0);
+        assert.ok(report.checkerVersion.length > 0);
+
+        const saved = document.save({ target: file, overwrite: false });
+        assert.ok(saved.bytes > 0);
+        assert.equal(saved.revision, document.revision);
+        assert.ok(fs.existsSync(file));
+        assert.match(fs.readFileSync(file, 'utf8'), /"format": "open-cad-drawing"/);
+
+        const svgPath = path.join(dir, 'plan.svg');
+        const svgReport = document.export({ format: 'svg', target: svgPath });
+        assert.equal(svgReport.format, 'svg');
+        assert.equal(svgReport.editable, false);
+        assert.match(fs.readFileSync(svgPath, 'utf8'), /<svg/);
+
+        const dxfPath = path.join(dir, 'plan.dxf');
+        const dxfReport = document.export({ format: 'dxf', target: dxfPath });
+        assert.equal(dxfReport.format, 'dxf');
+        assert.ok(dxfReport.losses.length > 0);
+        const dxf = fs.readFileSync(dxfPath, 'utf8');
+        assert.match(dxf, /ENTITIES/);
+        assert.match(dxf, /EOF/);
+
+        const stlPath = path.join(dir, 'plan.stl');
+        const stlReport = document.export({ format: 'stl', target: stlPath });
+        assert.equal(stlReport.format, 'stl');
+        assert.ok((stlReport.triangles ?? 0) > 0);
+        const stl = fs.readFileSync(stlPath, 'utf8');
+        assert.ok(stl.startsWith('solid open-cad'));
+        assert.match(stl, /facet normal/);
+        assert.ok(stl.trimEnd().endsWith('endsolid'));
+
+        const pdfPath = path.join(dir, 'plan.pdf');
+        const pdfReport = document.export({ format: 'pdf', target: pdfPath });
+        assert.equal(pdfReport.format, 'pdf');
+        assert.equal(pdfReport.editable, false);
+        const pdf = fs.readFileSync(pdfPath, 'utf8');
+        assert.match(pdf, /^%PDF-1\.4/);
+        assert.match(pdf, /xref/);
+        assert.match(pdf, /trailer/);
+        assert.ok(pdf.trimEnd().endsWith('%%EOF'));
+
+        const stepPath = path.join(dir, 'plan.step');
+        const stepReport = document.export({ format: 'step', target: stepPath });
+        assert.equal(stepReport.format, 'step');
+        assert.equal(stepReport.editable, false);
+        assert.ok((stepReport.faces ?? 0) > 0);
+        const step = fs.readFileSync(stepPath, 'utf8');
+        assert.ok(step.startsWith('ISO-10303-21;'));
+        assert.match(step, /MANIFOLD_SOLID_BREP/);
+        assert.ok(step.trimEnd().endsWith('END-ISO-10303-21;'));
+
+        const deletion = document.deleteEntity('entity-1');
+        assert.equal(deletion.deleted, 'entity-1');
+        assert.equal(document.entities, 4);
+        assert.equal(deletion.drawing.entities, 4);
+
+        document.close();
+        document.close();
+        assert.equal(document.isClosed, true);
+        assert.throws(() => document.listEntities(), (error: unknown) => error instanceof OpenCADError);
+
+        const second = new OpenCAD();
+        const reopened = await second.open({ path: file });
+        assert.equal(reopened.entities, 5);
+        assert.equal(reopened.revision, saved.revision);
+        await second.dispose();
+    } finally {
+        await cad.dispose();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('editing refuses an unknown layer', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({});
+        assert.throws(
+            () => document.addLine({ layer: 'missing', from: [0, 0], to: [1, 1] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+    } finally {
+        await cad.dispose();
+    }
+});
+
+const sampleDxf = [
+    '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',
+    '0', 'LAYER', '2', '0', '70', '0', '62', '7',
+    '0', 'LAYER', '2', 'WALLS', '70', '0', '62', '1',
+    '0', 'ENDTAB', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'LINE', '8', 'WALLS', '10', '0', '20', '0', '11', '10', '21', '0',
+    '0', 'CIRCLE', '8', 'WALLS', '10', '5', '20', '5', '40', '2',
+    '0', 'TEXT', '8', 'NOTES', '10', '1', '20', '1', '40', '2.5', '1', 'Hall',
+    '0', 'SPLINE', '8', 'WALLS',
+    '0', 'ENDSEC', '0', 'EOF',
+].join('\n');
+
+const arcDxf = [
+    '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',
+    '0', 'LAYER', '2', 'WALLS', '70', '0', '62', '1',
+    '0', 'ENDTAB', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'LINE', '8', 'WALLS', '10', '0', '20', '0', '11', '10', '21', '0',
+    '0', 'ARC', '8', 'WALLS', '10', '0', '20', '0', '40', '5', '50', '0', '51', '90',
+    '0', 'ENDSEC', '0', 'EOF',
+].join('\n');
+
+test('DXF import keeps arcs analytic and reports losses', { skip: withAddon }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-arc-'));
+    const source = path.join(dir, 'arc.dxf');
+    fs.writeFileSync(source, arcDxf, 'utf8');
+    const imported = service.importDxf({ source, title: 'Arc site' });
+    try {
+        assert.ok(imported.drawing.entities > 0);
+        assert.equal(imported.imported.layers >= 1, true);
+        assert.ok(
+            !imported.losses.some((loss) => loss.code === 'dxf/flattened-arc'),
+            `an analytic arc is not reported as lost, got ${JSON.stringify(imported.losses)}`,
+        );
+        assert.ok(imported.losses.every((loss) => loss.severity === 'notice' || loss.severity === 'warning'));
+    } finally {
+        service.close(imported.handle);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('undo, redo, layers, entity edits and DXF import', { skip: withAddon }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-edits-'));
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Edits' });
+        assert.equal(document.canUndo, false);
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [1, 1] });
+        assert.equal(document.canUndo, true);
+
+        const undone = document.undo();
+        assert.equal(undone.drawing.entities, 0);
+        assert.equal(document.canUndo, false);
+        assert.equal(document.canRedo, true);
+        assert.throws(
+            () => document.undo(),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/nothing-to-undo',
+        );
+        const redone = document.redo();
+        assert.equal(redone.drawing.entities, 1);
+        assert.throws(
+            () => document.redo(),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/nothing-to-redo',
+        );
+
+        const layer = document.addLayer({ name: 'Walls', color: '#a4262c' });
+        assert.equal(layer.name, 'Walls');
+        assert.throws(
+            () => document.addLayer({ name: 'walls' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/layer-exists',
+        );
+
+        const moved = document.moveEntity({ entityId: line.id, dx: 10, dy: 5 });
+        if (moved.kind.type === 'line') {
+            assert.deepEqual(moved.kind.from, [10, 5]);
+            assert.deepEqual(moved.kind.to, [11, 6]);
+        }
+
+        const circle = document.addCircle({ layer: '0', center: [0, 0], radius: 3 });
+        const updatedCircle = document.updateEntity({ entityId: circle.id, radius: 7 });
+        if (updatedCircle.kind.type === 'circle') {
+            assert.equal(updatedCircle.kind.radius, 7);
+        }
+        const text = document.addText({ layer: '0', at: [0, 0], height: 2.5, content: 'Old' });
+        const updatedText = document.updateEntity({ entityId: text.id, content: 'Hall', height: 4 });
+        if (updatedText.kind.type === 'text') {
+            assert.equal(updatedText.kind.content, 'Hall');
+            assert.equal(updatedText.kind.height, 4);
+        }
+
+        const renamed = document.updateLayer({ layerId: 'Walls', name: 'Structure' });
+        assert.equal(renamed.id, 'Structure');
+        document.updateLayer({ layerId: 'Structure', locked: true, visible: false });
+        assert.throws(
+            () => document.addLine({ layer: 'Structure', from: [0, 0], to: [1, 1] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/layer-locked',
+        );
+
+        const source = path.join(dir, 'site.dxf');
+        fs.writeFileSync(source, sampleDxf, 'utf8');
+        const imported = await cad.importDxf({ source, title: 'Imported site' });
+        assert.equal(imported.entities, 3);
+        assert.equal(imported.canUndo, false);
+        assert.ok(imported.layers.some((entry) => entry.id === 'WALLS'));
+        assert.ok(imported.layers.some((entry) => entry.id === 'NOTES'));
+
+        const pdf = path.join(dir, 'imported.pdf');
+        imported.export({ format: 'pdf', target: pdf });
+        assert.match(fs.readFileSync(pdf, 'utf8'), /^%PDF-1\.4/);
+        imported.save({ target: path.join(dir, 'imported.ocad'), overwrite: false });
+        imported.close();
+    } finally {
+        await cad.dispose();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

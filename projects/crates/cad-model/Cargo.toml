@@ -1,0 +1,14 @@
+[package]
+name = "open-cad-drawing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Declared drawing model contracts for OpenCAD"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+boost-fs = { workspace = true }

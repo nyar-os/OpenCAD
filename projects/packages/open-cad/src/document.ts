@@ -1,0 +1,415 @@
+/**
+ * Handle-backed drawing document.
+ *
+ * `OpenCAD.create()` and `OpenCAD.open()` return one of these. The summary
+ * stays in sync with every mutation, and every method forwards to the native
+ * store through the handle it owns.
+ *
+ * In a `history: 'sidecar'` session the document also keeps
+ * `<file>.history.json` up to date: every mutation is written back to the
+ * project file and the replaced document is recorded, so undo and redo work
+ * across processes. The default memory session leaves history to the handle.
+ */
+
+import { OpenCADError } from './errors.js';
+import * as service from './service.js';
+import type {
+    AddArcRequest,
+    AddCircleRequest,
+    AddDimensionRequest,
+    AddEllipseRequest,
+    AddLayerRequest,
+    AddLineRequest,
+    AddPolylineRequest,
+    AddTextRequest,
+    CopyRequest,
+    CopyResult,
+    Drawing,
+    Entity,
+    EntityDeletion,
+    EntityList,
+    ExportOptions,
+    ExportReport,
+    HistoryMode,
+    HistoryResult,
+    ImportLoss,
+    InspectOptions,
+    InspectReport,
+    LayerSummary,
+    MeasureResult,
+    MoveEntityRequest,
+    SaveOptions,
+    SaveReport,
+    TransformRequest,
+    TransformResult,
+    UpdateEntityRequest,
+    UpdateLayerRequest,
+} from './types.js';
+
+type HistoryModule = typeof import('./history.js');
+
+/** Options a document inherits from the session that opened it. */
+export interface DrawingDocumentOptions {
+    /** Undo/redo backing store. Defaults to `memory`. */
+    readonly history?: HistoryMode;
+    /** Project file this document was opened from, if any. */
+    readonly sourcePath?: string;
+    /** Sidecar helpers; present only in a `sidecar` session. */
+    readonly historyModule?: HistoryModule;
+    /** Import statistics when the document came from `importDxf()`. */
+    readonly imported?: { readonly entities: number; readonly layers: number };
+    /** Import losses reported by `importDxf()`. */
+    readonly losses?: readonly ImportLoss[];
+}
+
+/** One open drawing. Owns exactly one native handle. */
+export class DrawingDocument {
+    private handleValue: number;
+    private state: Drawing;
+    private readonly historyMode: HistoryMode;
+    private readonly historyModule: HistoryModule | undefined;
+    private readonly importedCounts: { readonly entities: number; readonly layers: number } | undefined;
+    private readonly importLosses: readonly ImportLoss[] | undefined;
+    private sourcePath: string | undefined;
+    private sidecar: import('./history.js').SidecarHistory | undefined;
+    private closed = false;
+
+    constructor(handle: number, drawing: Drawing, options: DrawingDocumentOptions = {}) {
+        this.handleValue = handle;
+        this.state = drawing;
+        this.historyMode = options.history ?? 'memory';
+        this.historyModule = options.historyModule;
+        this.importedCounts = options.imported;
+        this.importLosses = options.losses;
+        this.sourcePath = options.sourcePath;
+        this.sidecar =
+            this.historyMode === 'sidecar' && this.historyModule !== undefined && this.sourcePath !== undefined
+                ? new this.historyModule.SidecarHistory(this.sourcePath)
+                : undefined;
+    }
+
+    /** Native handle of this document. */
+    get handle(): number {
+        return this.handleValue;
+    }
+
+    /** Drawing identity. */
+    get id(): string {
+        return this.state.id;
+    }
+
+    /** Committed revision. */
+    get revision(): number {
+        return this.state.revision;
+    }
+
+    /** Title, or `null` when the drawing is untitled. */
+    get title(): string | null {
+        return this.state.title;
+    }
+
+    /** Declared unit. */
+    get units(): 'mm' | 'inch' {
+        return this.state.units;
+    }
+
+    /** Layers in paint order. */
+    get layers(): readonly LayerSummary[] {
+        return this.state.layers;
+    }
+
+    /** Number of entities. */
+    get entities(): number {
+        return this.state.entities;
+    }
+
+    /** Whether an earlier snapshot can be restored. */
+    get canUndo(): boolean {
+        if (this.sidecar !== undefined) {
+            return this.sidecar.counts().undo > 0;
+        }
+        return this.state.canUndo;
+    }
+
+    /** Whether an undone snapshot can be reapplied. */
+    get canRedo(): boolean {
+        if (this.sidecar !== undefined) {
+            return this.sidecar.counts().redo > 0;
+        }
+        return this.state.canRedo;
+    }
+
+    /** Whether {@link close} has run. */
+    get isClosed(): boolean {
+        return this.closed;
+    }
+
+    /** Import statistics when this document came from `importDxf()`. */
+    get imported(): { readonly entities: number; readonly layers: number } | undefined {
+        return this.importedCounts;
+    }
+
+    /** Import losses when this document came from `importDxf()`. */
+    get losses(): readonly ImportLoss[] | undefined {
+        return this.importLosses;
+    }
+
+    /** Latest summary returned by the native store. */
+    summary(): Drawing {
+        return this.state;
+    }
+
+    /** Latest summary, also available under the `drawing` field name. */
+    get drawing(): Drawing {
+        return this.state;
+    }
+
+    /** Runs the requested checks against this document. */
+    inspect(options?: InspectOptions): InspectReport {
+        this.assertOpen();
+        return service.inspect(this.handle, options?.checks);
+    }
+
+    /**
+     * Writes this document to a project path.
+     *
+     * `target` defaults to the file this document was opened from or last saved
+     * to. In a sidecar session, saving to a new target adopts it as the source
+     * path and drops the target's stale history.
+     */
+    save(options: SaveOptions = {}): SaveReport {
+        this.assertOpen();
+        const target = options.target ?? this.sourcePath;
+        if (target === undefined) {
+            throw new OpenCADError('session/argument-invalid', '`save()` needs a target before this document has ever been saved', {
+                details: { feature: 'drawing.save' },
+            });
+        }
+        const report = service.save(this.handle, target, options.overwrite ?? true);
+        this.state = { ...this.state, revision: report.revision };
+        if (this.historyMode === 'sidecar' && this.historyModule !== undefined) {
+            if (this.sourcePath !== target) {
+                this.historyModule.clearSidecarHistory(target);
+            }
+            this.sourcePath = target;
+            this.sidecar = new this.historyModule.SidecarHistory(target);
+        }
+        else {
+            this.sourcePath = target;
+        }
+        return report;
+    }
+
+    /** Projects this document into an exchange format. */
+    export(options: ExportOptions): ExportReport {
+        this.assertOpen();
+        return service.exportDrawing(this.handle, options.format, options.target);
+    }
+
+    /** Lists every entity in this document. */
+    listEntities(): readonly Entity[] {
+        this.assertOpen();
+        const result: EntityList = service.listEntities(this.handle);
+        return result.entities;
+    }
+
+    /** Adds a line and returns the created entity. */
+    addLine(request: AddLineRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addLine(handle, request)));
+    }
+
+    /** Adds a circle and returns the created entity. */
+    addCircle(request: AddCircleRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addCircle(handle, request)));
+    }
+
+    /** Adds a circular arc and returns the created entity. */
+    addArc(request: AddArcRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addArc(handle, request)));
+    }
+
+    /** Adds a full or partial ellipse and returns the created entity. */
+    addEllipse(request: AddEllipseRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addEllipse(handle, request)));
+    }
+
+    /** Adds a polyline and returns the created entity. */
+    addPolyline(request: AddPolylineRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addPolyline(handle, request)));
+    }
+
+    /** Adds single-line text and returns the created entity. */
+    addText(request: AddTextRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addText(handle, request)));
+    }
+
+    /** Adds a linear dimension and returns the created entity. */
+    addDimension(request: AddDimensionRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addDimension(handle, request)));
+    }
+
+    /** Deletes one entity. */
+    deleteEntity(entityId: string): EntityDeletion {
+        return this.edit((handle) => service.deleteEntity(handle, entityId), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Restores the previous snapshot. Rejects with `drawing/nothing-to-undo` when empty. */
+    undo(): HistoryResult {
+        this.assertOpen();
+        if (this.sidecar !== undefined) {
+            return this.restore('undo');
+        }
+        const result = service.undo(this.handle);
+        this.state = result.drawing;
+        return result;
+    }
+
+    /** Reapplies the snapshot the last undo replaced. */
+    redo(): HistoryResult {
+        this.assertOpen();
+        if (this.sidecar !== undefined) {
+            return this.restore('redo');
+        }
+        const result = service.redo(this.handle);
+        this.state = result.drawing;
+        return result;
+    }
+
+    /** Adds one layer and returns its summary. */
+    addLayer(request: AddLayerRequest): LayerSummary {
+        let layer: LayerSummary | undefined;
+        this.edit(
+            (handle) => service.addLayer(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                layer = result.layer;
+            },
+        );
+        return layer as LayerSummary;
+    }
+
+    /** Updates one layer. A rename also updates every entity reference. */
+    updateLayer(request: UpdateLayerRequest): LayerSummary {
+        let layer: LayerSummary | undefined;
+        this.edit(
+            (handle) => service.updateLayer(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                layer = result.layer;
+            },
+        );
+        return layer as LayerSummary;
+    }
+
+    /** Moves one entity by an offset or to an absolute anchor. */
+    moveEntity(request: MoveEntityRequest): Entity {
+        return this.adopt(this.edit((handle) => service.moveEntity(handle, request)));
+    }
+
+    /** Updates the content/height of text or the radius of a circle or arc. */
+    updateEntity(request: UpdateEntityRequest): Entity {
+        return this.adopt(this.edit((handle) => service.updateEntity(handle, request)));
+    }
+
+    /** Applies one affine transform to a selection and refreshes the summary. */
+    transform(request: TransformRequest): TransformResult {
+        return this.edit((handle) => service.transform(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Duplicates entities with a cumulative offset. */
+    copy(request: CopyRequest): CopyResult {
+        return this.edit((handle) => service.copy(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Measures bounds, path length and enclosed area. */
+    measure(sheet?: string): MeasureResult {
+        this.assertOpen();
+        return service.measure(this.handle, sheet);
+    }
+
+    /** Releases the native handle. Idempotent. */
+    close(): void {
+        if (this.closed) {
+            return;
+        }
+        this.closed = true;
+        this.closeHandle();
+    }
+
+    /**
+     * Runs one mutation. In a sidecar session it reads the current project
+     * file first, writes the mutated document back on success and records the
+     * replaced content for undo.
+     */
+    private edit<T>(work: (handle: number) => T, adopt: (value: T) => void = () => undefined): T {
+        this.assertOpen();
+        const sidecar = this.sidecar;
+        const previous = sidecar === undefined ? undefined : sidecar.read();
+        const result = work(this.handle);
+        adopt(result);
+        if (sidecar !== undefined && this.sourcePath !== undefined) {
+            service.save(this.handle, this.sourcePath, true);
+            sidecar.record(previous as string);
+        }
+        return result;
+    }
+
+    /** Swaps the file with a sidecar snapshot, then refreshes the handle. */
+    private restore(direction: 'undo' | 'redo'): HistoryResult {
+        const sidecar = this.sidecar as import('./history.js').SidecarHistory;
+        const restored = sidecar.swap(direction);
+        if (restored === undefined) {
+            throw new OpenCADError(
+                direction === 'undo' ? 'drawing/nothing-to-undo' : 'drawing/nothing-to-redo',
+                direction === 'undo' ? 'the drawing has no earlier state to restore' : 'the drawing has no undone step to reapply',
+            );
+        }
+        this.reopen();
+        const counts = sidecar.counts();
+        return {
+            revision: this.state.revision,
+            drawing: this.state,
+            canUndo: counts.undo > 0,
+            canRedo: counts.redo > 0,
+        };
+    }
+
+    /** Closes the handle behind the restored file and opens the file again. */
+    private reopen(): void {
+        this.closeHandle();
+        try {
+            const opened = service.open(this.sourcePath as string);
+            this.handleValue = opened.handle;
+            this.state = opened.drawing;
+        }
+        catch (error) {
+            this.closed = true;
+            throw error;
+        }
+    }
+
+    private closeHandle(): void {
+        try {
+            service.close(this.handleValue);
+        } catch {
+            // Releasing must not mask the caller's outcome; the handle is gone.
+        }
+    }
+
+    private adopt(change: { readonly drawing: Drawing; readonly entity: Entity }): Entity {
+        this.state = change.drawing;
+        return change.entity;
+    }
+
+    private assertOpen(): void {
+        if (this.closed) {
+            throw new OpenCADError('drawing/not-found', `drawing handle ${this.handleValue} has been closed`);
+        }
+    }
+}
