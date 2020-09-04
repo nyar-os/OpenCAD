@@ -21,7 +21,6 @@
         "push": "wee test && git push",
         "reset": "git reset Head~ --soft",
         "pub": "cargo-publish-all --yes --allow-dirty",
-
         "check:rust": "cargo fmt -p open-cad-drawing -p open-cad-napi -- --check && cargo clippy -p open-cad-drawing -p open-cad-napi --all-targets -- -D warnings && cargo test -p open-cad-drawing -p open-cad-napi",
         "build:napi": "wae native build",
         "build:ts": "pnpm --filter @wae/open-cad run build",
@@ -33,6 +32,7 @@
         "gui": "pnpm run build && pnpm --filter @wae/open-cad exec node ./dist/cli.js gui"
     },
     "devDependencies": {
+        "@doki-land/nifty": "^0.1.15",
         "@types/node": "^22.20.4",
         "@wae/wae": "0.0.6",
         "typescript": "^5.9.2"

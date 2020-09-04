@@ -24,5 +24,8 @@ pnpm-debug.log*
 # VMZ
 .cache/
 
+# npm secrets (nifty)
+.secrets/
+
 # Mathematica
 *.nb
