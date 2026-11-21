@@ -17,6 +17,7 @@ use std::{
     },
 };
 
+use boost_session::History;
 use serde_json::{Value, json};
 
 use crate::{ServiceError, schema::Drawing};
@@ -28,28 +29,20 @@ pub(crate) const HISTORY_LIMIT: usize = 32;
 pub(crate) struct Session {
     /// Current committed document.
     pub(crate) drawing: Drawing,
-    history: Vec<Drawing>,
-    future: Vec<Drawing>,
+    history: History<Drawing>,
 }
 
 impl Session {
     fn new(drawing: Drawing) -> Self {
-        Self { drawing, history: Vec::new(), future: Vec::new() }
+        Self { drawing, history: History::new(HISTORY_LIMIT) }
     }
 
     /// Summary of this session, including whether undo and redo can run.
     pub(crate) fn summary(&self) -> Value {
         let mut summary = self.drawing.summary();
-        summary["canUndo"] = json!(!self.history.is_empty());
-        summary["canRedo"] = json!(!self.future.is_empty());
+        summary["canUndo"] = json!(self.history.can_undo());
+        summary["canRedo"] = json!(self.history.can_redo());
         summary
-    }
-
-    fn push_history(&mut self, drawing: Drawing) {
-        self.history.push(drawing);
-        if self.history.len() > HISTORY_LIMIT {
-            self.history.remove(0);
-        }
     }
 }
 
@@ -92,8 +85,7 @@ pub(crate) fn edit<T>(handle: u64, work: impl FnOnce(&mut Drawing) -> Result<T, 
     let before = session.drawing.clone();
     match work(&mut session.drawing) {
         Ok(value) => {
-            session.push_history(before);
-            session.future.clear();
+            session.history.record(before);
             Ok(value)
         }
         Err(error) => {
@@ -114,14 +106,19 @@ pub(crate) fn persist<T>(handle: u64, work: impl FnOnce(&mut Drawing) -> Result<
 pub(crate) fn undo(handle: u64) -> Result<(), ServiceError> {
     let mut guard = sessions().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let session = guard.get_mut(&handle).ok_or_else(|| invalid_handle(handle))?;
-    let Some(previous) = session.history.pop()
+    if !session.history.can_undo() {
+        return Err(ServiceError::new("drawing/nothing-to-undo", "the drawing has no earlier state to restore"));
+    }
+    let current = session.drawing.clone();
+    let Some(previous) = session.history.undo(current)
     else {
         return Err(ServiceError::new("drawing/nothing-to-undo", "the drawing has no earlier state to restore"));
     };
-    let current = std::mem::replace(&mut session.drawing, previous);
-    session.drawing.revision = current.revision + 1;
-    session.drawing.next_entity = session.drawing.next_entity.max(current.next_entity);
-    session.future.push(current);
+    let revision = session.drawing.revision;
+    let next_entity = session.drawing.next_entity;
+    session.drawing = previous;
+    session.drawing.revision = revision + 1;
+    session.drawing.next_entity = session.drawing.next_entity.max(next_entity);
     Ok(())
 }
 
@@ -129,14 +126,19 @@ pub(crate) fn undo(handle: u64) -> Result<(), ServiceError> {
 pub(crate) fn redo(handle: u64) -> Result<(), ServiceError> {
     let mut guard = sessions().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let session = guard.get_mut(&handle).ok_or_else(|| invalid_handle(handle))?;
-    let Some(next) = session.future.pop()
+    if !session.history.can_redo() {
+        return Err(ServiceError::new("drawing/nothing-to-redo", "the drawing has no undone step to reapply"));
+    }
+    let current = session.drawing.clone();
+    let Some(next) = session.history.redo(current)
     else {
         return Err(ServiceError::new("drawing/nothing-to-redo", "the drawing has no undone step to reapply"));
     };
-    let current = std::mem::replace(&mut session.drawing, next);
-    session.drawing.revision = current.revision + 1;
-    session.drawing.next_entity = session.drawing.next_entity.max(current.next_entity);
-    session.push_history(current);
+    let revision = session.drawing.revision;
+    let next_entity = session.drawing.next_entity;
+    session.drawing = next;
+    session.drawing.revision = revision + 1;
+    session.drawing.next_entity = session.drawing.next_entity.max(next_entity);
     Ok(())
 }
 

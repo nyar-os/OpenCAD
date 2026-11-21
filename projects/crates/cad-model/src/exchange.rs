@@ -5,13 +5,15 @@
 //! entity section; polylines keep their vertices as POLYLINE/VERTEX/SEQEND and
 //! dimensions are written as primitives whose approximation is reported as a
 //! loss. PDF writes a minimal vector page with a real xref table and reports
-//! characters the standard Helvetica encoding cannot carry. Arcs and ellipses
-//! are written as SVG path arcs, as DXF analytic entities, as PDF cubic Bezier
-//! segments and as five-degree polyline samples when extruded to STL.
+//! characters the standard Helvetica encoding cannot carry. SVG and PDF are
+//! lowered onto the shared `document-drawing` scene; DXF keeps analytic arcs and
+//! ellipses, and STL extrudes five-degree polyline samples.
 
+use document_drawing::{Color, Drawing as FlatDrawing, Element, Point as FlatPoint, Shape, Size as FlatSize, Style};
+use geometry_planar::{Point as PlanarPoint, Rect, signed_polygon_area};
 use serde::Serialize;
 
-use crate::schema::{Drawing, Entity, EntityKind, Units, arc_point, arc_sweep, ellipse_point, offset_points, sample_arc, sample_ellipse};
+use crate::schema::{Drawing, Entity, EntityKind, Units, arc_sweep, offset_points, sample_arc, sample_ellipse};
 
 /// One item an exchange target could not keep.
 #[derive(Debug, Clone, Serialize)]
@@ -37,38 +39,6 @@ impl Loss {
             layer_id: layer_id.map(str::to_string),
             entity_id: entity_id.map(str::to_string),
             message,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Bounds {
-    min_x: f64,
-    min_y: f64,
-    max_x: f64,
-    max_y: f64,
-    seen: bool,
-}
-
-impl Bounds {
-    fn empty() -> Self {
-        Self { min_x: f64::INFINITY, min_y: f64::INFINITY, max_x: f64::NEG_INFINITY, max_y: f64::NEG_INFINITY, seen: false }
-    }
-
-    fn add(&mut self, point: [f64; 2]) {
-        if !point[0].is_finite() || !point[1].is_finite() {
-            return;
-        }
-        self.min_x = self.min_x.min(point[0]);
-        self.min_y = self.min_y.min(point[1]);
-        self.max_x = self.max_x.max(point[0]);
-        self.max_y = self.max_y.max(point[1]);
-        self.seen = true;
-    }
-
-    fn add_entity(&mut self, entity: &Entity) {
-        for point in entity.bounds_points() {
-            self.add(point);
         }
     }
 }
@@ -140,63 +110,177 @@ struct Frame {
 
 impl Frame {
     fn of(drawing: &Drawing) -> Self {
-        let mut bounds = Bounds::empty();
-        for entity in &drawing.entities {
-            if drawing.layer(&entity.layer).is_some_and(|layer| layer.visible) {
-                bounds.add_entity(entity);
+        match visible_extents(drawing) {
+            Some(extents) => {
+                let width = extents.width().max(1.0);
+                let height = extents.height().max(1.0);
+                let pad = (width.max(height) * 0.05).max(1.0);
+                Self { min_x: extents.min.x - pad, min_y: extents.min.y - pad, width: width + pad * 2.0, height: height + pad * 2.0 }
+            }
+            None => Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 },
+        }
+    }
+
+    /// Maps model coordinates (y up) onto the SVG canvas (y down).
+    fn map(self, point: [f64; 2]) -> FlatPoint {
+        FlatPoint::new(point[0] - self.min_x, self.min_y + self.height - point[1])
+    }
+}
+
+/// Bounds of the entities on visible layers, ignoring non-finite coordinates.
+fn visible_extents(drawing: &Drawing) -> Option<Rect> {
+    let mut extents: Option<Rect> = None;
+    for entity in &drawing.entities {
+        if !drawing.layer(&entity.layer).is_some_and(|layer| layer.visible) {
+            continue;
+        }
+        for point in entity.bounds_points() {
+            if !point[0].is_finite() || !point[1].is_finite() {
+                continue;
+            }
+            let point = PlanarPoint::new(point[0], point[1]);
+            let point_rect = Rect::from_points(point, point);
+            extents = Some(extents.map_or(point_rect, |extents| extents.union(point_rect)));
+        }
+    }
+    extents
+}
+
+/// Parses a CSS colour used by a layer; malformed values keep the previous
+/// default ink.
+fn color_of(value: &str) -> Color {
+    let digits = value.trim().trim_start_matches('#').to_ascii_lowercase();
+    let expanded = match digits.len() {
+        3 => digits.chars().flat_map(|character| [character, character]).collect::<String>(),
+        6 => digits,
+        _ => return Color::rgb(31, 41, 51),
+    };
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&expanded[range], 16).unwrap_or(0);
+    Color::rgb(channel(0..2), channel(2..4), channel(4..6))
+}
+
+/// How model coordinates become flat-drawing coordinates.
+struct Projection<'a> {
+    map: &'a dyn Fn([f64; 2]) -> FlatPoint,
+    scale: f64,
+    stroke: f64,
+    label_offset: f64,
+    label_size: f64,
+}
+
+fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>) -> FlatDrawing {
+    let mut flat = FlatDrawing::new(size);
+    for layer in &drawing.layers {
+        if !layer.visible {
+            continue;
+        }
+        let color = color_of(&layer.color);
+        let stroke_style = Style::stroke(color, projection.stroke);
+        let text_style = Style::fill(color);
+        for entity in drawing.entities.iter().filter(|entity| entity.layer == layer.id) {
+            if entity.is_finite() {
+                push_entity(&mut flat, entity, color, &stroke_style, &text_style, projection);
             }
         }
-        if bounds.seen {
-            let width = (bounds.max_x - bounds.min_x).max(1.0);
-            let height = (bounds.max_y - bounds.min_y).max(1.0);
-            let pad = (width.max(height) * 0.05).max(1.0);
-            Self { min_x: bounds.min_x - pad, min_y: bounds.min_y - pad, width: width + pad * 2.0, height: height + pad * 2.0 }
+    }
+    flat
+}
+
+fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_style: &Style, text_style: &Style, projection: &Projection<'_>) {
+    let map = projection.map;
+    let scale = projection.scale;
+    match &entity.kind {
+        EntityKind::Line { from, to } => {
+            flat.push(Element::new(Shape::Line { from: map(*from), to: map(*to) }, stroke_style.clone()));
         }
-        else {
-            Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 }
+        EntityKind::Circle { center, radius } => {
+            flat.push(Element::new(Shape::Circle { center: map(*center), radius: radius.abs() * scale }, stroke_style.clone()));
+        }
+        EntityKind::Arc { center, radius, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            flat.push(Element::new(
+                Shape::Arc {
+                    center: map(*center),
+                    radius: radius.abs() * scale,
+                    start_degrees: -*start_angle,
+                    end_degrees: -(*start_angle + sweep),
+                },
+                stroke_style.clone(),
+            ));
+        }
+        EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+            let rx = rx.abs();
+            let ry = ry.abs();
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            let axis = rotation.rem_euclid(180.0);
+            if sweep >= 360.0 - 1e-9 && (axis < 1e-6 || (axis - 90.0).abs() < 1e-6) {
+                let radii =
+                    if (axis - 90.0).abs() < 1e-6 { FlatSize::new(ry * scale, rx * scale) } else { FlatSize::new(rx * scale, ry * scale) };
+                flat.push(Element::new(Shape::Ellipse { center: map(*center), radii }, stroke_style.clone()));
+            }
+            else {
+                let points =
+                    sample_ellipse(*center, rx, ry, *rotation, *start_angle, *end_angle).iter().map(|point| map(*point)).collect::<Vec<_>>();
+                let shape = if sweep >= 360.0 - 1e-9 { Shape::Polygon { points } } else { Shape::Polyline { points } };
+                flat.push(Element::new(shape, stroke_style.clone()));
+            }
+        }
+        EntityKind::Point { at } => {
+            flat.push(Element::new(Shape::Circle { center: map(*at), radius: projection.stroke * 2.0 * scale }, Style::fill(color)));
+        }
+        EntityKind::Polyline { points, closed } => {
+            let points = points.iter().map(|point| map(*point)).collect::<Vec<_>>();
+            let shape = if *closed { Shape::Polygon { points } } else { Shape::Polyline { points } };
+            flat.push(Element::new(shape, stroke_style.clone()));
+        }
+        EntityKind::Text { at, height, content } => {
+            flat.push(Element::new(
+                Shape::Text { at: map(*at), text: content.clone(), size: (height.abs() * scale).max(0.01) },
+                text_style.clone(),
+            ));
+        }
+        EntityKind::Dimension { from, to, offset, text } => {
+            let (p1, p2) = offset_points(*from, *to, *offset);
+            for (start, end) in [(*from, p1), (*to, p2), (p1, p2)] {
+                flat.push(Element::new(Shape::Line { from: map(start), to: map(end) }, stroke_style.clone()));
+            }
+            let midpoint = [(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0 + projection.label_offset];
+            flat.push(Element::new(
+                Shape::Text { at: map(midpoint), text: dimension_label(*from, *to, text), size: projection.label_size.max(0.01) },
+                text_style.clone(),
+            ));
         }
     }
 }
 
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
-    let Frame { min_x, min_y, width, height } = frame;
-    let flip_axis = 2.0 * min_y + height;
-
-    let unit = match drawing.units {
-        Units::Mm => "mm",
-        Units::Inch => "in",
-    };
     let stroke = stroke_width(drawing.units);
+    let map = |point: [f64; 2]| frame.map(point);
+    let projection = Projection { map: &map, scale: 1.0, stroke, label_offset: 1.0, label_size: stroke * 3.5 };
+    let flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
+    let svg = flat.to_svg().unwrap_or_else(|_| {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n</svg>\n",
+            num(frame.width),
+            num(frame.height),
+            num(frame.width),
+            num(frame.height)
+        )
+    });
+    decorate_svg(svg, drawing)
+}
 
-    let mut body = String::new();
-    body.push_str(&format!("<g fill=\"none\" stroke-width=\"{}\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n", num(stroke)));
-    for layer in &drawing.layers {
-        if !layer.visible {
-            continue;
-        }
-        let color = escape_xml(&layer.color);
-        body.push_str(&format!("  <g id=\"layer-{}\" stroke=\"{}\">\n", escape_xml(&layer.id), color));
-        for entity in drawing.entities.iter().filter(|entity| entity.layer == layer.id) {
-            render_svg_entity(&mut body, entity, &color, flip_axis, stroke);
-        }
-        body.push_str("  </g>\n");
-    }
-    body.push_str("</g>\n");
-
-    format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" viewBox=\"{} {} {} {}\" width=\"{}{}\" height=\"{}{}\" data-open-cad=\"drawing\" data-revision=\"{}\">\n<title>{}</title>\n{}</svg>\n",
-        num(min_x),
-        num(min_y),
-        num(width),
-        num(height),
-        num(width),
-        unit,
-        num(height),
-        unit,
-        drawing.revision,
-        escape_xml(drawing.title.as_deref().unwrap_or("Untitled drawing")),
-        body
-    )
+/// Re-attaches the OpenCAD metadata the shared writer does not know about.
+fn decorate_svg(mut svg: String, drawing: &Drawing) -> String {
+    let Some(index) = svg.find('>')
+    else {
+        return svg;
+    };
+    let attributes = format!(" data-open-cad=\"drawing\" data-revision=\"{}\"", drawing.revision);
+    let title = format!("\n<title>{}</title>", escape_xml(drawing.title.as_deref().unwrap_or("Untitled drawing")));
+    svg.insert_str(index, &attributes);
+    svg.insert_str(index + attributes.len() + 1, &title);
+    svg
 }
 
 /// Renders one drawing to an SVG document.
@@ -211,142 +295,6 @@ pub(crate) fn svg(drawing: &Drawing) -> String {
 pub(crate) fn svg_preview(drawing: &Drawing) -> (String, f64, f64) {
     let frame = Frame::of(drawing);
     (svg_document(drawing, frame), frame.width, frame.height)
-}
-
-fn svg_y(point: [f64; 2], flip_axis: f64) -> f64 {
-    flip_axis - point[1]
-}
-
-/// Parameters of one SVG path made of elliptical-arc commands.
-struct SvgArc {
-    start_point: [f64; 2],
-    sweep: f64,
-    start_angle: f64,
-    rx: f64,
-    ry: f64,
-    axis_rotation: f64,
-}
-
-/// Appends one SVG elliptical-arc command and returns the full path data.
-///
-/// The drawing is counter-clockwise in mathematical coordinates; the SVG
-/// writer flips Y, so the screen-space sweep flag is always `0`.
-fn svg_arc_path(arc: SvgArc, flip_axis: f64, point: impl Fn(f64) -> [f64; 2]) -> String {
-    let mut path = format!("M {} {}", num(arc.start_point[0]), num(flip_axis - arc.start_point[1]));
-    let mut remaining = arc.sweep;
-    let mut angle = arc.start_angle;
-    while remaining > 1e-9 {
-        let chunk = remaining.min(180.0);
-        angle += chunk;
-        let end = point(angle);
-        path.push_str(&format!(
-            " A {} {} {} {} 0 {} {}",
-            num(arc.rx),
-            num(arc.ry),
-            num(arc.axis_rotation),
-            if chunk > 180.0 { 1 } else { 0 },
-            num(end[0]),
-            num(flip_axis - end[1])
-        ));
-        remaining -= chunk;
-    }
-    path
-}
-
-fn render_svg_entity(body: &mut String, entity: &Entity, color: &str, flip_axis: f64, stroke: f64) {
-    match &entity.kind {
-        EntityKind::Line { from, to } => {
-            body.push_str(&format!(
-                "    <line data-id=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" />\n",
-                escape_xml(&entity.id),
-                num(from[0]),
-                num(svg_y(*from, flip_axis)),
-                num(to[0]),
-                num(svg_y(*to, flip_axis))
-            ));
-        }
-        EntityKind::Circle { center, radius } => {
-            body.push_str(&format!(
-                "    <circle data-id=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\" />\n",
-                escape_xml(&entity.id),
-                num(center[0]),
-                num(svg_y(*center, flip_axis)),
-                num(radius.abs())
-            ));
-        }
-        EntityKind::Arc { center, radius, start_angle, end_angle } => {
-            let radius = radius.abs();
-            let sweep = arc_sweep(*start_angle, *end_angle);
-            let start = arc_point(*center, radius, *start_angle);
-            let path = svg_arc_path(
-                SvgArc { start_point: start, sweep, start_angle: *start_angle, rx: radius, ry: radius, axis_rotation: 0.0 },
-                flip_axis,
-                |angle| arc_point(*center, radius, angle),
-            );
-            body.push_str(&format!("    <path data-id=\"{}\" d=\"{path}\" />\n", escape_xml(&entity.id)));
-        }
-        EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
-            let rx = rx.abs();
-            let ry = ry.abs();
-            let sweep = arc_sweep(*start_angle, *end_angle);
-            let start = ellipse_point(*center, rx, ry, *rotation, *start_angle);
-            let path = svg_arc_path(
-                SvgArc { start_point: start, sweep, start_angle: *start_angle, rx, ry, axis_rotation: -*rotation },
-                flip_axis,
-                |parameter| ellipse_point(*center, rx, ry, *rotation, parameter),
-            );
-            body.push_str(&format!("    <path data-id=\"{}\" d=\"{path}\" />\n", escape_xml(&entity.id)));
-        }
-        EntityKind::Point { at } => {
-            body.push_str(&format!(
-                "    <circle data-id=\"{}\" cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"{color}\" stroke=\"none\" />\n",
-                escape_xml(&entity.id),
-                num(at[0]),
-                num(svg_y(*at, flip_axis)),
-                num(stroke * 2.0)
-            ));
-        }
-        EntityKind::Polyline { points, closed } => {
-            let points =
-                points.iter().map(|point| format!("{},{}", num(point[0]), num(svg_y(*point, flip_axis)))).collect::<Vec<_>>().join(" ");
-            let tag = if *closed { "polygon" } else { "polyline" };
-            body.push_str(&format!("    <{tag} data-id=\"{}\" points=\"{points}\" />\n", escape_xml(&entity.id)));
-        }
-        EntityKind::Text { at, height, content } => {
-            body.push_str(&format!(
-                "    <text data-id=\"{}\" x=\"{}\" y=\"{}\" font-size=\"{}\" fill=\"{color}\" stroke=\"none\" font-family=\"sans-serif\">{}</text>\n",
-                escape_xml(&entity.id),
-                num(at[0]),
-                num(svg_y(*at, flip_axis)),
-                num(height.abs()),
-                escape_xml(content)
-            ));
-        }
-        EntityKind::Dimension { from, to, offset, text } => {
-            let (p1, p2) = offset_points(*from, *to, *offset);
-            let label = dimension_label(*from, *to, text);
-            body.push_str(&format!(
-                "    <g data-id=\"{}\" class=\"dimension\">\n      <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" />\n      <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" />\n      <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" />\n      <text x=\"{}\" y=\"{}\" font-size=\"{}\" fill=\"{color}\" stroke=\"none\" font-family=\"sans-serif\">{}</text>\n    </g>\n",
-                escape_xml(&entity.id),
-                num(from[0]),
-                num(svg_y(*from, flip_axis)),
-                num(p1[0]),
-                num(svg_y(p1, flip_axis)),
-                num(to[0]),
-                num(svg_y(*to, flip_axis)),
-                num(p2[0]),
-                num(svg_y(p2, flip_axis)),
-                num(p1[0]),
-                num(svg_y(p1, flip_axis)),
-                num(p2[0]),
-                num(svg_y(p2, flip_axis)),
-                num((p1[0] + p2[0]) / 2.0),
-                num(svg_y([(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0], flip_axis) - 1.0),
-                num(stroke * 3.5),
-                escape_xml(&label)
-            ));
-        }
-    }
 }
 
 fn dxf_pair(out: &mut String, code: i64, value: impl std::fmt::Display) {
@@ -519,17 +467,6 @@ const PDF_PAGE_WIDTH: f64 = 841.89;
 const PDF_PAGE_HEIGHT: f64 = 595.28;
 const PDF_MARGIN: f64 = 28.0;
 
-fn pdf_color(value: &str) -> (f64, f64, f64) {
-    let digits = value.trim().trim_start_matches('#').to_ascii_lowercase();
-    let expanded = match digits.len() {
-        3 => digits.chars().flat_map(|character| [character, character]).collect::<String>(),
-        6 => digits,
-        _ => return (0.12, 0.16, 0.2),
-    };
-    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&expanded[range], 16).map(|value| f64::from(value) / 255.0).unwrap_or(0.0);
-    (channel(0..2), channel(2..4), channel(4..6))
-}
-
 /// Escapes one text string for a PDF literal and reports replacements.
 ///
 /// Only printable ASCII is kept; the standard Type1 fonts need an encoding
@@ -554,200 +491,36 @@ fn pdf_text(value: &str) -> (String, usize) {
     (out, replaced)
 }
 
-fn pdf_line(content: &mut String, from: [f64; 2], to: [f64; 2], map: impl Fn([f64; 2]) -> [f64; 2]) {
-    let a = map(from);
-    let b = map(to);
-    content.push_str(&format!("{} {} m {} {} l S\n", num(a[0]), num(a[1]), num(b[0]), num(b[1])));
-}
-
-fn pdf_circle(content: &mut String, center: [f64; 2], radius: f64, map: impl Fn([f64; 2]) -> [f64; 2], scale: f64) {
-    let c = map(center);
-    let r = radius.abs() * scale;
-    if r <= 0.0 {
-        return;
-    }
-    let k = 0.552_284_749_830_793_6 * r;
-    let (cx, cy) = (c[0], c[1]);
-    content.push_str(&format!("{} {} m\n", num(cx + r), num(cy)));
-    content.push_str(&format!("{} {} {} {} {} {} c\n", num(cx + r), num(cy + k), num(cx + k), num(cy + r), num(cx), num(cy + r)));
-    content.push_str(&format!("{} {} {} {} {} {} c\n", num(cx - k), num(cy + r), num(cx - r), num(cy + k), num(cx - r), num(cy)));
-    content.push_str(&format!("{} {} {} {} {} {} c\n", num(cx - r), num(cy - k), num(cx - k), num(cy - r), num(cx), num(cy - r)));
-    content.push_str(&format!("{} {} {} {} {} {} c\nS\n", num(cx + k), num(cy - r), num(cx + r), num(cy - k), num(cx + r), num(cy)));
-}
-
-/// Approximates a parametric curve with cubic Bezier segments.
-///
-/// The sweep is split into pieces of at most 90 degrees; each cubic uses the
-/// parametric derivative at both ends, so circles and ellipses keep their
-/// tangent directions. `sample` and `derivative` take radians.
-fn pdf_curve(
-    content: &mut String,
-    start_degrees: f64,
-    sweep_degrees: f64,
-    sample: impl Fn(f64) -> [f64; 2],
-    derivative: impl Fn(f64) -> [f64; 2],
-    map: impl Fn([f64; 2]) -> [f64; 2],
-) {
-    let start = start_degrees.to_radians();
-    let sweep = sweep_degrees.to_radians();
-    if sweep.abs() < 1e-9 {
-        return;
-    }
-    let steps = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
-    let first = map(sample(start));
-    content.push_str(&format!("{} {} m\n", num(first[0]), num(first[1])));
-    for index in 0..steps as usize {
-        let t0 = start + sweep * index as f64 / steps;
-        let t1 = start + sweep * (index + 1) as f64 / steps;
-        let step = t1 - t0;
-        let p0 = sample(t0);
-        let p3 = sample(t1);
-        let d0 = derivative(t0);
-        let d1 = derivative(t1);
-        let c1 = map([p0[0] + d0[0] * step / 3.0, p0[1] + d0[1] * step / 3.0]);
-        let c2 = map([p3[0] - d1[0] * step / 3.0, p3[1] - d1[1] * step / 3.0]);
-        let end = map(p3);
-        content.push_str(&format!("{} {} {} {} {} {} c\n", num(c1[0]), num(c1[1]), num(c2[0]), num(c2[1]), num(end[0]), num(end[1])));
-    }
-    content.push_str("S\n");
-}
-
-fn pdf_text_run(content: &mut String, text: &str, at: [f64; 2], size: f64, map: impl Fn([f64; 2]) -> [f64; 2]) -> usize {
-    let (escaped, replaced) = pdf_text(text);
-    let point = map(at);
-    content.push_str(&format!("BT /F1 {} Tf {} {} Td ({}) Tj ET\n", num(size.max(0.5)), num(point[0]), num(point[1]), escaped));
-    replaced
-}
-
-/// Renders one drawing to a minimal vector PDF and reports text losses.
+/// Renders one drawing to a vector PDF and reports text losses.
 ///
 /// The page is A4 landscape. Content is fitted into the printable area with a
 /// uniform scale, so the output is a drawing sheet rather than a 1:1 plot.
 pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
-    let mut bounds = Bounds::empty();
-    for entity in &drawing.entities {
-        if drawing.layer(&entity.layer).is_some_and(|layer| layer.visible) {
-            bounds.add_entity(entity);
-        }
-    }
-    let (min_x, min_y, width, height) = if bounds.seen {
-        ((bounds.min_x), (bounds.min_y), (bounds.max_x - bounds.min_x).max(1.0), (bounds.max_y - bounds.min_y).max(1.0))
-    }
-    else {
-        (0.0, 0.0, 297.0, 210.0)
+    let extents = visible_extents(drawing);
+    let (min_x, min_y, width, height) = match extents {
+        Some(extents) => (extents.min.x, extents.min.y, extents.width().max(1.0), extents.height().max(1.0)),
+        None => (0.0, 0.0, 297.0, 210.0),
     };
     let usable_width = PDF_PAGE_WIDTH - PDF_MARGIN * 2.0;
     let usable_height = PDF_PAGE_HEIGHT - PDF_MARGIN * 2.0;
     let scale = (usable_width / width).min(usable_height / height);
     let offset_x = (PDF_PAGE_WIDTH - width * scale) / 2.0 - min_x * scale;
     let offset_y = (PDF_PAGE_HEIGHT - height * scale) / 2.0 - min_y * scale;
-    let map = |point: [f64; 2]| [point[0] * scale + offset_x, point[1] * scale + offset_y];
+    let map = |point: [f64; 2]| FlatPoint::new(point[0] * scale + offset_x, PDF_PAGE_HEIGHT - (point[1] * scale + offset_y));
+    let projection = Projection { map: &map, scale, stroke: 0.7, label_offset: 1.75, label_size: 1.75 * scale };
+    let flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
+    let out = flat.to_pdf().map_or_else(|_| String::from("%PDF-1.7\n%%EOF\n"), |bytes| String::from_utf8_lossy(&bytes).into_owned());
 
-    let mut content = String::new();
-    content.push_str("q\n");
-    content.push_str(&format!("{} w\n1 J\n1 j\n", num(0.7)));
     let mut replaced = 0;
-    for layer in &drawing.layers {
-        if !layer.visible {
-            continue;
-        }
-        let (red, green, blue) = pdf_color(&layer.color);
-        content.push_str(&format!("{} {} {} RG\n", num(red), num(green), num(blue)));
+    for layer in drawing.layers.iter().filter(|layer| layer.visible) {
         for entity in drawing.entities.iter().filter(|entity| entity.layer == layer.id) {
             match &entity.kind {
-                EntityKind::Line { from, to } => pdf_line(&mut content, *from, *to, map),
-                EntityKind::Circle { center, radius } => pdf_circle(&mut content, *center, *radius, map, scale),
-                EntityKind::Arc { center, radius, start_angle, end_angle } => {
-                    let radius = radius.abs();
-                    let sweep = arc_sweep(*start_angle, *end_angle);
-                    pdf_curve(
-                        &mut content,
-                        *start_angle,
-                        sweep,
-                        |angle| [center[0] + radius * angle.cos(), center[1] + radius * angle.sin()],
-                        |angle| [-radius * angle.sin(), radius * angle.cos()],
-                        map,
-                    );
-                }
-                EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
-                    let rx = rx.abs();
-                    let ry = ry.abs();
-                    let sweep = arc_sweep(*start_angle, *end_angle);
-                    let (sin, cos) = rotation.to_radians().sin_cos();
-                    let sample = |parameter: f64| {
-                        let x = rx * parameter.cos();
-                        let y = ry * parameter.sin();
-                        [center[0] + x * cos - y * sin, center[1] + x * sin + y * cos]
-                    };
-                    let derivative = |parameter: f64| {
-                        let x = -rx * parameter.sin();
-                        let y = ry * parameter.cos();
-                        [x * cos - y * sin, x * sin + y * cos]
-                    };
-                    pdf_curve(&mut content, *start_angle, sweep, sample, derivative, map);
-                }
-                EntityKind::Point { at } => pdf_circle(&mut content, *at, 0.5, map, scale),
-                EntityKind::Polyline { points, closed } => {
-                    if let Some(first) = points.first() {
-                        let start = map(*first);
-                        content.push_str(&format!("{} {} m\n", num(start[0]), num(start[1])));
-                        for point in points.iter().skip(1) {
-                            let next = map(*point);
-                            content.push_str(&format!("{} {} l\n", num(next[0]), num(next[1])));
-                        }
-                        if *closed {
-                            content.push_str("h\n");
-                        }
-                        content.push_str("S\n");
-                    }
-                }
-                EntityKind::Text { at, height, content: text } => {
-                    content.push_str(&format!("{} {} {} rg\n", num(red), num(green), num(blue)));
-                    let size = height.abs() * scale;
-                    replaced += pdf_text_run(&mut content, text, *at, size, map);
-                    content.push_str(&format!("{} {} {} RG\n", num(red), num(green), num(blue)));
-                }
-                EntityKind::Dimension { from, to, offset, text } => {
-                    let (p1, p2) = offset_points(*from, *to, *offset);
-                    pdf_line(&mut content, *from, p1, map);
-                    pdf_line(&mut content, *to, p2, map);
-                    pdf_line(&mut content, p1, p2, map);
-                    let label = dimension_label(*from, *to, text);
-                    content.push_str(&format!("{} {} {} rg\n", num(red), num(green), num(blue)));
-                    let midpoint = [(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0 + 1.75];
-                    replaced += pdf_text_run(&mut content, &label, midpoint, 1.75 * scale, map);
-                    content.push_str(&format!("{} {} {} RG\n", num(red), num(green), num(blue)));
-                }
+                EntityKind::Text { content, .. } => replaced += pdf_text(content).1,
+                EntityKind::Dimension { from, to, text, .. } => replaced += pdf_text(&dimension_label(*from, *to, text)).1,
+                _ => {}
             }
         }
     }
-    content.push_str("Q\n");
-
-    let objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-            num(PDF_PAGE_WIDTH),
-            num(PDF_PAGE_HEIGHT)
-        ),
-        format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
-    ];
-
-    let mut out = String::from("%PDF-1.4\n");
-    let mut offsets = Vec::with_capacity(objects.len());
-    for (index, body) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
-    }
-    let xref = out.len();
-    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
-    out.push_str("0000000000 65535 f \n");
-    for offset in offsets {
-        out.push_str(&format!("{offset:010} 00000 n \n"));
-    }
-    out.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1));
 
     let mut losses = Vec::new();
     if replaced > 0 {
@@ -789,15 +562,8 @@ fn closed_profile(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
 }
 
 fn signed_area(points: &[[f64; 2]]) -> f64 {
-    let double = points
-        .iter()
-        .enumerate()
-        .map(|(index, point)| {
-            let next = points[(index + 1) % points.len()];
-            point[0] * next[1] - next[0] * point[1]
-        })
-        .sum::<f64>();
-    double / 2.0
+    let polygon = points.iter().map(|point| PlanarPoint::new(point[0], point[1])).collect::<Vec<_>>();
+    signed_polygon_area(&polygon)
 }
 
 fn cross(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {

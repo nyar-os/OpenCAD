@@ -11,4 +11,7 @@ description = "Declared drawing model contracts for OpenCAD"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-boost-fs = { workspace = true }
+boost-check = { workspace = true }
+boost-session = { workspace = true }
+geometry-planar = { workspace = true }
+document-drawing = { workspace = true }

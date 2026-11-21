@@ -13,9 +13,12 @@ authors = ["OpenCAD Authors"]
 repository = "https://github.com/nyar-os/OpenCAD"
 
 [workspace.dependencies]
-# Atomic file publish, pinned to the boost.rs `dev` revision so local builds
-# and CI resolve the same commit.
-boost-fs = { git = "https://github.com/oovm/boost.rs.git", rev = "94f5f65572965951f76f9c70668d5250e6ce52cc" }
+# Shared crates from boost.rs `dev`, pinned to the full 40-character revision
+# so local builds and CI resolve the same commit.
+boost-check = { git = "https://github.com/oovm/boost.rs.git", rev = "f0c76fc60090650eefa1de1a4f2c2cbb29cba8d9" }
+boost-session = { git = "https://github.com/oovm/boost.rs.git", rev = "f0c76fc60090650eefa1de1a4f2c2cbb29cba8d9" }
+geometry-planar = { git = "https://github.com/oovm/boost.rs.git", rev = "f0c76fc60090650eefa1de1a4f2c2cbb29cba8d9" }
+document-drawing = { git = "https://github.com/oovm/boost.rs.git", rev = "f0c76fc60090650eefa1de1a4f2c2cbb29cba8d9" }
 # Shared host facade for the Node-API and WebView surfaces. Cross-repo git
 # dependencies pin the full 40-character revision so local builds and CI resolve
 # the same commit.

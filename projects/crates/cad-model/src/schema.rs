@@ -5,6 +5,7 @@
 //! polylines, text and linear dimensions. Every value is serialisable, so the
 //! same document is written to `.ocad` files and returned to callers as JSON.
 
+use geometry_planar::{Point as PlanarPoint, arc_points};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -462,7 +463,11 @@ pub fn ellipse_point(center: [f64; 2], rx: f64, ry: f64, rotation_degrees: f64, 
 /// Samples an arc into points, at most [`CURVE_STEP_DEGREES`] apart.
 pub fn sample_arc(center: [f64; 2], radius: f64, start_angle: f64, end_angle: f64) -> Vec<[f64; 2]> {
     let sweep = arc_sweep(start_angle, end_angle);
-    sample_curve(sweep, |step| arc_point(center, radius, start_angle + step))
+    let segments = (sweep / CURVE_STEP_DEGREES).ceil().max(1.0) as usize;
+    arc_points(PlanarPoint::new(center[0], center[1]), radius, start_angle.to_radians(), (start_angle + sweep).to_radians(), segments)
+        .into_iter()
+        .map(|point| [point.x, point.y])
+        .collect()
 }
 
 /// Samples a full or partial ellipse into points, at most

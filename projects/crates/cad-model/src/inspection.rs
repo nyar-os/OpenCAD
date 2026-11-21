@@ -6,76 +6,52 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use boost_check::{CheckReport, Issue, Severity};
 use serde_json::{Value, json};
 
 use crate::schema::{Drawing, EntityKind, Units};
 
 /// Checks this build executes.
-pub(crate) const SUPPORTED_CHECKS: &[&str] = &["units", "layers", "geometry", "polylines", "dimensions"];
-
-/// Severity of one finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Severity {
-    /// The drawing is valid but something deserves attention.
-    Warning,
-    /// The drawing breaks an invariant.
-    Error,
-}
-
-impl Severity {
-    fn is_error(self) -> bool {
-        self == Self::Error
-    }
-}
-
-/// One finding.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Issue {
-    /// Stable finding code.
-    pub(crate) code: String,
-    /// `warning` or `error`.
-    pub(crate) severity: Severity,
-    /// Revision the finding belongs to.
-    pub(crate) revision: u64,
-    /// Layer locator.
-    pub(crate) layer_id: Option<String>,
-    /// Entity locator.
-    pub(crate) object_id: Option<String>,
-    /// Whether a caller can correct the finding without rebuilding the file.
-    pub(crate) recoverable: bool,
-    /// Human-readable message.
-    pub(crate) message: String,
-}
+pub(crate) const SUPPORTED_CHECKS: &[&str] = &["units", "layers", "geometry", "polylines", "dimensions", "duplicate-entity", "zero-length"];
 
 /// Result of one inspection run.
 #[derive(Debug, Clone)]
 pub(crate) struct Report {
     revision: u64,
-    issues: Vec<Issue>,
+    issues: CheckReport,
 }
 
 impl Report {
     /// JSON shape returned by `inspect`.
     pub(crate) fn to_json(&self) -> Value {
+        let issues = self
+            .issues
+            .issues
+            .iter()
+            .map(|issue| {
+                json!({
+                    "code": issue.code,
+                    "severity": issue.severity.as_str(),
+                    "revision": self.revision,
+                    "layerId": issue.details.get("layer"),
+                    "objectId": issue.details.get("object"),
+                    "recoverable": issue.details.get("recoverable").is_some_and(|value| value == "true"),
+                    "message": issue.message,
+                })
+            })
+            .collect::<Vec<_>>();
         json!({
             "revision": self.revision,
             "checkerVersion": env!("CARGO_PKG_VERSION"),
-            "passed": self.passed(),
-            "issues": self.issues,
+            "passed": self.issues.is_ok(),
+            "issues": issues,
         })
-    }
-
-    fn passed(&self) -> bool {
-        !self.issues.iter().any(|issue| issue.severity.is_error())
     }
 }
 
 struct Collector<'a> {
     drawing: &'a Drawing,
-    issues: Vec<Issue>,
+    issues: CheckReport,
     seen_ids: HashMap<&'a str, usize>,
     geometry: bool,
     layers: bool,
@@ -86,15 +62,14 @@ struct Collector<'a> {
 
 impl<'a> Collector<'a> {
     fn push(&mut self, code: &str, severity: Severity, layer: Option<&str>, entity: Option<&str>, recoverable: bool, message: String) {
-        self.issues.push(Issue {
-            code: code.to_string(),
-            severity,
-            revision: self.drawing.revision,
-            layer_id: layer.map(str::to_string),
-            object_id: entity.map(str::to_string),
-            recoverable,
-            message,
-        });
+        let mut issue = Issue::new(code, severity, message).with_detail("recoverable", recoverable.to_string());
+        if let Some(layer) = layer {
+            issue = issue.with_detail("layer", layer);
+        }
+        if let Some(entity) = entity {
+            issue = issue.with_detail("object", entity);
+        }
+        self.issues.push(issue);
     }
 
     fn check_ids(&mut self) {
@@ -119,7 +94,10 @@ impl<'a> Collector<'a> {
     ///
     /// Ids stay unique, so this is a warning about duplicated drawing content
     /// rather than a schema error. The first occurrence is named in the message.
-    fn check_duplicate_entities(&mut self) {
+    /// The check runs under the `geometry` rule and, with the
+    /// `duplicate-entity` selector, also reports the dedicated
+    /// `inspection/duplicate-entity` code.
+    fn check_duplicate_entities(&mut self, code: &str) {
         let mut seen: HashMap<String, &'a str> = HashMap::new();
         for entity in &self.drawing.entities {
             let Ok(kind) = serde_json::to_string(&entity.kind)
@@ -129,7 +107,7 @@ impl<'a> Collector<'a> {
             let key = format!("{}\u{0}{kind}", entity.layer);
             if let Some(first) = seen.get(&key).copied() {
                 self.push(
-                    "geometry/duplicate-entity",
+                    code,
                     Severity::Warning,
                     Some(&entity.layer),
                     Some(&entity.id),
@@ -139,6 +117,31 @@ impl<'a> Collector<'a> {
             }
             else {
                 seen.insert(key, entity.id.as_str());
+            }
+        }
+    }
+
+    /// Flags lines and polylines whose whole length collapses to one point.
+    ///
+    /// A line is degenerate when both ends coincide; a polyline is degenerate
+    /// when it has fewer than two vertices or every edge has zero length.
+    fn check_zero_length(&mut self) {
+        for entity in &self.drawing.entities {
+            let degenerate = match &entity.kind {
+                EntityKind::Line { from, to } => from == to,
+                EntityKind::Polyline { points, .. } => points.len() < 2 || points.windows(2).all(|pair| pair[0] == pair[1]),
+                _ => false,
+            };
+            if degenerate {
+                let name = if matches!(entity.kind, EntityKind::Line { .. }) { "line" } else { "polyline" };
+                self.push(
+                    "inspection/zero-length",
+                    Severity::Error,
+                    Some(&entity.layer),
+                    Some(&entity.id),
+                    true,
+                    format!("{name} `{}` has zero length", entity.id),
+                );
             }
         }
     }
@@ -386,10 +389,19 @@ pub(crate) fn run(drawing: &Drawing, checks: &[&str]) -> Report {
     let units = checks.contains(&"units");
     let polylines = checks.contains(&"polylines");
     let dimensions = checks.contains(&"dimensions");
-    let mut collector = Collector { drawing, issues: Vec::new(), seen_ids: HashMap::new(), geometry, layers, units, polylines, dimensions };
+    let duplicate_entity = checks.contains(&"duplicate-entity");
+    let zero_length = checks.contains(&"zero-length");
+    let mut collector =
+        Collector { drawing, issues: CheckReport::new(), seen_ids: HashMap::new(), geometry, layers, units, polylines, dimensions };
     if geometry {
         collector.check_ids();
-        collector.check_duplicate_entities();
+        collector.check_duplicate_entities("geometry/duplicate-entity");
+    }
+    if duplicate_entity {
+        collector.check_duplicate_entities("inspection/duplicate-entity");
+    }
+    if zero_length {
+        collector.check_zero_length();
     }
     if layers {
         collector.check_layer_names();

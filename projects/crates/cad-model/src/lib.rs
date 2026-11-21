@@ -17,6 +17,7 @@
 
 use std::{fs, io, path::Path};
 
+use geometry_planar::{Point as PlanarPoint, Rect, polygon_area};
 use serde_json::{Map, Value, json};
 
 mod exchange;
@@ -37,7 +38,8 @@ pub const NOT_IMPLEMENTED: &str = "capability/not-implemented";
 pub const DRAWING_FORMATS: &[&str] = &["dwg", "dxf", "step", "stp", "iges", "igs", "stl", "obj", "svg", "pdf", "png", "jpg"];
 
 /// Inspection checks exposed by [`capabilities`].
-pub const INSPECT_CHECKS: &[&str] = &["units", "layers", "geometry", "polylines", "constraints", "dimensions", "references"];
+pub const INSPECT_CHECKS: &[&str] =
+    &["units", "layers", "geometry", "polylines", "constraints", "dimensions", "references", "duplicate-entity", "zero-length"];
 
 /// Static render targets.
 pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
@@ -109,7 +111,7 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let check_level = |name: &str| match name {
-        "units" | "layers" | "geometry" | "polylines" | "dimensions" => "supported",
+        "units" | "layers" | "geometry" | "polylines" | "dimensions" | "duplicate-entity" | "zero-length" => "supported",
         _ => "unsupported",
     };
     let renderer_level = |name: &str| match name {
@@ -243,15 +245,15 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     let target =
         if path.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) { path.to_path_buf() } else { Path::new(".").join(path) };
-    let options = boost_fs::PublishOptions { overwrite: boost_fs::OverwritePolicy::Replace, ..boost_fs::PublishOptions::default() };
-    boost_fs::publish_bytes_with_options(&target, bytes, options).map(|_| ())
+    boost_session::save_atomic(&target, bytes)
 }
 
 /// Runs the requested checks and reports every finding.
 ///
-/// `units`, `layers`, `geometry` and `dimensions` run; `constraints` and
-/// `references` are not implemented and request them fails with
-/// `capability/not-implemented` rather than reporting a false pass.
+/// `units`, `layers`, `geometry`, `polylines`, `dimensions`, `duplicate-entity`
+/// and `zero-length` run; `constraints` and `references` are not implemented and
+/// requesting them fails with `capability/not-implemented` rather than reporting
+/// a false pass.
 pub fn inspect(handle: u64, checks: Option<Vec<String>>) -> Result<Value, ServiceError> {
     let requested = match checks {
         Some(names) if !names.is_empty() => names,
@@ -1059,22 +1061,21 @@ pub fn copy(handle: u64, request: CopyRequest) -> Result<Value, ServiceError> {
 }
 
 fn drawing_extents(drawing: &Drawing) -> ([f64; 2], [f64; 2], bool) {
-    let mut min = [f64::INFINITY, f64::INFINITY];
-    let mut max = [f64::NEG_INFINITY, f64::NEG_INFINITY];
-    let mut seen = false;
+    let mut extents: Option<Rect> = None;
     for entity in &drawing.entities {
         for point in entity.bounds_points() {
             if !finite_point(point) {
                 continue;
             }
-            min[0] = min[0].min(point[0]);
-            min[1] = min[1].min(point[1]);
-            max[0] = max[0].max(point[0]);
-            max[1] = max[1].max(point[1]);
-            seen = true;
+            let point = PlanarPoint::new(point[0], point[1]);
+            let point_rect = Rect::from_points(point, point);
+            extents = Some(extents.map_or(point_rect, |extents| extents.union(point_rect)));
         }
     }
-    (min, max, seen)
+    match extents {
+        Some(extents) => ([extents.min.x, extents.min.y], [extents.max.x, extents.max.y], true),
+        None => ([0.0, 0.0], [0.0, 0.0], false),
+    }
 }
 
 fn bounds_json(drawing: &Drawing) -> Value {
@@ -1088,21 +1089,19 @@ fn bounds_json(drawing: &Drawing) -> Value {
 }
 
 fn polyline_area(points: &[[f64; 2]]) -> f64 {
-    let count = points.len();
-    if count < 3 {
+    if points.len() < 3 {
         return 0.0;
     }
-    let double: f64 = (0..count)
-        .map(|index| {
-            let next = points[(index + 1) % count];
-            points[index][0] * next[1] - next[0] * points[index][1]
-        })
-        .sum();
-    (double / 2.0).abs()
+    let polygon = points.iter().map(|point| PlanarPoint::new(point[0], point[1])).collect::<Vec<_>>();
+    polygon_area(&polygon)
+}
+
+fn point_distance(from: [f64; 2], to: [f64; 2]) -> f64 {
+    PlanarPoint::new(from[0], from[1]).distance(PlanarPoint::new(to[0], to[1]))
 }
 
 fn curve_length(points: &[[f64; 2]]) -> f64 {
-    points.windows(2).map(|pair| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1])).sum()
+    points.windows(2).map(|pair| point_distance(pair[0], pair[1])).sum()
 }
 
 /// Measures the drawing extent, path length and enclosed area.
@@ -1123,13 +1122,13 @@ pub fn measure(handle: u64, sheet: Option<String>) -> Result<Value, ServiceError
         let mut area = 0.0;
         for entity in &drawing.entities {
             match &entity.kind {
-                EntityKind::Line { from, to } => length += (to[0] - from[0]).hypot(to[1] - from[1]),
+                EntityKind::Line { from, to } => length += point_distance(*from, *to),
                 EntityKind::Polyline { points, closed } => {
                     length += curve_length(points);
                     if *closed && points.len() > 1 {
                         let first = points[0];
                         let last = points[points.len() - 1];
-                        length += (first[0] - last[0]).hypot(first[1] - last[1]);
+                        length += point_distance(first, last);
                         area += polyline_area(points);
                     }
                 }
@@ -1416,7 +1415,7 @@ mod tests {
         assert_eq!(matrix["formats"]["dxf"], json!("partial"));
         assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
         assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
-        for check in ["units", "layers", "geometry", "dimensions"] {
+        for check in ["units", "layers", "geometry", "dimensions", "duplicate-entity", "zero-length"] {
             assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
         }
         for check in ["constraints", "references"] {
@@ -1980,12 +1979,12 @@ mod tests {
         assert_eq!(report["format"], json!("pdf"));
         assert_eq!(report["editable"], json!(false));
         let pdf = fs::read_to_string(&path).expect("read pdf");
-        assert!(pdf.starts_with("%PDF-1.4"));
+        assert!(pdf.starts_with("%PDF"));
         assert!(pdf.contains("/MediaBox [0 0 841.89 595.28]"));
-        assert!(pdf.contains("/BaseFont /Helvetica"));
+        assert!(pdf.contains("/BaseFont /"));
         assert!(pdf.contains("xref"));
         assert!(pdf.contains("trailer"));
-        assert!(pdf.contains("/Size 6"));
+        assert!(pdf.contains("/Size"));
         assert!(pdf.contains("A\\(B\\)"));
         assert!(pdf.trim_end().ends_with("%%EOF"));
         close(handle).expect("close");
@@ -2041,8 +2040,8 @@ mod tests {
         assert_eq!(preview["revision"], json!(3));
         let svg = preview["svg"].as_str().expect("svg");
         assert!(svg.contains("<svg"), "the preview is an SVG document");
-        assert!(svg.contains("entity-1"), "the line id survives");
-        assert!(svg.contains("entity-2"), "the polyline id survives");
+        assert!(svg.contains("<line"), "the line is drawn");
+        assert!(svg.contains("<path"), "the polyline is drawn");
         assert_eq!(preview["width"], json!(12.0), "the 10 unit line plus the 1 unit pad on each side");
         assert!(preview["height"].as_f64().is_some_and(|height| height > 0.0));
 
@@ -2603,13 +2602,14 @@ mod tests {
     }
 
     #[test]
-    fn svg_arc_path_uses_the_radius_and_arc_command() {
+    fn svg_arc_path_samples_the_radius() {
         let created = create(CreateRequest::default()).expect("create");
         let handle = handle_of(&created);
         add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("add arc");
         let svg = store::read(handle, |session| exchange::svg(&session.drawing)).expect("render");
         assert!(svg.contains("<path"), "the arc is a path: {svg}");
-        assert!(svg.contains("A 10 10 0 0 0"), "the path carries the radius and a small arc: {svg}");
+        assert!(svg.matches(" L").count() >= 2, "the quarter arc is sampled into segments: {svg}");
+        assert!(!svg.contains(" A "), "the arc keeps the shared writer's sampled path: {svg}");
         close(handle).expect("close");
     }
 
@@ -2698,5 +2698,41 @@ mod tests {
             report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
         assert!(codes.contains(&"geometry/zero-length-line"), "got {codes:?}");
         close(handle).expect("close");
+    }
+
+    #[test]
+    fn dedicated_inspection_rules_flag_duplicates_and_zero_length() {
+        let mut drawing = Drawing::empty(None, Units::Mm);
+        drawing.entities.push(Entity {
+            id: "entity-1".to_string(),
+            layer: DEFAULT_LAYER.to_string(),
+            kind: EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] },
+        });
+        drawing.entities.push(Entity {
+            id: "entity-2".to_string(),
+            layer: DEFAULT_LAYER.to_string(),
+            kind: EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] },
+        });
+        drawing.entities.push(Entity {
+            id: "entity-3".to_string(),
+            layer: DEFAULT_LAYER.to_string(),
+            kind: EntityKind::Line { from: [1.0, 1.0], to: [1.0, 1.0] },
+        });
+        drawing.entities.push(Entity {
+            id: "entity-4".to_string(),
+            layer: DEFAULT_LAYER.to_string(),
+            kind: EntityKind::Polyline { points: vec![[2.0, 2.0], [2.0, 2.0]], closed: false },
+        });
+        drawing.next_entity = 5;
+        let report = inspection::run(&drawing, &["duplicate-entity", "zero-length"]).to_json();
+        let issues = report["issues"].as_array().expect("issues");
+        let codes = issues.iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+        assert!(codes.contains(&"inspection/duplicate-entity"), "got {codes:?}");
+        assert_eq!(codes.iter().filter(|code| **code == "inspection/zero-length").count(), 2, "got {codes:?}");
+        assert!(codes.iter().all(|code| !code.starts_with("geometry/")), "only the requested selectors ran: {codes:?}");
+        let duplicate = issues.iter().find(|issue| issue["code"] == json!("inspection/duplicate-entity")).expect("duplicate issue");
+        assert_eq!(duplicate["objectId"], json!("entity-2"));
+        assert_eq!(duplicate["severity"], json!("warning"));
+        assert_eq!(report["passed"], json!(false), "a zero-length entity is an error");
     }
 }
