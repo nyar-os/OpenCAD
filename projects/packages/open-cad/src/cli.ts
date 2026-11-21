@@ -35,6 +35,7 @@ import type {
     InspectCheck,
     InspectReport,
     LayerChange,
+    LayerMerge,
     LayerSummary,
     MeasureResult,
     OpenCADCapabilities,
@@ -257,6 +258,10 @@ function describeHistory(result: HistoryResult, verb: 'undo' | 'redo'): string {
 function describeLayer(change: LayerChange): string {
     const layer = change.layer;
     return `layer ${layer.id} name=${layer.name} color=${layer.color} visible=${layer.visible} locked=${layer.locked} entities=${layer.entityCount} revision=${change.revision}`;
+}
+
+function describeMerge(result: LayerMerge): string {
+    return `merged layer ${result.from} into ${result.to} moved=${result.moved} revision=${result.revision} layers=${result.drawing.layers.length}`;
 }
 
 function describeImport(
@@ -1105,6 +1110,32 @@ layer
             const updated = await guard(ctx, () => opened.updateLayer({ layerId: name, locked }));
             const change = layerChange(opened, updated);
             ctx.emitResult(change, describeLayer(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+layer
+    .command('merge', 'cli.cmd.layer-merge')
+    .option('--from <layer>', 'cli.opt.layer-from')
+    .option('--to <layer>', 'cli.opt.layer-to')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const from = text(options, 'from');
+        const to = text(options, 'to');
+        if (from === undefined || to === undefined) {
+            ctx.fail('open-cad.cli.layer-merge-required', { message: '`--from <layer>` and `--to <layer>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.mergeLayer({ from, to }));
+            ctx.emitResult(result, describeMerge(result));
             return 0;
         } finally {
             opened.close();

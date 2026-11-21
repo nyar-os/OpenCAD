@@ -256,6 +256,16 @@ fn drawing_update_layer(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Moves every entity of one layer onto another and drops the empty source.
+#[function]
+fn drawing_merge_layer(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let from = text(&ctx, 1)?;
+    let to = text(&ctx, 2)?;
+    let result = open_cad_drawing::merge_layer(handle, &from, &to).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity of an open drawing.
 #[function]
 fn drawing_move_entity(ctx: CallContext) -> Result<JsValue> {
@@ -961,6 +971,22 @@ impl IpcHandler for StudioIpcHandler {
                     Err(message) => failure(id, "updateLayerError", message),
                 }
             }
+            "drawing.mergeLayer" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "mergeLayerError", "a mergeLayer request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                let from = request.get("from").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let to = request.get("to").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                if from.is_empty() || to.is_empty() {
+                    return failure(id, "mergeLayerError", "a mergeLayer request needs `from` and `to` layer ids".to_string());
+                }
+                match open_cad_drawing::merge_layer(handle, &from, &to) {
+                    Ok(result) => reply(id, "mergeLayerResult", result),
+                    Err(error) => failure(id, "mergeLayerError", format!("{}: {}", error.code, error.message)),
+                }
+            }
             "drawing.moveEntity" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -1324,6 +1350,7 @@ register_module![
     drawing_redo,
     drawing_add_layer,
     drawing_update_layer,
+    drawing_merge_layer,
     drawing_move_entity,
     drawing_update_entity,
     drawing_transform,

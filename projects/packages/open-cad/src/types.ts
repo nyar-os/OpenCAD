@@ -443,6 +443,24 @@ export interface LayerChange {
     readonly layer: LayerSummary;
 }
 
+/** Arguments of `mergeLayer()`. */
+export interface MergeLayerRequest {
+    /** Layer whose entities move to `to`. It is removed after the merge. */
+    readonly from: LayerId;
+    /** Layer that receives the entities. */
+    readonly to: LayerId;
+}
+
+/** Result of `mergeLayer()`. */
+export interface LayerMerge {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly from: LayerId;
+    readonly to: LayerId;
+    /** Number of entities whose layer reference changed. */
+    readonly moved: number;
+}
+
 /** Arguments of `OpenCAD.importDxf()`. */
 export interface ImportDxfRequest {
     /** Path of the ASCII DXF file. */

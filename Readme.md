@@ -14,8 +14,8 @@ and reopened; lines, circles, arcs, ellipses, polylines, text and linear
 dimensions are real entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode and measure are supported; each handle
 keeps a 32-snapshot undo/redo history;
-layers can be added, renamed, hidden and locked; inspection reports per-object
-findings;
+layers can be added, renamed, merged, hidden and locked; inspection reports
+per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL and STEP export work, and a declared ASCII
 DXF subset can be imported. The interactive viewport, DWG/STEP import, a full
 DXF reader, the STL reader, the constraint solver and a modelling kernel are not
@@ -56,6 +56,7 @@ open-cad undo plan.ocad
 open-cad redo plan.ocad
 open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
+open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
@@ -113,7 +114,9 @@ What this build does NOT do
 - No interactive viewport, selection or snapping.
 - No constraint solver or associative dimensions; `constraints` and `references`
   checks are reported as unsupported.
-- No layer deletion.
+- No bare layer deletion. `layer merge --from A --to B` moves every entity of
+  `A` onto `B` and removes the now-empty `A` in one history step. A locked
+  source or target layer refuses the merge.
 - `capabilities()` reports `project: partial`, SVG/PDF/STEP/STL export as
   supported, DXF as partial because of its import subset, STEP as partial
   because only export is implemented, STL import and DWG as unsupported, and the

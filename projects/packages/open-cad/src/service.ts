@@ -35,7 +35,9 @@ import type {
     InspectCheck,
     InspectReport,
     LayerChange,
+    LayerMerge,
     MeasureResult,
+    MergeLayerRequest,
     MoveEntityRequest,
     OpenCADCapabilities,
     SaveReport,
@@ -253,6 +255,11 @@ export function updateLayer(handle: number, request: UpdateLayerRequest): LayerC
             }),
         ),
     );
+}
+
+/** Moves every entity of one layer onto another and drops the empty source. */
+export function mergeLayer(handle: number, request: MergeLayerRequest): LayerMerge {
+    return decode<LayerMerge>(() => binding('drawing.mergeLayer').drawing_merge_layer(handle, request.from, request.to));
 }
 
 /** Moves one entity by an offset or to an absolute anchor. */

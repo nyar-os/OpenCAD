@@ -34,6 +34,7 @@
             "layer-rename": "Rename a layer, rewriting entity references, and save the file",
             "layer-visible": "Set a layer's visibility and save the file in place",
             "layer-lock": "Set a layer's lock state and save the file in place",
+            "layer-merge": "Move every entity of one layer onto another and remove the empty source layer",
             "gui": "Open the OpenCAD Studio window"
         },
         "opt": {
@@ -83,7 +84,9 @@
             "to-name": "New layer name",
             "color": "Layer colour as #rgb or #rrggbb",
             "visible": "Layer visibility: on or off",
-            "locked": "Layer lock state: on or off"
+            "locked": "Layer lock state: on or off",
+            "layer-from": "Source layer whose entities move; the layer is removed after the merge",
+            "layer-to": "Target layer that receives the entities"
         }
     }
 }

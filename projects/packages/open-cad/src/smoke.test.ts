@@ -247,6 +247,33 @@ test('editing refuses an unknown layer', { skip: withAddon }, async () => {
     }
 });
 
+test('layer merge moves references and removes the source layer', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Merge' });
+        document.addLayer({ name: 'Walls' });
+        document.addLayer({ name: 'Structure' });
+        document.addLine({ layer: 'Walls', from: [0, 0], to: [10, 0] });
+
+        const merged = document.mergeLayer({ from: 'Walls', to: 'Structure' });
+        assert.equal(merged.from, 'Walls');
+        assert.equal(merged.to, 'Structure');
+        assert.equal(merged.moved, 1);
+        assert.equal(document.layers.some((layer) => layer.id === 'Walls'), false);
+        assert.equal(document.layers.find((layer) => layer.id === 'Structure')?.entityCount, 1);
+        const line = document.listEntities()[0];
+        assert.equal(line?.layer, 'Structure');
+        assert.throws(
+            () => document.mergeLayer({ from: 'Walls', to: 'Structure' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        document.undo();
+        assert.equal(document.layers.some((layer) => layer.id === 'Walls'), true);
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',

@@ -35,6 +35,7 @@ export interface NativeBinding {
     drawing_redo(handle: number): string;
     drawing_add_layer(handle: number, requestJson: string): string;
     drawing_update_layer(handle: number, requestJson: string): string;
+    drawing_merge_layer(handle: number, from: string, to: string): string;
     drawing_move_entity(handle: number, requestJson: string): string;
     drawing_update_entity(handle: number, requestJson: string): string;
     drawing_transform(handle: number, requestJson: string): string;

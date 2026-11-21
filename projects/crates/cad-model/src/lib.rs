@@ -1527,6 +1527,54 @@ pub fn delete_layer(handle: u64, id: &str) -> Result<Value, ServiceError> {
     })
 }
 
+/// Moves every entity of one layer onto another and removes the empty source.
+///
+/// The merge refuses when either layer is locked (`drawing/layer-locked`), when
+/// a layer is missing (`object/not-found`), or when both names are the same.
+/// The response carries `{ revision, drawing, from, to, moved }`; `moved` is
+/// the number of entities whose layer reference changed. The merge is a normal
+/// history step.
+pub fn merge_layer(handle: u64, from: &str, to: &str) -> Result<Value, ServiceError> {
+    if from == to {
+        return Err(argument("`from` and `to` name the same layer"));
+    }
+    let moved = store::edit(handle, |drawing| {
+        let from_index = drawing
+            .layers
+            .iter()
+            .position(|layer| layer.id == from)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("layer `{from}` does not exist")))?;
+        if drawing.layer(to).is_none() {
+            return Err(ServiceError::new("object/not-found", format!("layer `{to}` does not exist")));
+        }
+        if drawing.layer(from).is_some_and(|layer| layer.locked) {
+            return Err(ServiceError::new("drawing/layer-locked", format!("layer `{from}` is locked")));
+        }
+        if drawing.layer(to).is_some_and(|layer| layer.locked) {
+            return Err(ServiceError::new("drawing/layer-locked", format!("layer `{to}` is locked")));
+        }
+        let mut moved = 0;
+        for entity in &mut drawing.entities {
+            if entity.layer == from {
+                entity.layer = to.to_string();
+                moved += 1;
+            }
+        }
+        drawing.layers.remove(from_index);
+        drawing.revision += 1;
+        Ok(moved)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "from": from,
+            "to": to,
+            "moved": moved,
+        })
+    })
+}
+
 /// Lists every entity of one drawing.
 pub fn list_entities(handle: u64) -> Result<Value, ServiceError> {
     store::read(handle, |session| {
@@ -2319,6 +2367,45 @@ mod tests {
         let last = delete_layer(handle, DEFAULT_LAYER).expect_err("the last layer stays");
         assert_eq!(last.code, "drawing/layer-last");
         assert_eq!(delete_layer(handle, "missing").expect_err("unknown layer").code, "object/not-found");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn merge_layer_moves_references_and_removes_the_source() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Walls", None).expect("add Walls");
+        add_layer(handle, "Structure", None).expect("add Structure");
+        add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line");
+        add_circle(handle, "Walls", [5.0, 5.0], 2.0).expect("circle");
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [0.0, 5.0]).expect("default line");
+
+        let merged = merge_layer(handle, "Walls", "Structure").expect("merge");
+        assert_eq!(merged["from"], json!("Walls"));
+        assert_eq!(merged["to"], json!("Structure"));
+        assert_eq!(merged["moved"], json!(2));
+        assert_eq!(merged["drawing"]["layers"].as_array().map(Vec::len), Some(3));
+        let layers = merged["drawing"]["layers"].as_array().expect("layers");
+        assert!(layers.iter().all(|layer| layer["id"] != json!("Walls")));
+        let structure = layers.iter().find(|layer| layer["id"] == json!("Structure")).expect("target layer");
+        assert_eq!(structure["entityCount"], json!(2));
+
+        let listed = list_entities(handle).expect("list");
+        assert_eq!(listed["entities"][0]["layer"], json!("Structure"));
+        assert_eq!(listed["entities"][1]["layer"], json!("Structure"));
+        assert_eq!(listed["entities"][2]["layer"], json!(DEFAULT_LAYER));
+
+        let restored = undo(handle).expect("undo the merge");
+        assert!(restored["drawing"]["layers"].as_array().is_some_and(|layers| layers.iter().any(|layer| layer["id"] == json!("Walls"))));
+        redo(handle).expect("redo the merge");
+
+        assert_eq!(merge_layer(handle, "Walls", "Structure").expect_err("source is gone").code, "object/not-found");
+        assert_eq!(merge_layer(handle, "Structure", "missing").expect_err("target is gone").code, "object/not-found");
+        assert_eq!(merge_layer(handle, "Structure", "Structure").expect_err("same layer").code, "session/argument-invalid");
+        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(merge_layer(handle, "Structure", DEFAULT_LAYER).expect_err("locked source").code, "drawing/layer-locked");
+        assert_eq!(merge_layer(handle, DEFAULT_LAYER, "Structure").expect_err("locked target").code, "drawing/layer-locked");
+
         close(handle).expect("close");
     }
 

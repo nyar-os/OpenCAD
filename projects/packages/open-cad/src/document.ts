@@ -38,8 +38,10 @@ import type {
     ImportLoss,
     InspectOptions,
     InspectReport,
+    LayerMerge,
     LayerSummary,
     MeasureResult,
+    MergeLayerRequest,
     MoveEntityRequest,
     SaveOptions,
     SaveReport,
@@ -304,6 +306,13 @@ export class DrawingDocument {
             },
         );
         return layer as LayerSummary;
+    }
+
+    /** Moves every entity of one layer onto another and removes the empty source. */
+    mergeLayer(request: MergeLayerRequest): LayerMerge {
+        return this.edit((handle) => service.mergeLayer(handle, request), (result) => {
+            this.state = result.drawing;
+        });
     }
 
     /** Moves one entity by an offset or to an absolute anchor. */

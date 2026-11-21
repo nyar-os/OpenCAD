@@ -11,7 +11,7 @@ Working document core. The installed CLI and SDK can create and open `.ocad`
 drawings, add lines, circles, arcs, ellipses, polylines, text and dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline and measure, move, update and delete entities, undo and redo,
-add, rename, hide and lock layers, save atomically, inspect units, layers,
+add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry and
 open contours, import the declared ASCII DXF subset (including SPLINE,
 LEADER and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL or
@@ -60,6 +60,7 @@ open-cad redo plan.ocad
 
 open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
+open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
 
@@ -125,8 +126,9 @@ start a new document.
   create start empty; save does not add a step. Undo and redo restore a snapshot
   and bump the revision.
 - Layers are unique by name. Renaming a layer also rewrites every entity
-  reference in the same mutation. Locked layers refuse writes; hidden layers are
-  skipped by the exporters.
+  reference in the same mutation. `layer merge --from A --to B` moves every
+  entity of `A` onto `B`, removes the empty `A` and is one history step. Locked
+  layers refuse writes; hidden layers are skipped by the exporters.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
   `$INSUNITS`, the LAYER table, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
