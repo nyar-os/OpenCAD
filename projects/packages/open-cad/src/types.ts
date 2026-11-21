@@ -66,6 +66,7 @@ export type OperationName =
     | 'group'
     | 'select'
     | 'properties'
+    | 'snap'
     | 'constraints'
     | 'kernel3d';
 
@@ -467,6 +468,45 @@ export interface SelectionResult {
     readonly layer: string | null;
     readonly count: number;
     readonly ids: readonly EntityId[];
+}
+
+/** One computed object snap candidate. */
+export type SnapMode = 'endpoint' | 'midpoint' | 'center' | 'intersection';
+
+/** One snap candidate returned by `snap()`. */
+export interface SnapPoint {
+    readonly kind: SnapMode;
+    readonly point: Point;
+    /** Entities that produced the candidate; an intersection names both. */
+    readonly entities: readonly EntityId[];
+    /** Distance to the probe point; present only when `point` was given. */
+    readonly distance?: number;
+}
+
+/** Arguments of `snap()`. */
+export interface SnapRequest {
+    /** Modes to compute; defaults to every mode. */
+    readonly modes?: readonly SnapMode[];
+    /** Probe point; candidates are sorted by distance to it. */
+    readonly point?: Point;
+    /** Keep only candidates within this distance; requires `point`. */
+    readonly tolerance?: number;
+    /** Restrict the query to one layer id. */
+    readonly layer?: LayerId;
+    /** Restrict the query to these entity ids. */
+    readonly ids?: readonly EntityId[];
+}
+
+/** Result of `snap()`. */
+export interface SnapResult {
+    readonly revision: number;
+    readonly modes: readonly SnapMode[];
+    readonly point: Point | null;
+    readonly tolerance: number | null;
+    readonly count: number;
+    /** True when more candidates existed than the limit of 1000. */
+    readonly truncated: boolean;
+    readonly points: readonly SnapPoint[];
 }
 
 /** Arguments of `addLine()`. */

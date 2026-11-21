@@ -369,6 +369,35 @@ test('selection returns window and crossing matches', { skip: withAddon }, async
     }
 });
 
+test('snap reports endpoints, midpoints, centres and intersections', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Snap' });
+        const horizontal = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        document.addLine({ layer: '0', from: [5, -5], to: [5, 5] });
+        document.addCircle({ layer: '0', center: [20, 20], radius: 2 });
+
+        const all = document.snap();
+        assert.equal(all.count, 8);
+        const intersections = document.snap({ modes: ['intersection'] });
+        assert.equal(intersections.count, 1);
+        assert.deepEqual(intersections.points[0]?.point, [5, 0]);
+
+        const near = document.snap({ modes: ['endpoint'], point: [9.9, 0], tolerance: 0.5 });
+        assert.equal(near.count, 1);
+        assert.deepEqual(near.points[0]?.entities, [horizontal.id]);
+        assert.equal(near.points[0]?.kind, 'endpoint');
+
+        assert.throws(
+            () => document.snap({ modes: ['edge'] as unknown as ('endpoint' | 'midpoint' | 'center' | 'intersection')[] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('unit conversion scales lengths and round trips', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

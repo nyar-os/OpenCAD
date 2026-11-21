@@ -190,12 +190,13 @@ pub fn capabilities() -> Value {
                 "group",
                 "select",
                 "properties",
+                "snap",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity" | "stats"
-                | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" => "supported",
+                | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -3230,6 +3231,305 @@ fn on_segment(a: [f64; 2], b: [f64; 2], point: [f64; 2]) -> bool {
     point[0] >= a[0].min(b[0]) && point[0] <= a[0].max(b[0]) && point[1] >= a[1].min(b[1]) && point[1] <= a[1].max(b[1])
 }
 
+/// Snap modes [`snap_points`] accepts.
+pub const SNAP_MODES: &[&str] = &["endpoint", "midpoint", "center", "intersection"];
+
+/// Most snap candidates one query returns.
+const SNAP_LIMIT: usize = 1000;
+
+/// Arguments of [`snap_points`].
+#[derive(Debug, Clone, Default)]
+pub struct SnapRequest {
+    /// Modes to compute; an empty list uses every mode.
+    pub modes: Vec<String>,
+    /// Point the caller is probing; candidates are sorted by distance to it.
+    pub point: Option<[f64; 2]>,
+    /// Maximum distance from `point`; requires `point` and must be positive.
+    pub tolerance: Option<f64>,
+    /// Restrict the query to one layer id.
+    pub layer: Option<String>,
+    /// Restrict the query to these entity ids.
+    pub ids: Option<Vec<String>>,
+}
+
+/// One computed snap candidate.
+#[derive(Debug, Clone)]
+struct SnapCandidate {
+    kind: &'static str,
+    point: [f64; 2],
+    entities: Vec<String>,
+}
+
+impl SnapCandidate {
+    fn new(kind: &'static str, point: [f64; 2], entity: &str) -> Self {
+        Self { kind, point, entities: vec![entity.to_string()] }
+    }
+}
+
+/// Adds `point` to `out` unless the same entity already reported it.
+fn push_snap(out: &mut Vec<SnapCandidate>, kind: &'static str, entity: &str, point: [f64; 2]) {
+    if out
+        .iter()
+        .any(|candidate| candidate.kind == kind && candidate.entities.first().is_some_and(|id| id == entity) && candidate.point == point)
+    {
+        return;
+    }
+    out.push(SnapCandidate::new(kind, point, entity));
+}
+
+/// Whether a segment intersection parameter lies on the segment.
+fn within_segment(parameter: f64) -> bool {
+    (-1e-9..=1.0 + 1e-9).contains(&parameter)
+}
+
+/// Intersection of two bounded segments, or `None` when they do not meet.
+fn segment_intersection(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+    let first = [b[0] - a[0], b[1] - a[1]];
+    let second = [d[0] - c[0], d[1] - c[1]];
+    let denominator = first[0] * second[1] - first[1] * second[0];
+    if denominator.abs() < 1e-12 {
+        return None;
+    }
+    let offset = [c[0] - a[0], c[1] - a[1]];
+    let t = (offset[0] * second[1] - offset[1] * second[0]) / denominator;
+    let u = (offset[0] * first[1] - offset[1] * first[0]) / denominator;
+    if !within_segment(t) || !within_segment(u) {
+        return None;
+    }
+    Some([a[0] + first[0] * t, a[1] + first[1] * t])
+}
+
+/// Midpoint of one polyline edge.
+fn edge_midpoint(from: [f64; 2], to: [f64; 2]) -> [f64; 2] {
+    [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]
+}
+
+/// Collects the endpoints, midpoints and centres one entity contributes.
+fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandidate>) {
+    let endpoint = modes.contains(&"endpoint");
+    let midpoint = modes.contains(&"midpoint");
+    let center = modes.contains(&"center");
+    match &entity.kind {
+        EntityKind::Line { from, to } => {
+            if endpoint {
+                push_snap(out, "endpoint", &entity.id, *from);
+                push_snap(out, "endpoint", &entity.id, *to);
+            }
+            if midpoint {
+                push_snap(out, "midpoint", &entity.id, edge_midpoint(*from, *to));
+            }
+        }
+        EntityKind::Circle { center: at, .. } => {
+            if center {
+                push_snap(out, "center", &entity.id, *at);
+            }
+        }
+        EntityKind::Arc { center: at, radius, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            if endpoint {
+                push_snap(out, "endpoint", &entity.id, arc_point(*at, radius.abs(), *start_angle));
+                push_snap(out, "endpoint", &entity.id, arc_point(*at, radius.abs(), *start_angle + sweep));
+            }
+            if midpoint {
+                push_snap(out, "midpoint", &entity.id, arc_point(*at, radius.abs(), *start_angle + sweep * 0.5));
+            }
+            if center {
+                push_snap(out, "center", &entity.id, *at);
+            }
+        }
+        EntityKind::Ellipse { center: at, rx, ry, rotation, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            if endpoint {
+                push_snap(out, "endpoint", &entity.id, ellipse_point(*at, rx.abs(), ry.abs(), *rotation, *start_angle));
+                push_snap(out, "endpoint", &entity.id, ellipse_point(*at, rx.abs(), ry.abs(), *rotation, *start_angle + sweep));
+            }
+            if midpoint {
+                push_snap(out, "midpoint", &entity.id, ellipse_point(*at, rx.abs(), ry.abs(), *rotation, *start_angle + sweep * 0.5));
+            }
+            if center {
+                push_snap(out, "center", &entity.id, *at);
+            }
+        }
+        EntityKind::Point { at } => {
+            if endpoint {
+                push_snap(out, "endpoint", &entity.id, *at);
+            }
+        }
+        EntityKind::Polyline { points, closed } => {
+            if endpoint {
+                for point in points {
+                    push_snap(out, "endpoint", &entity.id, *point);
+                }
+            }
+            if midpoint {
+                for pair in points.windows(2) {
+                    push_snap(out, "midpoint", &entity.id, edge_midpoint(pair[0], pair[1]));
+                }
+                if *closed
+                    && let (Some(first), Some(last)) = (points.first(), points.last())
+                    && points.len() > 2
+                {
+                    push_snap(out, "midpoint", &entity.id, edge_midpoint(*last, *first));
+                }
+            }
+        }
+        EntityKind::Hatch { points, .. } => {
+            if endpoint {
+                for point in points {
+                    push_snap(out, "endpoint", &entity.id, *point);
+                }
+            }
+            if midpoint {
+                for index in 0..points.len() {
+                    let next = (index + 1) % points.len();
+                    push_snap(out, "midpoint", &entity.id, edge_midpoint(points[index], points[next]));
+                }
+            }
+        }
+        EntityKind::Text { .. } | EntityKind::Dimension { .. } | EntityKind::RadialDimension { .. } | EntityKind::OrdinateDimension { .. } => {}
+    }
+}
+
+/// Computes snap candidates (endpoints, midpoints, centres and line
+/// intersections) without changing the drawing.
+///
+/// `modes` defaults to every mode. `point` sorts candidates by distance and
+/// `tolerance` keeps only candidates within that distance; a tolerance without
+/// a point is refused. `ids` and `layer` narrow the entity set, and an unknown
+/// id or layer reports `object/not-found`. The response carries
+/// `{ revision, modes, point, tolerance, count, truncated, points }`, where each
+/// point is `{ kind, point, entities, distance? }`.
+pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceError> {
+    let mut selected_modes: Vec<&'static str> = Vec::new();
+    if request.modes.is_empty() {
+        selected_modes.extend_from_slice(SNAP_MODES);
+    }
+    else {
+        for raw in &request.modes {
+            let mode = raw.trim().to_ascii_lowercase();
+            let Some(mode) = SNAP_MODES.iter().copied().find(|candidate| *candidate == mode)
+            else {
+                return Err(argument(format!("`{raw}` is not a snap mode; use endpoint, midpoint, center or intersection")));
+            };
+            if !selected_modes.contains(&mode) {
+                selected_modes.push(mode);
+            }
+        }
+    }
+    if let Some(point) = request.point
+        && !finite_point(point)
+    {
+        return Err(argument("the snap point needs two finite coordinates"));
+    }
+    if let Some(tolerance) = request.tolerance {
+        if request.point.is_none() {
+            return Err(argument("a snap tolerance needs a point to measure from"));
+        }
+        if !tolerance.is_finite() || tolerance <= 0.0 {
+            return Err(argument("the snap tolerance must be a positive finite distance"));
+        }
+    }
+    let layer = request.layer.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    let ids = request
+        .ids
+        .as_deref()
+        .map(|ids| ids.iter().map(|id| id.trim()).filter(|id| !id.is_empty()).map(str::to_string).collect::<std::collections::HashSet<_>>());
+    if ids.as_ref().is_some_and(std::collections::HashSet::is_empty) {
+        return Err(argument("pass at least one entity id"));
+    }
+    store::read(handle, |session| {
+        let drawing = &session.drawing;
+        if let Some(id) = layer
+            && drawing.layer(id).is_none()
+        {
+            return Err(ServiceError::new("object/not-found", format!("layer `{id}` does not exist")));
+        }
+        if let Some(ids) = &ids {
+            for id in ids {
+                if !drawing.entities.iter().any(|entity| entity.id == *id) {
+                    return Err(ServiceError::new("object/not-found", format!("entity `{id}` does not exist")));
+                }
+            }
+        }
+        let selected = drawing
+            .entities
+            .iter()
+            .filter(|entity| layer.is_none_or(|id| entity.layer == id))
+            .filter(|entity| ids.as_ref().is_none_or(|ids| ids.contains(&entity.id)))
+            .collect::<Vec<_>>();
+
+        let mut candidates = Vec::new();
+        for entity in &selected {
+            entity_snap_points(entity, &selected_modes, &mut candidates);
+        }
+        if selected_modes.contains(&"intersection") {
+            for (index, first) in selected.iter().enumerate() {
+                let Some((first_from, first_to)) = line_endpoints(&first.kind)
+                else {
+                    continue;
+                };
+                for second in selected.iter().skip(index + 1) {
+                    let Some((second_from, second_to)) = line_endpoints(&second.kind)
+                    else {
+                        continue;
+                    };
+                    let Some(point) = segment_intersection(first_from, first_to, second_from, second_to)
+                    else {
+                        continue;
+                    };
+                    candidates.push(SnapCandidate { kind: "intersection", point, entities: vec![first.id.clone(), second.id.clone()] });
+                }
+            }
+        }
+
+        let mut points = if let Some(origin) = request.point {
+            let tolerance = request.tolerance;
+            candidates.retain(|candidate| tolerance.is_none_or(|limit| point_distance(origin, candidate.point) <= limit));
+            candidates.sort_by(|a, b| {
+                point_distance(origin, a.point)
+                    .partial_cmp(&point_distance(origin, b.point))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.kind.cmp(b.kind))
+                    .then_with(|| a.entities.cmp(&b.entities))
+            });
+            candidates
+                .into_iter()
+                .map(|candidate| {
+                    json!({
+                        "kind": candidate.kind,
+                        "point": candidate.point,
+                        "entities": candidate.entities,
+                        "distance": point_distance(origin, candidate.point),
+                    })
+                })
+                .collect::<Vec<_>>()
+        }
+        else {
+            candidates
+                .into_iter()
+                .map(|candidate| {
+                    json!({
+                        "kind": candidate.kind,
+                        "point": candidate.point,
+                        "entities": candidate.entities,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let truncated = points.len() > SNAP_LIMIT;
+        points.truncate(SNAP_LIMIT);
+        Ok(json!({
+            "revision": drawing.revision,
+            "modes": selected_modes,
+            "point": request.point,
+            "tolerance": request.tolerance,
+            "count": points.len(),
+            "truncated": truncated,
+            "points": points,
+        }))
+    })?
+}
+
 /// Imports the declared ASCII DXF subset and returns `{ handle, drawing, ... }`.
 ///
 /// The reader keeps the HEADER `$INSUNITS` value and the LAYER table, expands
@@ -3829,6 +4129,48 @@ mod tests {
         assert_eq!(notes["height"], json!(3.0));
         assert_eq!(notes["widthFactor"], json!(0.75));
         assert_eq!(notes["oblique"], json!(10.0));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let first = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+        let second = add_line(handle, DEFAULT_LAYER, [5.0, -5.0], [5.0, 5.0]).expect("line");
+        add_circle(handle, DEFAULT_LAYER, [20.0, 20.0], 2.0).expect("circle");
+
+        let all = snap_points(handle, SnapRequest::default()).expect("snap");
+        assert_eq!(all["count"], json!(8));
+        let modes = all["modes"].as_array().expect("modes");
+        assert_eq!(modes.len(), SNAP_MODES.len());
+
+        let intersections =
+            snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ..SnapRequest::default() }).expect("intersect");
+        assert_eq!(intersections["count"], json!(1));
+        assert_eq!(intersections["points"][0]["point"], json!([5.0, 0.0]));
+        assert_eq!(intersections["points"][0]["entities"], json!([first["entity"]["id"], second["entity"]["id"]]));
+
+        let near = snap_points(
+            handle,
+            SnapRequest {
+                modes: vec!["endpoint".to_string(), "midpoint".to_string()],
+                point: Some([9.9, 0.0]),
+                tolerance: Some(0.5),
+                ..SnapRequest::default()
+            },
+        )
+        .expect("near");
+        assert_eq!(near["count"], json!(1));
+        assert_eq!(near["points"][0]["point"], json!([10.0, 0.0]));
+        assert_eq!(near["points"][0]["kind"], json!("endpoint"));
+
+        let centres = snap_points(handle, SnapRequest { modes: vec!["center".to_string()], ..SnapRequest::default() }).expect("center");
+        assert_eq!(centres["points"][0]["point"], json!([20.0, 20.0]));
+
+        assert!(snap_points(handle, SnapRequest { modes: vec!["edge".to_string()], ..SnapRequest::default() }).is_err());
+        assert!(snap_points(handle, SnapRequest { ids: Some(vec!["entity-99".to_string()]), ..SnapRequest::default() }).is_err());
+        assert!(snap_points(handle, SnapRequest { tolerance: Some(1.0), ..SnapRequest::default() }).is_err());
         close(handle).expect("close");
     }
 

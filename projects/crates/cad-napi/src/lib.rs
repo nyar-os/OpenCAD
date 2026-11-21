@@ -454,6 +454,42 @@ fn drawing_select(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Computes snap candidates near one point of an open drawing.
+#[function]
+fn drawing_snap(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let modes = request["modes"]
+        .as_array()
+        .map(|entries| entries.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let point = match request.get("point").filter(|value| !value.is_null()) {
+        Some(value) => {
+            let array = value
+                .as_array()
+                .filter(|array| array.len() == 2)
+                .ok_or_else(|| Error::new("session/argument-invalid: `point` must be an array of two numbers"))?;
+            let x = array[0].as_f64().ok_or_else(|| Error::new("session/argument-invalid: `point` must be an array of two numbers"))?;
+            let y = array[1].as_f64().ok_or_else(|| Error::new("session/argument-invalid: `point` must be an array of two numbers"))?;
+            Some([x, y])
+        }
+        None => None,
+    };
+    let ids = request["ids"].as_array().map(|entries| entries.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
+    let result = open_cad_drawing::snap_points(
+        handle,
+        open_cad_drawing::SnapRequest {
+            modes,
+            point,
+            tolerance: request["tolerance"].as_f64(),
+            layer: request["layer"].as_str().map(str::to_string),
+            ids,
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity of an open drawing.
 #[function]
 fn drawing_move_entity(ctx: CallContext) -> Result<JsValue> {
@@ -1920,6 +1956,7 @@ register_module![
     drawing_add_group_members,
     drawing_remove_group_members,
     drawing_select,
+    drawing_snap,
     drawing_merge_layer,
     drawing_convert_units,
     drawing_move_entity,

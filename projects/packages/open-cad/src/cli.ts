@@ -49,6 +49,8 @@ import type {
     Point,
     SaveReport,
     SelectionResult,
+    SnapMode,
+    SnapResult,
     TextStyle,
     TextStyleChange,
     TextMatchResult,
@@ -377,8 +379,18 @@ function describeTextStyle(change: TextStyleChange): string {
 }
 
 function describeSelection(result: SelectionResult): string {
-    const ids = result.ids.length > 0 ? result.ids.join(',') : 'none';
-    return `selected ${result.count} entities mode=${result.mode} layer=${result.layer ?? 'all'} ids=${ids}`;
+    return [
+        `selected ${result.count} entities mode=${result.mode} layer=${result.layer ?? 'any'} revision=${result.revision}`,
+        ...result.ids.map((id) => `  ${id}`),
+    ].join('\n');
+}
+
+function describeSnap(result: SnapResult): string {
+    const lines = result.points.map(
+        (entry) =>
+            `  ${entry.kind} ${entry.point[0]},${entry.point[1]}${entry.distance === undefined ? '' : ` distance=${entry.distance}`} entities=${entry.entities.join(',')}`,
+    );
+    return [`snap ${result.count} candidates modes=${result.modes.join(',')} revision=${result.revision}`, ...lines].join('\n');
 }
 
 function describeUnits(result: UnitsConversion): string {
@@ -1397,8 +1409,40 @@ cli
         }
     });
 
-const layer = cli.command('layer', 'cli.cmd.layer');
+cli
+    .command('snap', 'cli.cmd.snap')
+    .option('--modes <list>', 'cli.opt.snap-modes')
+    .option('--near <x,y>', 'cli.opt.near')
+    .option('--tolerance <number>', 'cli.opt.tolerance')
+    .option('--layer <layer>', 'cli.opt.select-layer')
+    .option('--ids <list>', 'cli.opt.ids')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const near = point(options, 'near');
+        const modes = idList(options, 'modes')?.map((entry) => entry as SnapMode);
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.snap({
+                    modes,
+                    point: near,
+                    tolerance: number(options, 'tolerance'),
+                    layer: text(options, 'layer'),
+                    ids: idList(options, 'ids'),
+                }),
+            );
+            ctx.emitResult(result, describeSnap(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
 
+const layer = cli.command('layer', 'cli.cmd.layer');
 layer
     .command('add', 'cli.cmd.layer-add')
     .option('--name <name>', 'cli.opt.name')

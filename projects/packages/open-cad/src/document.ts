@@ -67,6 +67,8 @@ import type {
     SaveReport,
     SelectionRequest,
     SelectionResult,
+    SnapRequest,
+    SnapResult,
     TextStyle,
     TextStyleDeletion,
     TextMatchResult,
@@ -608,6 +610,12 @@ export class DrawingDocument {
     select(request: SelectionRequest): SelectionResult {
         this.assertOpen();
         return service.select(this.handle, request);
+    }
+
+    /** Computes object snap candidates without changing the drawing. */
+    snap(request: SnapRequest = {}): SnapResult {
+        this.assertOpen();
+        return service.snap(this.handle, request);
     }
 
     /** Converts every length between millimetres and inches. */

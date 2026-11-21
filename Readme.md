@@ -27,7 +27,8 @@ crossing query returns the matching entity ids without adding a history step;
 text content can be found and replaced in bulk (ASCII case-insensitive by
 default) in one history step; entities can be collected into named groups;
 drawing title-block properties (title, author, company, project, description and
-keywords) can be read and written;
+keywords) can be read and written; endpoint, midpoint, centre and line
+intersection snap points can be computed near a probe point;
 a drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
@@ -79,6 +80,7 @@ open-cad measure plan.ocad --ids entity-1,entity-2
 open-cad stats plan.ocad
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
+open-cad snap plan.ocad --modes endpoint,midpoint,center,intersection --near 10,0 --tolerance 5
 open-cad undo plan.ocad
 open-cad redo plan.ocad
 open-cad layer add plan.ocad --name Walls --color "#a4262c"
@@ -181,7 +183,9 @@ What this build does NOT do
 - MLEADER text is read only when it is inline context data. Text stored in an
   external MTEXT object is not resolved, and leader style, landing, arrow,
   background and column layout are not modelled.
-- No interactive viewport, selection or snapping.
+- No interactive viewport. Snapping is a read-only query over endpoints,
+  midpoints, centres and straight-line intersections; arcs and circles do not
+  contribute curve-curve intersections, and no snapping feedback is painted.
 - No constraint solver or associative dimensions; `constraints` and `references`
   checks are reported as unsupported.
 - Dimension styles keep only the modelled `DIMSTYLE` variables: overall scale,
@@ -209,7 +213,7 @@ What this build does NOT do
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
   chamfer, measure, measure-entity, stats, dimension-style, text-style,
-  text-search, group, select and properties as supported while constraint
+  text-search, group, select, properties and snap as supported while constraint
   solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the

@@ -54,6 +54,7 @@ export interface NativeBinding {
     drawing_add_group_members(handle: number, requestJson: string): string;
     drawing_remove_group_members(handle: number, requestJson: string): string;
     drawing_select(handle: number, requestJson: string): string;
+    drawing_snap(handle: number, requestJson: string): string;
     drawing_merge_layer(handle: number, from: string, to: string): string;
     drawing_convert_units(handle: number, unit: string): string;
     drawing_move_entity(handle: number, requestJson: string): string;

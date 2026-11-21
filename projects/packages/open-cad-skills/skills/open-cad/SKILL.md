@@ -19,7 +19,8 @@ dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
 table), find and replace text content in bulk, collect entities into named
 groups, select entities with a
-rectangular window or crossing query, read and write title-block properties
+rectangular window or crossing query, compute endpoint, midpoint, centre and
+line-intersection snap points near a probe point, read and write title-block properties
 (title, author, company, project, description and keywords), save
 atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
@@ -105,6 +106,7 @@ open-cad group delete plan.ocad --name Walls
 
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
+open-cad snap plan.ocad --modes endpoint,midpoint,center,intersection --near 10,0 --tolerance 5
 
 open-cad properties show plan.ocad
 open-cad properties set plan.ocad --title "Harbour plan" --author "Design team" --company OpenCAD
@@ -241,6 +243,11 @@ start a new document.
   entities fully inside the rectangle, `--crossing` also keeps entities that
   cross or touch it, and `--layer` narrows the result. Curves are tested against
   sampled outlines; hidden and locked layers stay selectable.
+- `snap --near x,y` is a read-only query over `endpoint`, `midpoint`, `center`
+  and `intersection` candidates. `--modes` narrows the kinds, `--tolerance`
+  keeps only candidates within that distance of `--near`, and `--layer`/`--ids`
+  narrow the entities. Intersections are computed between two straight lines
+  only; candidates are sorted by distance and capped at 1000.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
   `$INSUNITS`, the LAYER, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),

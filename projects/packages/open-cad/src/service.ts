@@ -67,6 +67,8 @@ import type {
     SaveReport,
     SelectionRequest,
     SelectionResult,
+    SnapRequest,
+    SnapResult,
     TextStyleChange,
     TextStyleDeletion,
     TextStyleList,
@@ -521,6 +523,22 @@ export function select(handle: number, request: SelectionRequest): SelectionResu
         binding('drawing.select').drawing_select(
             handle,
             JSON.stringify({ window: request.window, mode: request.mode ?? 'window', layer: request.layer }),
+        ),
+    );
+}
+
+/** Computes object snap candidates without changing the drawing. */
+export function snap(handle: number, request: SnapRequest): SnapResult {
+    return decode<SnapResult>(() =>
+        binding('drawing.snap').drawing_snap(
+            handle,
+            JSON.stringify({
+                modes: request.modes,
+                point: request.point,
+                tolerance: request.tolerance,
+                layer: request.layer,
+                ids: request.ids,
+            }),
         ),
     );
 }
