@@ -8,10 +8,11 @@
 //! values that follow them.
 //!
 //! ARC and ELLIPSE are read into the analytic entity kinds, and rotated or
-//! aligned linear DIMENSION references become dimension entities. Bulge arcs
-//! inside polylines are flattened to line segments and reported as a loss;
-//! entities the reader does not understand are skipped once per type. Nothing is
-//! dropped silently.
+//! aligned linear DIMENSION references become dimension entities. SPLINE and
+//! LEADER become polylines (from fit or control points for a spline), and a 3D
+//! POLYLINE is projected onto the XY plane. Bulge arcs inside polylines are
+//! flattened to line segments and reported as a loss; entities the reader does
+//! not understand are skipped once per type. Nothing is dropped silently.
 
 use std::{collections::BTreeMap, f64::consts::TAU};
 
@@ -101,6 +102,27 @@ fn integer(block: &[Pair], code: i32) -> Option<i64> {
 
 fn point_at(block: &[Pair], x_code: i32, y_code: i32) -> Option<[f64; 2]> {
     number(block, x_code).zip(number(block, y_code)).map(|(x, y)| [x, y])
+}
+
+/// Reads every `x_code`/`y_code` pair in order, keeping finite coordinates.
+///
+/// Repeated group codes carry one point per run, which is how SPLINE fit and
+/// control points, LEADER vertices and other point lists are written.
+fn point_run(block: &[Pair], x_code: i32, y_code: i32) -> Vec<[f64; 2]> {
+    let mut points = Vec::new();
+    let mut pending_x: Option<f64> = None;
+    for pair in block {
+        if pair.code == x_code {
+            pending_x = pair.value.trim().parse::<f64>().ok().filter(|value| value.is_finite());
+        }
+        else if pair.code == y_code
+            && let (Some(x), Ok(y)) = (pending_x.take(), pair.value.trim().parse::<f64>())
+            && y.is_finite()
+        {
+            points.push([x, y]);
+        }
+    }
+    points
 }
 
 fn layer_name(block: &[Pair]) -> String {
@@ -364,6 +386,10 @@ struct Reader {
     dimensions_without_definition: usize,
     attribute_values: usize,
     empty_attributes: usize,
+    spline_fit_points: usize,
+    spline_control_polygons: usize,
+    leaders: usize,
+    projected_polylines: usize,
 }
 
 impl Reader {
@@ -381,6 +407,10 @@ impl Reader {
             dimensions_without_definition: 0,
             attribute_values: 0,
             empty_attributes: 0,
+            spline_fit_points: 0,
+            spline_control_polygons: 0,
+            leaders: 0,
+            projected_polylines: 0,
         }
     }
 
@@ -520,6 +550,38 @@ impl Reader {
                     };
                     self.push(layer, EntityKind::Point { at: xform.apply(at) });
                 }
+                "SPLINE" => {
+                    let mut points = point_run(block, 11, 21);
+                    let from_fit_points = points.len() >= 2;
+                    if !from_fit_points {
+                        points = point_run(block, 10, 20);
+                    }
+                    if points.len() < 2 {
+                        self.skip("SPLINE (fewer than two points)", block);
+                        index = end;
+                        continue;
+                    }
+                    if from_fit_points {
+                        self.spline_fit_points += 1;
+                    }
+                    else {
+                        self.spline_control_polygons += 1;
+                    }
+                    let closed = integer(block, 70).is_some_and(|flags| flags & 1 == 1);
+                    let points = points.into_iter().map(|point| xform.apply(point)).collect();
+                    self.push(layer, EntityKind::Polyline { points, closed });
+                }
+                "LEADER" => {
+                    let points = point_run(block, 10, 20);
+                    if points.len() < 2 {
+                        self.skip("LEADER (fewer than two vertices)", block);
+                        index = end;
+                        continue;
+                    }
+                    self.leaders += 1;
+                    let points = points.into_iter().map(|point| xform.apply(point)).collect();
+                    self.push(layer, EntityKind::Polyline { points, closed: false });
+                }
                 "TEXT" => {
                     let Some(at) = point_at(block, 10, 20)
                     else {
@@ -539,6 +601,8 @@ impl Reader {
                 }
                 "POLYLINE" => {
                     let closed = closed_flag(block);
+                    let is_3d = integer(block, 70).is_some_and(|flags| flags & 8 != 0);
+                    let mut projected = is_3d;
                     let mut vertices = Vec::new();
                     let mut cursor = end;
                     while cursor < pairs.len() {
@@ -551,6 +615,7 @@ impl Reader {
                             let vertex_end = block_end(pairs, cursor + 1);
                             let vertex = &pairs[cursor + 1..vertex_end];
                             if let Some(point) = point_at(vertex, 10, 20) {
+                                projected |= number(vertex, 30).is_some_and(|z| z.abs() > 1e-9);
                                 vertices.push(Vertex { x: point[0], y: point[1], bulge: number(vertex, 42).unwrap_or(0.0) });
                             }
                             cursor = vertex_end;
@@ -560,6 +625,9 @@ impl Reader {
                             cursor = block_end(pairs, cursor + 1);
                         }
                         break;
+                    }
+                    if projected {
+                        self.projected_polylines += 1;
                     }
                     let points = flatten_vertices(&vertices, closed).into_iter().map(|point| xform.apply(point)).collect();
                     self.push(layer, EntityKind::Polyline { points, closed });
@@ -755,6 +823,42 @@ impl Reader {
             losses.push(Loss::warning(
                 "dxf/attribute-empty",
                 format!("{} block attribute(s) had no value and were skipped", self.empty_attributes),
+            ));
+        }
+        if self.spline_fit_points > 0 {
+            losses.push(Loss::notice(
+                "dxf/spline-fit-points",
+                format!(
+                    "{} SPLINE entity/entities were imported as a polyline through their fit points; the fitted curve was not evaluated",
+                    self.spline_fit_points
+                ),
+            ));
+        }
+        if self.spline_control_polygons > 0 {
+            losses.push(Loss::notice(
+                "dxf/spline-control-polygon",
+                format!(
+                    "{} SPLINE entity/entities had no fit points and were imported as their control polygon; the fitted curve was not evaluated",
+                    self.spline_control_polygons
+                ),
+            ));
+        }
+        if self.leaders > 0 {
+            losses.push(Loss::notice(
+                "dxf/leader-polyline",
+                format!(
+                    "{} LEADER entity/entities were imported as open polylines; arrowheads and annotation text are not modelled",
+                    self.leaders
+                ),
+            ));
+        }
+        if self.projected_polylines > 0 {
+            losses.push(Loss::notice(
+                "dxf/projected-3d",
+                format!(
+                    "{} 3D POLYLINE entity/entities were projected onto the XY plane; Z coordinates were dropped",
+                    self.projected_polylines
+                ),
             ));
         }
 
@@ -1048,5 +1152,69 @@ mod tests {
             losses.iter().find(|loss| loss.code == "dxf/attribute-empty").map(|loss| loss.detail.as_str()),
             Some("1 block attribute(s) had no value and were skipped")
         );
+    }
+
+    #[test]
+    fn spline_import_prefers_fit_points_and_falls_back_to_control_points() {
+        let entities = [
+            "0", "SPLINE", "8", "WALLS", "70", "0", "71", "3", "10", "0", "20", "0", "10", "5", "20", "10", "10", "10", "20", "0", "11", "0",
+            "21", "0", "11", "5", "21", "5", "11", "10", "21", "0", "0", "SPLINE", "8", "WALLS", "70", "1", "10", "2", "20", "2", "10", "8",
+            "20", "2", "10", "8", "20", "8", "0", "SPLINE", "8", "WALLS",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read splines");
+
+        assert_eq!(drawing.entities.len(), 2);
+        let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+        else {
+            panic!("expected a spline polyline, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!(points.as_slice(), &[[0.0, 0.0], [5.0, 5.0], [10.0, 0.0]]);
+        assert!(!closed, "fit points of an open spline keep the chain open");
+        let EntityKind::Polyline { points, closed } = &drawing.entities[1].kind
+        else {
+            panic!("expected a spline polyline, got {:?}", drawing.entities[1].kind);
+        };
+        assert_eq!(points.as_slice(), &[[2.0, 2.0], [8.0, 2.0], [8.0, 8.0]]);
+        assert!(closed, "a closed SPLINE keeps the closed flag");
+        assert!(codes(&losses).contains(&"dxf/spline-fit-points"));
+        assert!(codes(&losses).contains(&"dxf/spline-control-polygon"));
+        assert!(codes(&losses).contains(&"dxf/unsupported-entity"), "a SPLINE without points is still skipped");
+    }
+
+    #[test]
+    fn leader_import_becomes_an_open_polyline() {
+        let entities =
+            ["0", "LEADER", "8", "NOTES", "3", "STANDARD", "76", "3", "10", "0", "20", "0", "10", "4", "20", "2", "10", "8", "20", "2"]
+                .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read leader");
+
+        assert_eq!(drawing.entities.len(), 1);
+        let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+        else {
+            panic!("expected a leader polyline, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!(points.as_slice(), &[[0.0, 0.0], [4.0, 2.0], [8.0, 2.0]]);
+        assert!(!closed);
+        assert!(codes(&losses).contains(&"dxf/leader-polyline"));
+        assert!(!codes(&losses).contains(&"dxf/unsupported-entity"), "{:?}", codes(&losses));
+    }
+
+    #[test]
+    fn three_dimensional_polyline_is_projected_onto_the_plane() {
+        let entities = [
+            "0", "POLYLINE", "8", "WALLS", "70", "8", "0", "VERTEX", "8", "WALLS", "10", "0", "20", "0", "30", "5", "0", "VERTEX", "8",
+            "WALLS", "10", "10", "20", "0", "30", "6", "0", "SEQEND", "8", "WALLS",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read 3D polyline");
+
+        assert_eq!(drawing.entities.len(), 1);
+        let EntityKind::Polyline { points, .. } = &drawing.entities[0].kind
+        else {
+            panic!("expected a projected polyline, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!(points.as_slice(), &[[0.0, 0.0], [10.0, 0.0]]);
+        assert!(codes(&losses).contains(&"dxf/projected-3d"));
     }
 }

@@ -86,11 +86,14 @@ What this build does NOT do
 - No DWG or STEP import, and no full DXF reader. `import` accepts the declared
   ASCII subset only: `$INSUNITS`, the LAYER table, BLOCKS/INSERT expansion, the
   ATTRIB values that follow an INSERT, and LINE, CIRCLE, ARC, ELLIPSE, POINT,
-  TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND and rotated or
-  aligned linear DIMENSION references. ARC and ELLIPSE stay analytic, and only
-  bulge arcs are flattened; angular, radial, diameter and ordinate dimensions
-  are skipped. Every approximation and skip is reported as a loss with a stable
-  code, a severity (`notice` or `warning`) and a detail.
+  TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND (a 3D polyline is
+  projected onto the XY plane), SPLINE (read as a polyline through its fit
+  points, or its control polygon when no fit points exist) and LEADER (read as
+  an open polyline). Rotated or aligned linear DIMENSION references are read.
+  ARC and ELLIPSE stay analytic, and only bulge arcs are flattened; angular,
+  radial, diameter and ordinate dimensions, HATCH and MLEADER are skipped.
+  Every approximation and skip is reported as a loss with a stable code, a
+  severity (`notice` or `warning`) and a detail.
 - No STEP reader or PNG writer, and no STL reader. STL export extrudes closed
   profiles along +Z (default thickness 1.0 drawing units) into caps and side
   walls; arcs and ellipses are sampled at five-degree steps, and a full ellipse

@@ -13,8 +13,9 @@ transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline and measure, move, update and delete entities, undo and redo,
 add, rename, hide and lock layers, save atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry and
-open contours, import the declared ASCII DXF subset, and export SVG, ASCII DXF,
-PDF, STL or STEP.
+open contours, import the declared ASCII DXF subset (including SPLINE,
+LEADER and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL or
+STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
 reader and STL import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
@@ -128,10 +129,13 @@ start a new document.
   skipped by the exporters.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
   `$INSUNITS`, the LAYER table, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
-  ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs) and
-  POLYLINE/VERTEX/SEQEND. ARC and ELLIPSE stay analytic; only polyline bulge
-  arcs are flattened. Other entity types are reported once as
-  `dxf/unsupported-entity`. The import result carries `losses` as
+  ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
+  POLYLINE/VERTEX/SEQEND (3D polylines are projected onto the XY plane), SPLINE
+  (a polyline through the fit points, or the control polygon when there are no
+  fit points) and LEADER (an open polyline). ARC and ELLIPSE stay analytic; only
+  polyline bulge arcs are flattened. HATCH, MLEADER and unsupported DIMENSION
+  types are reported as `dxf/unsupported-entity`, and every approximation is
+  reported with its own notice code. The import result carries `losses` as
   `{ code, severity, detail }`.
 
 ## Inspection

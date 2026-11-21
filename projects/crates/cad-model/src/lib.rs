@@ -1541,9 +1541,11 @@ pub fn list_entities(handle: u64) -> Result<Value, ServiceError> {
 ///
 /// The reader keeps the HEADER `$INSUNITS` value and the LAYER table, expands
 /// INSERT references from BLOCKS, and reads LINE, CIRCLE, ARC, ELLIPSE, POINT,
-/// TEXT, LWPOLYLINE (with bulge) and POLYLINE/VERTEX/SEQEND. The result carries
-/// `losses` with `{ code, severity, detail }`: `notice` marks an approximation
-/// such as a flattened arc, `warning` marks content the drawing does not carry.
+/// TEXT, LWPOLYLINE (with bulge), POLYLINE/VERTEX/SEQEND (including a 3D
+/// polyline projected onto the XY plane), SPLINE (from fit or control points)
+/// and LEADER. The result carries `losses` with `{ code, severity, detail }`:
+/// `notice` marks an approximation such as a flattened arc or a spline
+/// polyline, `warning` marks content the drawing does not carry.
 pub fn import_dxf(source: &Path, title: Option<String>) -> Result<Value, ServiceError> {
     let bytes = fs::read(source).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
