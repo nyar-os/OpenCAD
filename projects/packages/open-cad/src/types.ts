@@ -36,7 +36,17 @@ export type InspectCheck =
     | 'open-contour';
 
 /** Entity kinds in the capability matrix. */
-export type EntityKindName = 'line' | 'circle' | 'arc' | 'ellipse' | 'point' | 'polyline' | 'text' | 'dimension';
+export type EntityKindName =
+    | 'line'
+    | 'circle'
+    | 'arc'
+    | 'ellipse'
+    | 'point'
+    | 'polyline'
+    | 'text'
+    | 'dimension'
+    | 'radial-dimension'
+    | 'ordinate-dimension';
 
 /** Edit operations in the capability matrix. */
 export type OperationName = 'transform' | 'copy' | 'array' | 'explode' | 'measure' | 'constraints' | 'kernel3d';
@@ -168,7 +178,29 @@ export type EntityKind =
     | { readonly type: 'point'; readonly at: Point }
     | { readonly type: 'polyline'; readonly points: readonly Point[]; readonly closed: boolean }
     | { readonly type: 'text'; readonly at: Point; readonly height: number; readonly content: string }
-    | { readonly type: 'dimension'; readonly from: Point; readonly to: Point; readonly offset: number; readonly text: string | null };
+    | { readonly type: 'dimension'; readonly from: Point; readonly to: Point; readonly offset: number; readonly text: string | null }
+    | {
+          readonly type: 'radial_dimension';
+          readonly center: Point;
+          readonly radius: number;
+          /** Degrees of the measured point from the positive X axis. */
+          readonly angle: number;
+          /** Signed distance from the measured point to the label. */
+          readonly offset: number;
+          /** Whether the dimension measures the diameter instead of the radius. */
+          readonly diameter: boolean;
+          readonly text: string | null;
+      }
+    | {
+          readonly type: 'ordinate_dimension';
+          readonly origin: Point;
+          readonly feature: Point;
+          /** Axis the dimension measures. */
+          readonly axis: 'x' | 'y';
+          /** Signed perpendicular distance of the dimension line from the origin. */
+          readonly offset: number;
+          readonly text: string | null;
+      };
 
 /** One drawable object. */
 export interface Entity {
@@ -237,6 +269,32 @@ export interface AddDimensionRequest {
     readonly from: Point;
     readonly to: Point;
     readonly offset: number;
+    readonly text?: string;
+}
+
+/** Arguments of `addRadialDimension()`. */
+export interface AddRadialDimensionRequest {
+    readonly layer: LayerId;
+    readonly center: Point;
+    readonly radius: number;
+    /** Degrees of the measured point from the positive X axis. */
+    readonly angle: number;
+    /** Signed distance from the measured point to the label; defaults to `0`. */
+    readonly offset?: number;
+    /** Measure the diameter instead of the radius; defaults to `false`. */
+    readonly diameter?: boolean;
+    readonly text?: string;
+}
+
+/** Arguments of `addOrdinateDimension()`. */
+export interface AddOrdinateDimensionRequest {
+    readonly layer: LayerId;
+    readonly origin: Point;
+    readonly feature: Point;
+    /** Axis the dimension measures. */
+    readonly axis: 'x' | 'y';
+    /** Signed perpendicular distance of the dimension line from the origin; defaults to `0`. */
+    readonly offset?: number;
     readonly text?: string;
 }
 

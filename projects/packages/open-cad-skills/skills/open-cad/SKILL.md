@@ -8,7 +8,8 @@ description: Create, revise, inspect and deliver technical drawings with OpenCAD
 ## Status
 
 Working document core. The installed CLI and SDK can create and open `.ocad`
-drawings, add lines, circles, arcs, ellipses, polylines, text and dimensions,
+drawings, add lines, circles, arcs, ellipses, polylines, text, linear, radial or
+diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline and measure, move, update and delete entities, undo and redo,
 add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
@@ -39,6 +40,9 @@ open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotati
 open-cad entity add-polyline plan.ocad --layer 0 --points "0,0 100,0 100,60" --closed
 open-cad entity add-text plan.ocad --layer 0 --at 5,5 --height 2.5 --text "Site plan"
 open-cad entity add-dimension plan.ocad --layer dimensions --from 0,0 --to 100,0 --offset 10
+open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 45 --offset 3
+open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 0 --diameter
+open-cad entity add-ordinate-dimension plan.ocad --layer dimensions --origin 0,0 --feature 50,20 --axis x --offset 10
 open-cad entity move plan.ocad --id entity-1 --dx 10 --dy 5
 open-cad entity update plan.ocad --id entity-3 --text "Hall" --height 3
 open-cad entity update plan.ocad --id entity-2 --radius 25
@@ -123,10 +127,14 @@ start a new document.
   (colour `#0b7285`).
 - Entity ids are deterministic: `entity-1`, `entity-2`, ... and are never
   reused after a delete.
-- Entities are `line`, `circle`, `arc`, `ellipse`, `point`, `polyline`, `text`
-  and `dimension`. Arcs store centre, radius and counter-clockwise start/end
-  degrees. Ellipses store centre, `rx`/`ry`, a major-axis rotation and
-  start/end parameters measured from that axis.
+- Entities are `line`, `circle`, `arc`, `ellipse`, `point`, `polyline`, `text`,
+  `dimension` (linear), `radial_dimension`, `ordinate_dimension`. A radial
+  dimension stores a centre, radius, an angle locating the measured point and a
+  leader offset; `diameter` switches the measured value from radius to diameter.
+  An ordinate dimension stores a datum origin, a feature point, an `x` or `y`
+  axis and a perpendicular offset. Arcs store centre, radius and
+  counter-clockwise start/end degrees. Ellipses store centre, `rx`/`ry`, a
+  major-axis rotation and start/end parameters measured from that axis.
 - The revision increments on every mutation. Save does not change it, so a
   reopened file keeps the revision it was written with.
 - Each handle keeps up to 32 snapshots. Every mutation adds one step; open and
@@ -141,10 +149,11 @@ start a new document.
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
   POLYLINE/VERTEX/SEQEND (3D polylines are projected onto the XY plane), SPLINE
   (a polyline through the fit points, or the control polygon when there are no
-  fit points) and LEADER (an open polyline). ARC and ELLIPSE stay analytic; only
-  polyline bulge arcs are flattened. HATCH, MLEADER and unsupported DIMENSION
-  types are reported as `dxf/unsupported-entity`, and every approximation is
-  reported with its own notice code. The import result carries `losses` as
+  fit points) and LEADER (an open polyline). Rotated or aligned linear, radial,
+  diameter and ordinate DIMENSION references are read. ARC and ELLIPSE stay
+  analytic; only polyline bulge arcs are flattened. HATCH, MLEADER and angular
+  dimensions are reported as `dxf/unsupported-entity`, and every approximation
+  is reported with its own notice code. The import result carries `losses` as
   `{ code, severity, detail }`.
 
 ## Inspection
@@ -166,8 +175,9 @@ Reported findings include duplicate entity ids, entities on a missing layer,
 zero-length lines, non-positive circle/arc radii and ellipse axes, duplicated
 identical entities, polylines with fewer than two points or that are open,
 repeated polyline vertices (zero-length segment), non-finite coordinates,
-dimensions with identical endpoints or an empty label, empty text, duplicate
-layer names, and geometry on a hidden or locked layer. `passed` is false only
+dimensions with identical endpoints or an empty label, radial dimensions with a
+non-positive radius, ordinate dimensions measuring zero distance, empty text,
+duplicate layer names, and geometry on a hidden or locked layer. `passed` is false only
 when an error-level finding exists.
 
 `constraints` and `references` are not implemented. Requesting them fails with

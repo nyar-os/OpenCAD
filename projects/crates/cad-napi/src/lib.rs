@@ -27,7 +27,7 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, MirrorAxis, ServiceError, TransformOp, TransformRequest, TransformTarget,
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, MirrorAxis, OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -202,6 +202,24 @@ fn drawing_add_dimension(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let request = parse_request(&text(&ctx, 1)?)?;
     let result = call_add_dimension(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Adds a radial or diameter dimension to one layer of an open drawing.
+#[function]
+fn drawing_add_radial_dimension(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_radial_dimension(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Adds an ordinate dimension to one layer of an open drawing.
+#[function]
+fn drawing_add_ordinate_dimension(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_ordinate_dimension(handle, &request).map_err(Error::new)?;
     respond(&ctx, &result)
 }
 
@@ -484,6 +502,31 @@ fn call_add_dimension(handle: u64, request: &Value) -> std::result::Result<Value
     let offset = request_number(request, "offset")?;
     let text = request.get("text").and_then(Value::as_str).map(str::to_string);
     open_cad_drawing::add_dimension(handle, &layer, from, to, offset, text).map_err(service_failure)
+}
+
+fn call_add_radial_dimension(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let center = request_point(request, "center")?;
+    let radius = request_number(request, "radius")?;
+    let angle = request_number(request, "angle")?;
+    let offset = request.get("offset").and_then(Value::as_f64).unwrap_or(0.0);
+    let diameter = request.get("diameter").and_then(Value::as_bool).unwrap_or(false);
+    let text = request.get("text").and_then(Value::as_str).map(str::to_string);
+    open_cad_drawing::add_radial_dimension(handle, &layer, center, radius, angle, offset, diameter, text).map_err(service_failure)
+}
+
+fn call_add_ordinate_dimension(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let origin = request_point(request, "origin")?;
+    let feature = request_point(request, "feature")?;
+    let axis = match request.get("axis").and_then(Value::as_str) {
+        Some("x") => OrdinateAxis::X,
+        Some("y") => OrdinateAxis::Y,
+        _ => return Err("session/argument-invalid: `axis` must be `x` or `y`".to_string()),
+    };
+    let offset = request.get("offset").and_then(Value::as_f64).unwrap_or(0.0);
+    let text = request.get("text").and_then(Value::as_str).map(str::to_string);
+    open_cad_drawing::add_ordinate_dimension(handle, &layer, origin, feature, axis, offset, text).map_err(service_failure)
 }
 
 fn call_delete_entity(handle: u64, entity: &str) -> std::result::Result<Value, String> {
@@ -912,6 +955,28 @@ impl IpcHandler for StudioIpcHandler {
                 match call_add_dimension(handle, &value) {
                     Ok(result) => reply(id, "addDimensionResult", result),
                     Err(message) => failure(id, "addDimensionError", message),
+                }
+            }
+            "drawing.addRadialDimension" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "addRadialDimensionError", "an addRadialDimension request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                match call_add_radial_dimension(handle, &request) {
+                    Ok(result) => reply(id, "addRadialDimensionResult", result),
+                    Err(message) => failure(id, "addRadialDimensionError", message),
+                }
+            }
+            "drawing.addOrdinateDimension" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "addOrdinateDimensionError", "an addOrdinateDimension request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                match call_add_ordinate_dimension(handle, &request) {
+                    Ok(result) => reply(id, "addOrdinateDimensionResult", result),
+                    Err(message) => failure(id, "addOrdinateDimensionError", message),
                 }
             }
             "drawing.deleteEntity" => {
@@ -1368,6 +1433,8 @@ register_module![
     drawing_add_polyline,
     drawing_add_text,
     drawing_add_dimension,
+    drawing_add_radial_dimension,
+    drawing_add_ordinate_dimension,
     drawing_delete_entity,
     drawing_list_entities,
     drawing_undo,

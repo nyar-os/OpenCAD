@@ -1,7 +1,8 @@
 //! Drawing model, store and exchange core of OpenCAD.
 //!
 //! The crate owns a real drawing document: two default layers, a flat entity
-//! list (line, circle, arc, ellipse, polyline, text and linear dimension), a
+//! list (line, circle, arc, ellipse, polyline, text, linear, radial/diameter
+//! and ordinate dimension), a
 //! process-wide handle store, JSON persistence (`.ocad`), inspection,
 //! transform/copy/measure operations, a read-only SVG preview,
 //! SVG/DXF/PDF/STEP/STL/OBJ export, a bounded undo/redo history, layer and
@@ -28,8 +29,9 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, Drawing, Entity, EntityKind, Layer, Units, arc_point, arc_sweep, ellipse_point,
-    finite_point, normalize_angle, offset_points, sample_arc, sample_ellipse,
+    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units, arc_point, arc_sweep,
+    ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc,
+    sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -137,9 +139,21 @@ pub fn capabilities() -> Value {
         "renderers": map(RENDER_FORMATS, renderer_level),
         "exportTargets": map(EXPORT_TARGETS, export_level),
         "entities": map(
-            &["line", "circle", "arc", "ellipse", "point", "polyline", "text", "dimension"],
+            &[
+                "line",
+                "circle",
+                "arc",
+                "ellipse",
+                "point",
+                "polyline",
+                "text",
+                "dimension",
+                "radial-dimension",
+                "ordinate-dimension",
+            ],
             |name| match name {
-                "line" | "circle" | "arc" | "ellipse" | "point" | "polyline" | "text" | "dimension" => "supported",
+                "line" | "circle" | "arc" | "ellipse" | "point" | "polyline" | "text" | "dimension" | "radial-dimension"
+                | "ordinate-dimension" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -516,6 +530,55 @@ pub fn add_dimension(handle: u64, layer: &str, from: [f64; 2], to: [f64; 2], off
     push_entity(handle, layer, EntityKind::Dimension { from, to, offset, text })
 }
 
+/// Adds a radial or diameter dimension to one layer.
+///
+/// `angle` locates the measured point on the circle in degrees from the
+/// positive X axis, and `offset` is the signed distance from that point to the
+/// label along the leader. `diameter` switches the measured value from the
+/// radius to the diameter. A non-positive radius reports
+/// `session/argument-invalid`.
+#[allow(clippy::too_many_arguments)]
+pub fn add_radial_dimension(
+    handle: u64,
+    layer: &str,
+    center: [f64; 2],
+    radius: f64,
+    angle: f64,
+    offset: f64,
+    diameter: bool,
+    text: Option<String>,
+) -> Result<Value, ServiceError> {
+    require_finite(&[center], "center")?;
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(argument("`radius` must be a positive finite number"));
+    }
+    if !angle.is_finite() || !offset.is_finite() {
+        return Err(argument("`angle`/`offset` must be finite"));
+    }
+    push_entity(handle, layer, EntityKind::RadialDimension { center, radius, angle, offset, diameter, text })
+}
+
+/// Adds an ordinate dimension to one layer.
+///
+/// The dimension measures the `axis`-aligned distance from `origin` to
+/// `feature`; `offset` is the signed perpendicular distance of the dimension
+/// line from the origin.
+pub fn add_ordinate_dimension(
+    handle: u64,
+    layer: &str,
+    origin: [f64; 2],
+    feature: [f64; 2],
+    axis: OrdinateAxis,
+    offset: f64,
+    text: Option<String>,
+) -> Result<Value, ServiceError> {
+    require_finite(&[origin, feature], "origin/feature")?;
+    if !offset.is_finite() {
+        return Err(argument("`offset` must be finite"));
+    }
+    push_entity(handle, layer, EntityKind::OrdinateDimension { origin, feature, axis, offset, text })
+}
+
 /// Deletes one entity by id.
 pub fn delete_entity(handle: u64, entity: &str) -> Result<Value, ServiceError> {
     store::edit(handle, |drawing| {
@@ -877,6 +940,14 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                     rotate(from);
                     rotate(to);
                 }
+                EntityKind::RadialDimension { center, angle: current, .. } => {
+                    rotate(center);
+                    *current = normalize_angle(*current + angle);
+                }
+                EntityKind::OrdinateDimension { origin, feature, .. } => {
+                    rotate(origin);
+                    rotate(feature);
+                }
             }
         }
         TransformOp::Scale { factor, cx, cy } => {
@@ -909,6 +980,16 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                 EntityKind::Dimension { from, to, offset, .. } => {
                     scale(from);
                     scale(to);
+                    *offset *= factor;
+                }
+                EntityKind::RadialDimension { center, radius, offset, .. } => {
+                    scale(center);
+                    *radius *= factor;
+                    *offset *= factor;
+                }
+                EntityKind::OrdinateDimension { origin, feature, offset, .. } => {
+                    scale(origin);
+                    scale(feature);
                     *offset *= factor;
                 }
             }
@@ -949,6 +1030,22 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                     mirror(from);
                     mirror(to);
                     *offset = -*offset;
+                }
+                EntityKind::RadialDimension { center, angle: current, .. } => {
+                    mirror(center);
+                    let reflected = match axis {
+                        MirrorAxis::X => -*current,
+                        MirrorAxis::Y => 180.0 - *current,
+                    };
+                    *current = normalize_angle(reflected);
+                }
+                EntityKind::OrdinateDimension { origin, feature, axis: measured, offset, .. } => {
+                    mirror(origin);
+                    mirror(feature);
+                    let flips = matches!((*measured, axis), (OrdinateAxis::X, MirrorAxis::X) | (OrdinateAxis::Y, MirrorAxis::Y));
+                    if flips {
+                        *offset = -*offset;
+                    }
                 }
             }
         }
@@ -1117,6 +1214,8 @@ fn kind_name(kind: &EntityKind) -> &'static str {
         EntityKind::Polyline { .. } => "polyline",
         EntityKind::Text { .. } => "text",
         EntityKind::Dimension { .. } => "dimension",
+        EntityKind::RadialDimension { .. } => "radial dimension",
+        EntityKind::OrdinateDimension { .. } => "ordinate dimension",
     }
 }
 
@@ -1354,7 +1453,11 @@ pub fn measure(handle: u64, sheet: Option<String>) -> Result<Value, ServiceError
                     }
                 }
                 EntityKind::Circle { radius, .. } => area += std::f64::consts::PI * radius * radius,
-                EntityKind::Point { .. } | EntityKind::Text { .. } | EntityKind::Dimension { .. } => {}
+                EntityKind::Point { .. }
+                | EntityKind::Text { .. }
+                | EntityKind::Dimension { .. }
+                | EntityKind::RadialDimension { .. }
+                | EntityKind::OrdinateDimension { .. } => {}
             }
         }
         let (width, height) = if seen { (max[0] - min[0], max[1] - min[1]) } else { (0.0, 0.0) };
@@ -1730,6 +1833,9 @@ mod tests {
         }
         for operation in ["constraints", "kernel3d"] {
             assert_eq!(matrix["operations"][operation], json!("unsupported"), "operation `{operation}`");
+        }
+        for entity in ["radial-dimension", "ordinate-dimension"] {
+            assert_eq!(matrix["entities"][entity], json!("supported"), "entity `{entity}`");
         }
         assert_eq!(matrix["renderers"]["svg"], json!("supported"));
         for renderer in ["png", "pdf"] {
@@ -3338,6 +3444,126 @@ mod tests {
             _ => None,
         });
         assert_eq!(polyline, Some((vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true)));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn radial_and_ordinate_dimensions_round_trip_through_dxf() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let radial = add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 5.0, 0.0, 1.5, false, None).expect("radial");
+        assert_eq!(radial["entity"]["kind"]["type"], json!("radial_dimension"));
+        assert_eq!(radial["entity"]["kind"]["radius"], json!(5.0));
+        let diameter =
+            add_radial_dimension(handle, DIMENSION_LAYER, [10.0, 0.0], 3.0, 90.0, 0.0, true, Some("DIA 6".to_string())).expect("diameter");
+        assert_eq!(diameter["entity"]["kind"]["diameter"], json!(true));
+        let ordinate = add_ordinate_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [12.0, 4.0], OrdinateAxis::X, 2.0, None).expect("ordinate");
+        assert_eq!(ordinate["entity"]["kind"]["axis"], json!("x"));
+
+        let drawing = drawing_of(handle);
+        let kinds = drawing.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
+        assert_eq!(kinds, vec!["radial dimension", "radial dimension", "ordinate dimension"]);
+        let measured = measure(handle, None).expect("measure");
+        assert_eq!(measured["length"], json!(0.0), "annotations contribute no length");
+        assert_eq!(measured["area"], json!(0.0), "annotations contribute no area");
+
+        let (text, _) = exchange::dxf(&drawing);
+        assert!(text.contains("0\nDIMENSION\n"), "dimensions are written as DIMENSION records");
+        assert!(text.contains("70\n4\n"), "a radial dimension uses type 4");
+        assert!(text.contains("70\n3\n"), "a diameter dimension uses type 3");
+        assert!(text.contains("70\n70\n"), "an X ordinate sets the type-6 bit and the X-datum bit");
+
+        let (imported, losses) = import::dxf(&text, None).expect("import the exported DXF");
+        assert_eq!(imported.entities.len(), 3, "{losses:?}");
+        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+        let EntityKind::RadialDimension { center, radius, angle, offset, diameter, text } = &imported.entities[0].kind
+        else {
+            panic!("expected a radial dimension, got {:?}", imported.entities[0].kind);
+        };
+        assert_eq!(*center, [0.0, 0.0]);
+        assert!((radius - 5.0).abs() < 1e-9);
+        assert!(angle.abs() < 1e-9);
+        assert!((offset - 1.5).abs() < 1e-9);
+        assert!(!diameter);
+        assert_eq!(text, &None);
+        let EntityKind::RadialDimension { center, angle, diameter, text, .. } = &imported.entities[1].kind
+        else {
+            panic!("expected a diameter dimension, got {:?}", imported.entities[1].kind);
+        };
+        assert!((center[0] - 10.0).abs() < 1e-9 && center[1].abs() < 1e-9);
+        assert!((angle - 90.0).abs() < 1e-9);
+        assert!(diameter);
+        assert_eq!(text.as_deref(), Some("DIA 6"));
+        let EntityKind::OrdinateDimension { origin, feature, axis, offset, .. } = &imported.entities[2].kind
+        else {
+            panic!("expected an ordinate dimension, got {:?}", imported.entities[2].kind);
+        };
+        assert_eq!(*origin, [0.0, 0.0]);
+        assert_eq!(*feature, [12.0, 4.0]);
+        assert_eq!(*axis, OrdinateAxis::X);
+        assert!((offset - 2.0).abs() < 1e-9);
+
+        transform(
+            handle,
+            TransformRequest {
+                sheet: None,
+                target: TransformTarget::Ids(vec!["entity-1".to_string()]),
+                operation: TransformOp::Rotate { angle: 90.0, cx: 0.0, cy: 0.0 },
+            },
+        )
+        .expect("rotate the radial dimension");
+        let drawing = drawing_of(handle);
+        assert!(matches!(
+            drawing.entities[0].kind,
+            EntityKind::RadialDimension { angle, .. } if (angle - 90.0).abs() < 1e-12
+        ));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn radial_and_ordinate_dimensions_validate_and_inspect() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        assert_eq!(
+            add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 0.0, 0.0, 0.0, false, None).expect_err("zero radius").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 1.0, f64::NAN, 0.0, false, None).expect_err("nan angle").code,
+            "session/argument-invalid"
+        );
+
+        let mut drawing = Drawing::empty(None, Units::Mm);
+        drawing.entities.push(Entity {
+            id: "entity-1".to_string(),
+            layer: DIMENSION_LAYER.to_string(),
+            kind: EntityKind::RadialDimension {
+                center: [0.0, 0.0],
+                radius: 5.0,
+                angle: 0.0,
+                offset: 0.0,
+                diameter: false,
+                text: Some("  ".to_string()),
+            },
+        });
+        drawing.entities.push(Entity {
+            id: "entity-2".to_string(),
+            layer: DIMENSION_LAYER.to_string(),
+            kind: EntityKind::OrdinateDimension {
+                origin: [1.0, 2.0],
+                feature: [1.0, 2.0],
+                axis: OrdinateAxis::Y,
+                offset: 0.0,
+                text: Some("10 inch".to_string()),
+            },
+        });
+        let report = inspection::run(&drawing, &["dimensions", "units"]).to_json();
+        let codes =
+            report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+        for expected in ["dimensions/empty-text", "dimensions/degenerate", "units/dimension-label"] {
+            assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
+        }
+        assert_eq!(report["passed"], json!(false));
         close(handle).expect("close");
     }
 }

@@ -390,6 +390,86 @@ impl<'a> Collector<'a> {
                         );
                     }
                 }
+                EntityKind::RadialDimension { radius, text, .. } => {
+                    if self.dimensions && *radius <= 0.0 {
+                        self.push(
+                            "dimensions/invalid-radius",
+                            Severity::Error,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("radial dimension `{}` has a non-positive radius ({radius})", entity.id),
+                        );
+                    }
+                    if self.dimensions && text.as_deref().is_some_and(|label| label.trim().is_empty()) {
+                        self.push(
+                            "dimensions/empty-text",
+                            Severity::Warning,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("radial dimension `{}` carries an empty label; the measured value is used", entity.id),
+                        );
+                    }
+                    if self.units
+                        && let Some(label) = text
+                        && label_conflicts_with_units(label, self.drawing.units)
+                    {
+                        self.push(
+                            "units/dimension-label",
+                            Severity::Warning,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!(
+                                "radial dimension `{}` labels `{}` in a unit that conflicts with the drawing unit `{}`",
+                                entity.id,
+                                label.trim(),
+                                self.drawing.units.as_str()
+                            ),
+                        );
+                    }
+                }
+                EntityKind::OrdinateDimension { origin, feature, text, .. } => {
+                    if self.dimensions && origin == feature {
+                        self.push(
+                            "dimensions/degenerate",
+                            Severity::Error,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("ordinate dimension `{}` measures zero distance", entity.id),
+                        );
+                    }
+                    if self.dimensions && text.as_deref().is_some_and(|label| label.trim().is_empty()) {
+                        self.push(
+                            "dimensions/empty-text",
+                            Severity::Warning,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("ordinate dimension `{}` carries an empty label; the measured value is used", entity.id),
+                        );
+                    }
+                    if self.units
+                        && let Some(label) = text
+                        && label_conflicts_with_units(label, self.drawing.units)
+                    {
+                        self.push(
+                            "units/dimension-label",
+                            Severity::Warning,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!(
+                                "ordinate dimension `{}` labels `{}` in a unit that conflicts with the drawing unit `{}`",
+                                entity.id,
+                                label.trim(),
+                                self.drawing.units.as_str()
+                            ),
+                        );
+                    }
+                }
                 EntityKind::Text { content, .. } => {
                     if self.geometry && content.trim().is_empty() {
                         self.push(

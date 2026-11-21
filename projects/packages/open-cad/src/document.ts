@@ -20,7 +20,9 @@ import type {
     AddEllipseRequest,
     AddLayerRequest,
     AddLineRequest,
+    AddOrdinateDimensionRequest,
     AddPolylineRequest,
+    AddRadialDimensionRequest,
     AddTextRequest,
     ArrayRequest,
     ArrayResult,
@@ -253,6 +255,16 @@ export class DrawingDocument {
     /** Adds a linear dimension and returns the created entity. */
     addDimension(request: AddDimensionRequest): Entity {
         return this.adopt(this.edit((handle) => service.addDimension(handle, request)));
+    }
+
+    /** Adds a radial or diameter dimension and returns the created entity. */
+    addRadialDimension(request: AddRadialDimensionRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addRadialDimension(handle, request)));
+    }
+
+    /** Adds an ordinate dimension and returns the created entity. */
+    addOrdinateDimension(request: AddOrdinateDimensionRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addOrdinateDimension(handle, request)));
     }
 
     /** Deletes one entity. */

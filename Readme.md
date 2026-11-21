@@ -10,8 +10,9 @@ Status
 ------
 
 Working document core. A `.ocad` project can be created, opened, edited, saved
-and reopened; lines, circles, arcs, ellipses, polylines, text and linear
-dimensions are real entities; transform (translate/rotate/scale/mirror), copy,
+and reopened; lines, circles, arcs, ellipses, polylines, text, linear
+dimensions, radial/diameter dimensions and ordinate dimensions are real
+entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode and measure are supported; each handle
 keeps a 32-snapshot undo/redo history;
 layers can be added, renamed, merged, hidden and locked; a drawing converts
@@ -43,6 +44,9 @@ open-cad capabilities
 open-cad create --out plan.ocad --title "Site plan" --units mm
 open-cad entity add-line plan.ocad --layer 0 --from 0,0 --to 100,40
 open-cad entity add-circle plan.ocad --layer 0 --center 50,50 --radius 20
+open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 45 --offset 3
+open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 0 --diameter
+open-cad entity add-ordinate-dimension plan.ocad --layer dimensions --origin 0,0 --feature 50,20 --axis x --offset 10
 open-cad arc add plan.ocad --layer 0 --center 50,50 --radius 20 --start 0 --end 90
 open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotation 15
 open-cad entity move plan.ocad --id entity-1 --dx 10 --dy 5
@@ -95,8 +99,9 @@ What this build does NOT do
   projected onto the XY plane), SPLINE (read as a polyline through its fit
   points, or its control polygon when no fit points exist) and LEADER (read as
   an open polyline). Rotated or aligned linear DIMENSION references are read.
-  ARC and ELLIPSE stay analytic, and only bulge arcs are flattened; angular,
-  radial, diameter and ordinate dimensions, HATCH and MLEADER are skipped.
+  ARC and ELLIPSE stay analytic, and only bulge arcs are flattened; rotated or
+  aligned linear, radial, diameter and ordinate dimensions are read, while
+  angular dimensions, HATCH and MLEADER are skipped.
   Every approximation and skip is reported as a loss with a stable code, a
   severity (`notice` or `warning`) and a detail.
 - No STEP or OBJ reader, and no PNG writer, and no STL reader. STL and OBJ
@@ -130,8 +135,9 @@ What this build does NOT do
 - `capabilities()` reports `project: partial`, SVG/PDF/STEP/STL/OBJ export as
   supported, DXF as partial because of its import subset, STEP and OBJ as
   partial because only their export direction is implemented, STL import and DWG
-  as unsupported, and the unimplemented routes as `unsupported`. Its `entities` matrix lists line,
-  circle, arc, ellipse, point, polyline, text and dimension as supported; its
+  as unsupported, and the unimplemented routes as `unsupported`. Its `entities`
+  matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
+  radial dimension and ordinate dimension as supported; its
   `operations` matrix lists transform, copy, array, explode and measure as
   supported while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one

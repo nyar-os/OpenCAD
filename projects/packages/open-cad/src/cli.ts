@@ -601,6 +601,94 @@ entity
     });
 
 entity
+    .command('add-radial-dimension', 'cli.cmd.add-radial-dimension')
+    .option('--layer <layer>', 'cli.opt.layer', { default: 'dimensions' })
+    .option('--center <x,y>', 'cli.opt.center')
+    .option('--radius <number>', 'cli.opt.radius')
+    .option('--angle <degrees>', 'cli.opt.angle')
+    .option('--offset <number>', 'cli.opt.offset')
+    .option('--diameter', 'cli.opt.diameter')
+    .option('--text <text>', 'cli.opt.text')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const center = point(options, 'center');
+        const radius = number(options, 'radius');
+        const angle = number(options, 'angle');
+        if (center === undefined || radius === undefined || angle === undefined) {
+            ctx.fail('open-cad.cli.radial-dimension-required', {
+                message: '`--center x,y`, `--radius <number>` and `--angle <degrees>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addRadialDimension({
+                    layer: text(options, 'layer') ?? 'dimensions',
+                    center,
+                    radius,
+                    angle,
+                    offset: number(options, 'offset') ?? 0,
+                    diameter: flag(options, 'diameter'),
+                    text: text(options, 'text'),
+                }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
+    .command('add-ordinate-dimension', 'cli.cmd.add-ordinate-dimension')
+    .option('--layer <layer>', 'cli.opt.layer', { default: 'dimensions' })
+    .option('--origin <x,y>', 'cli.opt.origin')
+    .option('--feature <x,y>', 'cli.opt.feature')
+    .option('--axis <axis>', 'cli.opt.axis', { enum: ['x', 'y'] })
+    .option('--offset <number>', 'cli.opt.offset')
+    .option('--text <text>', 'cli.opt.text')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        const feature = point(options, 'feature');
+        const axis = text(options, 'axis') as 'x' | 'y' | undefined;
+        if (origin === undefined || feature === undefined || axis === undefined) {
+            ctx.fail('open-cad.cli.ordinate-dimension-required', {
+                message: '`--origin x,y`, `--feature x,y` and `--axis x|y` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addOrdinateDimension({
+                    layer: text(options, 'layer') ?? 'dimensions',
+                    origin,
+                    feature,
+                    axis,
+                    offset: number(options, 'offset') ?? 0,
+                    text: text(options, 'text'),
+                }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
     .command('delete', 'cli.cmd.delete')
     .option('--id <entity>', 'cli.opt.id')
     .actionCtx(async (options, _args, ctx) => {

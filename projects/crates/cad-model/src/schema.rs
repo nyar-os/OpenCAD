@@ -2,7 +2,8 @@
 //!
 //! The schema is deliberately small: one drawing, ordered layers and a flat
 //! entity list whose geometry is limited to lines, circles, arcs, ellipses,
-//! polylines, text and linear dimensions. Every value is serialisable, so the
+//! polylines, text, linear dimensions, radial/diameter dimensions and ordinate
+//! dimensions. Every value is serialisable, so the
 //! same document is written to `.ocad` files and returned to callers as JSON.
 
 use geometry_planar::{Point as PlanarPoint, arc_points};
@@ -163,6 +164,60 @@ pub enum EntityKind {
         #[serde(default)]
         text: Option<String>,
     },
+    /// A radial or diameter dimension of a circle or arc.
+    RadialDimension {
+        /// Centre of the measured circle or arc `[x, y]`.
+        center: [f64; 2],
+        /// Radius of the measured circle or arc.
+        radius: f64,
+        /// Angle of the measured point, in degrees from the positive X axis.
+        angle: f64,
+        /// Signed distance from the measured point to the label along the leader.
+        #[serde(default)]
+        offset: f64,
+        /// Whether the dimension measures the diameter instead of the radius.
+        #[serde(default)]
+        diameter: bool,
+        /// Optional label; `R` or `DIA` followed by the measured value is used
+        /// when absent.
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// An ordinate dimension measuring one axis-aligned distance from a datum.
+    OrdinateDimension {
+        /// Datum origin `[x, y]`.
+        origin: [f64; 2],
+        /// Measured feature point `[x, y]`.
+        feature: [f64; 2],
+        /// Axis the dimension measures.
+        axis: OrdinateAxis,
+        /// Signed perpendicular distance of the dimension line from the origin.
+        #[serde(default)]
+        offset: f64,
+        /// Optional label; the measured value is used when absent.
+        #[serde(default)]
+        text: Option<String>,
+    },
+}
+
+/// Axis an ordinate dimension measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrdinateAxis {
+    /// Measure the X coordinate difference.
+    X,
+    /// Measure the Y coordinate difference.
+    Y,
+}
+
+impl OrdinateAxis {
+    /// Short lowercase name used in JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+        }
+    }
 }
 
 /// One drawable object.
@@ -199,6 +254,14 @@ impl Entity {
                 let (p1, p2) = offset_points(*from, *to, *offset);
                 vec![*from, *to, p1, p2]
             }
+            EntityKind::RadialDimension { center, radius, angle, offset, .. } => {
+                let target = radial_target(*center, *radius, *angle);
+                vec![*center, target, radial_label(*center, *radius, *angle, *offset)]
+            }
+            EntityKind::OrdinateDimension { origin, feature, axis, offset, .. } => {
+                let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
+                vec![*origin, *feature, base, guide]
+            }
         }
     }
 
@@ -221,6 +284,8 @@ impl Entity {
             EntityKind::Polyline { points, .. } => points.first().copied().unwrap_or([0.0, 0.0]),
             EntityKind::Text { at, .. } => *at,
             EntityKind::Dimension { from, .. } => *from,
+            EntityKind::RadialDimension { center, .. } => *center,
+            EntityKind::OrdinateDimension { origin, .. } => *origin,
         }
     }
 
@@ -249,6 +314,11 @@ impl Entity {
                 shift(from);
                 shift(to);
             }
+            EntityKind::RadialDimension { center, .. } => shift(center),
+            EntityKind::OrdinateDimension { origin, feature, .. } => {
+                shift(origin);
+                shift(feature);
+            }
         }
     }
 
@@ -272,6 +342,12 @@ impl Entity {
             EntityKind::Polyline { points, .. } => points.iter().all(|point| finite_point(*point)),
             EntityKind::Text { at, height, .. } => finite_point(*at) && height.is_finite(),
             EntityKind::Dimension { from, to, offset, .. } => finite_point(*from) && finite_point(*to) && offset.is_finite(),
+            EntityKind::RadialDimension { center, radius, angle, offset, .. } => {
+                finite_point(*center) && radius.is_finite() && angle.is_finite() && offset.is_finite()
+            }
+            EntityKind::OrdinateDimension { origin, feature, offset, .. } => {
+                finite_point(*origin) && finite_point(*feature) && offset.is_finite()
+            }
         }
     }
 
@@ -291,6 +367,9 @@ impl Entity {
             EntityKind::Ellipse { rx, ry, .. } if non_positive(*rx) || non_positive(*ry) => {
                 return Err(format!("entity `{}` has a non-positive ellipse radius", self.id));
             }
+            EntityKind::RadialDimension { radius, .. } if non_positive(*radius) => {
+                return Err(format!("entity `{}` has a non-positive radius", self.id));
+            }
             _ => {}
         }
         Ok(())
@@ -307,6 +386,40 @@ pub fn offset_points(from: [f64; 2], to: [f64; 2], offset: f64) -> ([f64; 2], [f
     let length = (dx * dx + dy * dy).sqrt();
     let normal = if length > f64::EPSILON { [-dy / length, dx / length] } else { [0.0, 1.0] };
     ([from[0] + normal[0] * offset, from[1] + normal[1] * offset], [to[0] + normal[0] * offset, to[1] + normal[1] * offset])
+}
+
+/// Point a radial dimension measures on its circle.
+pub fn radial_target(center: [f64; 2], radius: f64, angle: f64) -> [f64; 2] {
+    arc_point(center, radius.abs(), angle)
+}
+
+/// Label anchor of a radial dimension, `offset` beyond the measured point.
+pub fn radial_label(center: [f64; 2], radius: f64, angle: f64, offset: f64) -> [f64; 2] {
+    let target = radial_target(center, radius, angle);
+    let dx = target[0] - center[0];
+    let dy = target[1] - center[1];
+    let length = (dx * dx + dy * dy).sqrt();
+    if length > f64::EPSILON { [target[0] + dx / length * offset, target[1] + dy / length * offset] } else { target }
+}
+
+/// Dimension-line base and guide points of an ordinate dimension.
+///
+/// The base sits on the datum and the guide below the measured feature, both
+/// offset perpendicular to the measured axis. `X` measures a horizontal
+/// distance, `Y` a vertical one.
+pub fn ordinate_points(origin: [f64; 2], feature: [f64; 2], axis: OrdinateAxis, offset: f64) -> ([f64; 2], [f64; 2]) {
+    match axis {
+        OrdinateAxis::X => ([origin[0], origin[1] + offset], [feature[0], origin[1] + offset]),
+        OrdinateAxis::Y => ([origin[0] + offset, origin[1]], [origin[0] + offset, feature[1]]),
+    }
+}
+
+/// Signed distance an ordinate dimension measures along its axis.
+pub fn ordinate_value(origin: [f64; 2], feature: [f64; 2], axis: OrdinateAxis) -> f64 {
+    match axis {
+        OrdinateAxis::X => feature[0] - origin[0],
+        OrdinateAxis::Y => feature[1] - origin[1],
+    }
 }
 
 /// A drawing document.

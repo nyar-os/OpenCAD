@@ -16,7 +16,9 @@ import type {
     AddEllipseRequest,
     AddLayerRequest,
     AddLineRequest,
+    AddOrdinateDimensionRequest,
     AddPolylineRequest,
+    AddRadialDimensionRequest,
     AddTextRequest,
     ArrayRequest,
     ArrayResult,
@@ -210,6 +212,41 @@ export function addDimension(handle: number, request: AddDimensionRequest): Enti
                 from: request.from,
                 to: request.to,
                 offset: request.offset,
+                text: request.text,
+            }),
+        ),
+    );
+}
+
+/** Adds a radial or diameter dimension to one layer. */
+export function addRadialDimension(handle: number, request: AddRadialDimensionRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addRadialDimension').drawing_add_radial_dimension(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                center: request.center,
+                radius: request.radius,
+                angle: request.angle,
+                offset: request.offset ?? 0,
+                diameter: request.diameter ?? false,
+                text: request.text,
+            }),
+        ),
+    );
+}
+
+/** Adds an ordinate dimension to one layer. */
+export function addOrdinateDimension(handle: number, request: AddOrdinateDimensionRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addOrdinateDimension').drawing_add_ordinate_dimension(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                origin: request.origin,
+                feature: request.feature,
+                axis: request.axis,
+                offset: request.offset ?? 0,
                 text: request.text,
             }),
         ),

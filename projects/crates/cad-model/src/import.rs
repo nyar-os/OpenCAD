@@ -7,8 +7,9 @@
 //! INSERT references that are expanded into the current space and the ATTRIB
 //! values that follow them.
 //!
-//! ARC and ELLIPSE are read into the analytic entity kinds, and rotated or
-//! aligned linear DIMENSION references become dimension entities. SPLINE and
+//! ARC and ELLIPSE are read into the analytic entity kinds; rotated or aligned
+//! linear, radius, diameter and ordinate DIMENSION references become dimension
+//! entities. SPLINE and
 //! LEADER become polylines (from fit or control points for a spline), and a 3D
 //! POLYLINE is projected onto the XY plane. Bulge arcs inside polylines are
 //! flattened to line segments and reported as a loss; entities the reader does
@@ -20,7 +21,7 @@ use serde::Serialize;
 
 use crate::{
     ServiceError,
-    schema::{Drawing, Entity, EntityKind, Layer, Units},
+    schema::{Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units},
 };
 
 /// Maximum INSERT nesting the reader expands before it stops.
@@ -635,13 +636,6 @@ impl Reader {
                     continue;
                 }
                 "DIMENSION" => {
-                    let (Some(from), Some(to)) = (point_at(block, 13, 23), point_at(block, 14, 24))
-                    else {
-                        self.skip("DIMENSION (missing extension line origins)", block);
-                        index = end;
-                        continue;
-                    };
-                    let (from, to) = (xform.apply(from), xform.apply(to));
                     let dimension_type = match integer(block, 70) {
                         Some(flags) => flags & 0x07,
                         None => {
@@ -649,12 +643,20 @@ impl Reader {
                             1
                         }
                     };
+                    let text = field(block, 1).map(str::trim).filter(|text| !text.is_empty() && *text != "<>").map(str::to_string);
                     match dimension_type {
                         // Rotated (0) and aligned (1) dimensions measure the same
                         // segment. A rotated dimension is only representable when
                         // its rotation follows the measured segment, because the
                         // model offsets along that segment's normal.
                         0 | 1 => {
+                            let (Some(from), Some(to)) = (point_at(block, 13, 23), point_at(block, 14, 24))
+                            else {
+                                self.skip("DIMENSION (missing extension line origins)", block);
+                                index = end;
+                                continue;
+                            };
+                            let (from, to) = (xform.apply(from), xform.apply(to));
                             if dimension_type == 0 {
                                 let rotation = number(block, 50).unwrap_or(0.0) + xform.rotation.to_degrees();
                                 let direction = (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees();
@@ -672,16 +674,61 @@ impl Reader {
                                     0.0
                                 }
                             };
-                            let text = field(block, 1).map(str::trim).filter(|text| !text.is_empty() && *text != "<>").map(str::to_string);
                             self.push(layer, EntityKind::Dimension { from, to, offset, text });
+                        }
+                        // Diameter (3) and radius (4) references carry the centre
+                        // in 15/25 and a point on the circle in 10/20.
+                        3 | 4 => {
+                            let (Some(center), Some(target)) = (point_at(block, 15, 25), point_at(block, 10, 20))
+                            else {
+                                self.skip("DIMENSION (missing centre or circle point)", block);
+                                index = end;
+                                continue;
+                            };
+                            let center = xform.apply(center);
+                            let target = xform.apply(target);
+                            let radius = ((target[0] - center[0]).powi(2) + (target[1] - center[1]).powi(2)).sqrt();
+                            if radius < 1e-12 {
+                                self.skip("DIMENSION (zero radius)", block);
+                                index = end;
+                                continue;
+                            }
+                            let angle = (target[1] - center[1]).atan2(target[0] - center[0]).to_degrees();
+                            let offset = number(block, 40).unwrap_or(0.0) * xform.factor();
+                            self.push(
+                                layer,
+                                EntityKind::RadialDimension { center, radius, angle, offset, diameter: dimension_type == 3, text },
+                            );
+                        }
+                        // Ordinate (6) references carry the datum in 13/23, the
+                        // measured feature in 14/24 and the dimension-line point in
+                        // 10/20. Bit 64 of the type flags selects the X axis.
+                        6 => {
+                            let (Some(origin), Some(feature)) = (point_at(block, 13, 23), point_at(block, 14, 24))
+                            else {
+                                self.skip("DIMENSION (missing ordinate datum or feature)", block);
+                                index = end;
+                                continue;
+                            };
+                            let axis = if integer(block, 70).is_some_and(|flags| flags & 64 != 0) { OrdinateAxis::X } else { OrdinateAxis::Y };
+                            let origin = xform.apply(origin);
+                            let feature = xform.apply(feature);
+                            let offset = match point_at(block, 10, 20) {
+                                Some(definition) => {
+                                    let definition = xform.apply(definition);
+                                    match axis {
+                                        OrdinateAxis::X => definition[1] - origin[1],
+                                        OrdinateAxis::Y => definition[0] - origin[0],
+                                    }
+                                }
+                                None => 0.0,
+                            };
+                            self.push(layer, EntityKind::OrdinateDimension { origin, feature, axis, offset, text });
                         }
                         other => {
                             let label = match other {
                                 2 => "DIMENSION (angular)",
-                                3 => "DIMENSION (diameter)",
-                                4 => "DIMENSION (radius)",
                                 5 => "DIMENSION (3-point angular)",
-                                6 => "DIMENSION (ordinate)",
                                 _ => "DIMENSION (unknown type)",
                             };
                             self.skip(label, block);

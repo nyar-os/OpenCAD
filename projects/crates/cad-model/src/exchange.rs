@@ -3,8 +3,9 @@
 //! SVG keeps every supported entity and each layer's colour. DXF is ASCII R12
 //! with a HEADER, a LAYER table and a LINE/CIRCLE/ARC/ELLIPSE/TEXT/POLYLINE
 //! entity section; polylines keep their vertices as POLYLINE/VERTEX/SEQEND and
-//! dimensions are written as primitives whose approximation is reported as a
-//! loss. PDF writes a minimal vector page with a real xref table and reports
+//! linear dimensions are written as primitives whose approximation is reported
+//! as a loss, while radial, diameter and ordinate dimensions keep their DXF
+//! DIMENSION record. PDF writes a minimal vector page with a real xref table and reports
 //! characters the standard Helvetica encoding cannot carry. SVG and PDF are
 //! lowered onto the shared `document-drawing` scene; DXF keeps analytic arcs and
 //! ellipses, and STL extrudes five-degree polyline samples.
@@ -13,7 +14,10 @@ use document_drawing::{Color, Drawing as FlatDrawing, Element, Point as FlatPoin
 use geometry_planar::{Point as PlanarPoint, Rect, signed_polygon_area};
 use serde::Serialize;
 
-use crate::schema::{Drawing, Entity, EntityKind, Units, arc_sweep, offset_points, sample_arc, sample_ellipse};
+use crate::schema::{
+    Drawing, Entity, EntityKind, OrdinateAxis, Units, arc_sweep, offset_points, ordinate_points, ordinate_value, radial_label, radial_target,
+    sample_arc, sample_ellipse,
+};
 
 /// One item an exchange target could not keep.
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +102,20 @@ fn dimension_label(from: [f64; 2], to: [f64; 2], text: &Option<String>) -> Strin
     }
     let distance = ((to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2)).sqrt();
     num(distance)
+}
+
+fn radial_dimension_label(radius: f64, diameter: bool, text: &Option<String>) -> String {
+    if let Some(text) = text {
+        return text.clone();
+    }
+    if diameter { format!("DIA{}", num(radius.abs() * 2.0)) } else { format!("R{}", num(radius.abs())) }
+}
+
+fn ordinate_dimension_label(origin: [f64; 2], feature: [f64; 2], axis: OrdinateAxis, text: &Option<String>) -> String {
+    if let Some(text) = text {
+        return text.clone();
+    }
+    num(ordinate_value(origin, feature, axis))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -247,6 +265,30 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
             let midpoint = [(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0 + projection.label_offset];
             flat.push(Element::new(
                 Shape::Text { at: map(midpoint), text: dimension_label(*from, *to, text), size: projection.label_size.max(0.01) },
+                text_style.clone(),
+            ));
+        }
+        EntityKind::RadialDimension { center, radius, angle, offset, diameter, text } => {
+            let target = radial_target(*center, *radius, *angle);
+            let start = if *diameter { radial_target(*center, *radius, *angle + 180.0) } else { *center };
+            flat.push(Element::new(Shape::Line { from: map(start), to: map(target) }, stroke_style.clone()));
+            let label = radial_label(*center, *radius, *angle, *offset);
+            flat.push(Element::new(
+                Shape::Text { at: map(label), text: radial_dimension_label(*radius, *diameter, text), size: projection.label_size.max(0.01) },
+                text_style.clone(),
+            ));
+        }
+        EntityKind::OrdinateDimension { origin, feature, axis, offset, text } => {
+            let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
+            flat.push(Element::new(Shape::Line { from: map(*feature), to: map(guide) }, stroke_style.clone()));
+            flat.push(Element::new(Shape::Line { from: map(base), to: map(guide) }, stroke_style.clone()));
+            let midpoint = [(base[0] + guide[0]) / 2.0, (base[1] + guide[1]) / 2.0 + projection.label_offset];
+            flat.push(Element::new(
+                Shape::Text {
+                    at: map(midpoint),
+                    text: ordinate_dimension_label(*origin, *feature, *axis, text),
+                    size: projection.label_size.max(0.01),
+                },
                 text_style.clone(),
             ));
         }
@@ -454,6 +496,44 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
                     "dimension is written as extension lines, a dimension line and TEXT".to_string(),
                 ));
             }
+            EntityKind::RadialDimension { center, radius, angle, offset, diameter, text } => {
+                let target = radial_target(*center, *radius, *angle);
+                dxf_pair(&mut out, 0, "DIMENSION");
+                dxf_pair(&mut out, 8, dxf_layer_name(&entity.layer));
+                dxf_pair(&mut out, 70, if *diameter { 3 } else { 4 });
+                dxf_pair(&mut out, 10, num_exact(target[0]));
+                dxf_pair(&mut out, 20, num_exact(target[1]));
+                dxf_pair(&mut out, 30, "0");
+                dxf_pair(&mut out, 15, num_exact(center[0]));
+                dxf_pair(&mut out, 25, num_exact(center[1]));
+                dxf_pair(&mut out, 35, "0");
+                dxf_pair(&mut out, 40, num_exact(*offset));
+                dxf_pair(&mut out, 50, num_exact(*angle));
+                match text {
+                    Some(label) => dxf_pair(&mut out, 1, dxf_text(label)),
+                    None => dxf_pair(&mut out, 1, "<>"),
+                }
+            }
+            EntityKind::OrdinateDimension { origin, feature, axis, offset, text } => {
+                let (base, _guide) = ordinate_points(*origin, *feature, *axis, *offset);
+                let flags = if *axis == OrdinateAxis::X { 6 | 64 } else { 6 };
+                dxf_pair(&mut out, 0, "DIMENSION");
+                dxf_pair(&mut out, 8, dxf_layer_name(&entity.layer));
+                dxf_pair(&mut out, 70, flags);
+                dxf_pair(&mut out, 13, num_exact(origin[0]));
+                dxf_pair(&mut out, 23, num_exact(origin[1]));
+                dxf_pair(&mut out, 33, "0");
+                dxf_pair(&mut out, 14, num_exact(feature[0]));
+                dxf_pair(&mut out, 24, num_exact(feature[1]));
+                dxf_pair(&mut out, 34, "0");
+                dxf_pair(&mut out, 10, num_exact(base[0]));
+                dxf_pair(&mut out, 20, num_exact(base[1]));
+                dxf_pair(&mut out, 30, "0");
+                match text {
+                    Some(label) => dxf_pair(&mut out, 1, dxf_text(label)),
+                    None => dxf_pair(&mut out, 1, "<>"),
+                }
+            }
         }
     }
     dxf_pair(&mut out, 0, "ENDSEC");
@@ -517,6 +597,12 @@ pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
             match &entity.kind {
                 EntityKind::Text { content, .. } => replaced += pdf_text(content).1,
                 EntityKind::Dimension { from, to, text, .. } => replaced += pdf_text(&dimension_label(*from, *to, text)).1,
+                EntityKind::RadialDimension { radius, diameter, text, .. } => {
+                    replaced += pdf_text(&radial_dimension_label(*radius, *diameter, text)).1;
+                }
+                EntityKind::OrdinateDimension { origin, feature, axis, text, .. } => {
+                    replaced += pdf_text(&ordinate_dimension_label(*origin, *feature, *axis, text)).1;
+                }
                 _ => {}
             }
         }

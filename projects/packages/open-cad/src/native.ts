@@ -29,6 +29,8 @@ export interface NativeBinding {
     drawing_add_polyline(handle: number, requestJson: string): string;
     drawing_add_text(handle: number, requestJson: string): string;
     drawing_add_dimension(handle: number, requestJson: string): string;
+    drawing_add_radial_dimension(handle: number, requestJson: string): string;
+    drawing_add_ordinate_dimension(handle: number, requestJson: string): string;
     drawing_delete_entity(handle: number, entityId: string): string;
     drawing_list_entities(handle: number): string;
     drawing_undo(handle: number): string;

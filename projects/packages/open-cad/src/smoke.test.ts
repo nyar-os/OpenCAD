@@ -320,6 +320,30 @@ test('unit conversion scales lengths and round trips', { skip: withAddon }, asyn
     }
 });
 
+test('radial and ordinate dimensions are editable entities', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Dimensions' });
+        const radial = document.addRadialDimension({ layer: 'dimensions', center: [0, 0], radius: 10, angle: 0, offset: 2 });
+        assert.equal(radial.kind.type, 'radial_dimension');
+        const diameter = document.addRadialDimension({ layer: 'dimensions', center: [0, 0], radius: 10, angle: 90, diameter: true });
+        assert.equal(diameter.kind.type, 'radial_dimension');
+        const ordinate = document.addOrdinateDimension({
+            layer: 'dimensions',
+            origin: [0, 0],
+            feature: [10, 5],
+            axis: 'x',
+            offset: 2,
+        });
+        assert.equal(ordinate.kind.type, 'ordinate_dimension');
+        assert.equal(document.entities, 3);
+        assert.equal(document.inspect({ checks: ['dimensions'] }).issues.length, 0);
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',
