@@ -14,6 +14,7 @@ export const errorCodes = [
     'drawing/not-found',
     'drawing/revision-conflict',
     'drawing/layer-locked',
+    'drawing/layer-frozen',
     'drawing/layer-exists',
     'drawing/style-exists',
     'drawing/group-exists',

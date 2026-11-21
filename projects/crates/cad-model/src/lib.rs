@@ -584,12 +584,11 @@ fn require_finite(points: &[[f64; 2]], field: &str) -> Result<(), ServiceError> 
 
 fn push_entity(handle: u64, layer: &str, kind: EntityKind) -> Result<Value, ServiceError> {
     let entity = store::edit(handle, |drawing| {
-        let locked = match drawing.layer(layer) {
-            Some(record) => record.locked,
-            None => return Err(ServiceError::new("object/not-found", format!("layer `{layer}` does not exist"))),
-        };
-        if locked {
-            return Err(ServiceError::new("drawing/layer-locked", format!("layer `{layer}` is locked")));
+        if drawing.layer(layer).is_none() {
+            return Err(ServiceError::new("object/not-found", format!("layer `{layer}` does not exist")));
+        }
+        if let Some(error) = locked_layer(drawing, layer) {
+            return Err(error);
         }
         let id = drawing.take_entity_id();
         let entity = Entity { id, layer: layer.to_string(), kind };
@@ -806,11 +805,10 @@ pub fn duplicate_entity(handle: u64, entity: &str) -> Result<Value, ServiceError
 }
 
 fn locked_layer(drawing: &Drawing, layer: &str) -> Option<ServiceError> {
-    if drawing.layer(layer).is_some_and(|record| record.locked) {
-        Some(ServiceError::new("drawing/layer-locked", format!("layer `{layer}` is locked")))
-    }
-    else {
-        None
+    match drawing.layer(layer) {
+        Some(record) if record.locked => Some(ServiceError::new("drawing/layer-locked", format!("layer `{layer}` is locked"))),
+        Some(record) if record.frozen => Some(ServiceError::new("drawing/layer-frozen", format!("layer `{layer}` is frozen"))),
+        _ => None,
     }
 }
 
@@ -822,6 +820,8 @@ fn layer_json(drawing: &Drawing, id: &str) -> Option<Value> {
             "color": layer.color,
             "visible": layer.visible,
             "locked": layer.locked,
+            "frozen": layer.frozen,
+            "plottable": layer.plottable,
             "linetype": layer.linetype,
             "lineweight": layer.lineweight,
             "entityCount": drawing.entities.iter().filter(|entity| entity.layer == layer.id).count(),
@@ -2380,6 +2380,8 @@ pub fn add_layer(handle: u64, name: &str, color: Option<&str>) -> Result<Value, 
             color,
             visible: true,
             locked: false,
+            frozen: false,
+            plottable: true,
             linetype: CONTINUOUS_LINETYPE.to_string(),
             lineweight: 0.0,
         });
@@ -2407,6 +2409,10 @@ pub struct LayerUpdate {
     pub visible: Option<bool>,
     /// Whether geometry on the layer is writable.
     pub locked: Option<bool>,
+    /// Whether the layer is frozen and therefore hidden and read-only.
+    pub frozen: Option<bool>,
+    /// Whether plots and print exports include the layer.
+    pub plottable: Option<bool>,
     /// Line type id assigned to the layer; it must already exist.
     pub linetype: Option<String>,
     /// Lineweight in millimetres, `0..=10`; `0` uses the exporter default.
@@ -2419,10 +2425,12 @@ pub fn update_layer(handle: u64, id: &str, update: LayerUpdate) -> Result<Value,
         && update.color.is_none()
         && update.visible.is_none()
         && update.locked.is_none()
+        && update.frozen.is_none()
+        && update.plottable.is_none()
         && update.linetype.is_none()
         && update.lineweight.is_none()
     {
-        return Err(argument("pass at least one of `name`, `color`, `visible`, `locked`, `linetype` or `lineweight`"));
+        return Err(argument("pass at least one of `name`, `color`, `visible`, `locked`, `frozen`, `plottable`, `linetype` or `lineweight`"));
     }
     let new_name = match update.name {
         Some(name) => {
@@ -2486,6 +2494,12 @@ pub fn update_layer(handle: u64, id: &str, update: LayerUpdate) -> Result<Value,
         }
         if let Some(locked) = update.locked {
             layer.locked = locked;
+        }
+        if let Some(frozen) = update.frozen {
+            layer.frozen = frozen;
+        }
+        if let Some(plottable) = update.plottable {
+            layer.plottable = plottable;
         }
         if let Some(linetype) = linetype {
             layer.linetype = linetype;
@@ -2568,11 +2582,11 @@ pub fn merge_layer(handle: u64, from: &str, to: &str) -> Result<Value, ServiceEr
         if drawing.layer(to).is_none() {
             return Err(ServiceError::new("object/not-found", format!("layer `{to}` does not exist")));
         }
-        if drawing.layer(from).is_some_and(|layer| layer.locked) {
-            return Err(ServiceError::new("drawing/layer-locked", format!("layer `{from}` is locked")));
+        if let Some(error) = locked_layer(drawing, from) {
+            return Err(error);
         }
-        if drawing.layer(to).is_some_and(|layer| layer.locked) {
-            return Err(ServiceError::new("drawing/layer-locked", format!("layer `{to}` is locked")));
+        if let Some(error) = locked_layer(drawing, to) {
+            return Err(error);
         }
         let mut moved = 0;
         for entity in &mut drawing.entities {
@@ -4255,6 +4269,33 @@ mod tests {
     }
 
     #[test]
+    fn layer_freeze_and_plot_flags_gate_writes_and_reach_dxf() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Walls", None).expect("add layer");
+        add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line on the new layer");
+
+        let updated =
+            update_layer(handle, "Walls", LayerUpdate { frozen: Some(true), plottable: Some(false), ..LayerUpdate::default() }).expect("flags");
+        assert_eq!(updated["layer"]["frozen"], json!(true));
+        assert_eq!(updated["layer"]["plottable"], json!(false));
+        assert_eq!(add_line(handle, "Walls", [0.0, 0.0], [1.0, 1.0]).expect_err("frozen add").code, "drawing/layer-frozen");
+        assert_eq!(update_layer(handle, "Walls", LayerUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
+
+        let (text, _losses) = exchange::dxf(&drawing_of(handle));
+        assert!(text.contains("AC1015"), "a non-plottable layer needs DXF 2000 flags");
+        assert!(text.contains("2\nWalls\n70\n1\n"), "frozen layers carry DXF flag 1");
+        assert!(text.contains("290\n0\n"), "non-plottable layers carry plot flag 0");
+
+        update_layer(handle, "Walls", LayerUpdate { frozen: Some(false), plottable: Some(true), ..LayerUpdate::default() })
+            .expect("clear flags");
+        let layer = &summary(handle).expect("summary")["layers"][2];
+        assert_eq!(layer["frozen"], json!(false));
+        assert_eq!(layer["plottable"], json!(true));
+        close(handle).expect("close");
+    }
+
+    #[test]
     fn dimension_styles_are_listed_added_updated_and_deleted() {
         let created = create(CreateRequest::default()).expect("create");
         let handle = handle_of(&created);
@@ -4956,6 +4997,8 @@ mod tests {
             color: "#000000".to_string(),
             visible: true,
             locked: false,
+            frozen: false,
+            plottable: true,
             linetype: CONTINUOUS_LINETYPE.to_string(),
             lineweight: 0.0,
         });

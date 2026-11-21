@@ -379,6 +379,26 @@ test('linetypes and layer lineweights are read and written', { skip: withAddon }
     }
 });
 
+test('layer freeze and plot flags gate writes', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Layer flags' });
+        const layer = document.updateLayer({ layerId: '0', frozen: true, plottable: false });
+        assert.equal(layer.frozen, true);
+        assert.equal(layer.plottable, false);
+        assert.throws(
+            () => document.addLine({ layer: '0', from: [0, 0], to: [1, 1] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/layer-frozen',
+        );
+        const cleared = document.updateLayer({ layerId: '0', frozen: false, plottable: true });
+        assert.equal(cleared.frozen, false);
+        assert.equal(cleared.plottable, true);
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('selection returns window and crossing matches', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

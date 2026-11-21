@@ -152,6 +152,10 @@ export interface LayerSummary {
     readonly color: string;
     readonly visible: boolean;
     readonly locked: boolean;
+    /** Whether the layer is frozen: hidden from exports and read-only. */
+    readonly frozen: boolean;
+    /** Whether plots and print exports include the layer. */
+    readonly plottable: boolean;
     /** Line type id assigned to the layer's geometry. */
     readonly linetype: string;
     /** Lineweight in millimetres; `0` uses the exporter default. */
@@ -1027,6 +1031,10 @@ export interface UpdateLayerRequest {
     readonly color?: string;
     readonly visible?: boolean;
     readonly locked?: boolean;
+    /** Whether the layer is frozen: hidden from exports and read-only. */
+    readonly frozen?: boolean;
+    /** Whether plots and print exports include the layer. */
+    readonly plottable?: boolean;
     /** Line type id assigned to the layer; it must already exist. */
     readonly linetype?: string;
     /** Lineweight in millimetres, 0-10; `0` uses the exporter default. */

@@ -149,7 +149,7 @@ impl Frame {
 fn visible_extents(drawing: &Drawing) -> Option<Rect> {
     let mut extents: Option<Rect> = None;
     for entity in &drawing.entities {
-        if !drawing.layer(&entity.layer).is_some_and(|layer| layer.visible) {
+        if !drawing.layer(&entity.layer).is_some_and(|layer| layer.visible && !layer.frozen && layer.plottable) {
             continue;
         }
         for point in entity.bounds_points() {
@@ -189,7 +189,7 @@ struct Projection<'a> {
 fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>) -> FlatDrawing {
     let mut flat = FlatDrawing::new(size);
     for layer in &drawing.layers {
-        if !layer.visible {
+        if !layer.visible || layer.frozen || !layer.plottable {
             continue;
         }
         let color = color_of(&layer.color);
@@ -419,8 +419,13 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     dxf_pair(&mut out, 2, "HEADER");
     dxf_pair(&mut out, 9, "$ACADVER");
     let custom_lines = drawing.layers.iter().any(|layer| layer.linetype != CONTINUOUS_LINETYPE || layer.lineweight > 0.0);
-    let version =
-        if custom_lines || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) { "AC1015" } else { "AC1009" };
+    let layer_flags = drawing.layers.iter().any(|layer| !layer.plottable);
+    let version = if custom_lines || layer_flags || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) {
+        "AC1015"
+    }
+    else {
+        "AC1009"
+    };
     dxf_pair(&mut out, 1, version);
     dxf_pair(&mut out, 9, "$INSUNITS");
     dxf_pair(&mut out, 70, drawing.units.dxf_insunits());
@@ -451,10 +456,20 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     for layer in &drawing.layers {
         dxf_pair(&mut out, 0, "LAYER");
         dxf_pair(&mut out, 2, dxf_layer_name(&layer.id));
-        dxf_pair(&mut out, 70, 0);
+        let mut flags = 0;
+        if layer.frozen {
+            flags |= 1;
+        }
+        if layer.locked {
+            flags |= 4;
+        }
+        dxf_pair(&mut out, 70, flags);
         dxf_pair(&mut out, 62, 7);
         dxf_pair(&mut out, 6, dxf_text(&layer.linetype));
         dxf_pair(&mut out, 370, (layer.lineweight * 100.0).round() as i64);
+        if version != "AC1009" {
+            dxf_pair(&mut out, 290, i64::from(layer.plottable));
+        }
         if layer.color != "#ffffff" {
             losses.push(Loss::warning(
                 "dxf/layer-color",

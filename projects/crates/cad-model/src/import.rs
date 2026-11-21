@@ -202,6 +202,8 @@ struct LayerEntry {
     color: Option<i64>,
     linetype: Option<String>,
     lineweight: Option<i64>,
+    frozen: bool,
+    plottable: bool,
 }
 
 fn parse_layer(block: &[Pair]) -> Option<LayerEntry> {
@@ -209,11 +211,14 @@ fn parse_layer(block: &[Pair]) -> Option<LayerEntry> {
     if name.is_empty() {
         return None;
     }
+    let flags = integer(block, 70).unwrap_or(0);
     Some(LayerEntry {
         name,
         color: integer(block, 62),
         linetype: field(block, 6).map(str::trim).filter(|name| !name.is_empty()).map(str::to_string),
         lineweight: integer(block, 370),
+        frozen: flags & 1 != 0,
+        plottable: integer(block, 290).is_none_or(|value| value != 0),
     })
 }
 
@@ -741,6 +746,8 @@ impl Reader {
                 color: "#d0d7de".to_string(),
                 visible: true,
                 locked: false,
+                frozen: false,
+                plottable: true,
                 linetype: CONTINUOUS_LINETYPE.to_string(),
                 lineweight: 0.0,
             });
@@ -792,6 +799,8 @@ impl Reader {
             layer.color = color;
             layer.linetype = linetype;
             layer.lineweight = lineweight;
+            layer.frozen = entry.frozen;
+            layer.plottable = entry.plottable;
         }
         else {
             self.drawing.layers.push(Layer {
@@ -800,6 +809,8 @@ impl Reader {
                 color,
                 visible: true,
                 locked: false,
+                frozen: entry.frozen,
+                plottable: entry.plottable,
                 linetype,
                 lineweight,
             });
@@ -1526,6 +1537,73 @@ mod tests {
 
     fn codes(losses: &[Loss]) -> Vec<&str> {
         losses.iter().map(|loss| loss.code.as_str()).collect()
+    }
+
+    #[test]
+    fn layer_freeze_and_plot_flags_are_read() {
+        let source = [
+            "0",
+            "SECTION",
+            "2",
+            "HEADER",
+            "9",
+            "$INSUNITS",
+            "70",
+            "4",
+            "0",
+            "ENDSEC",
+            "0",
+            "SECTION",
+            "2",
+            "TABLES",
+            "0",
+            "TABLE",
+            "2",
+            "LAYER",
+            "70",
+            "1",
+            "0",
+            "LAYER",
+            "2",
+            "WALLS",
+            "70",
+            "1",
+            "62",
+            "1",
+            "6",
+            "continuous",
+            "290",
+            "0",
+            "0",
+            "ENDTAB",
+            "0",
+            "ENDSEC",
+            "0",
+            "SECTION",
+            "2",
+            "ENTITIES",
+            "0",
+            "LINE",
+            "8",
+            "WALLS",
+            "10",
+            "0",
+            "20",
+            "0",
+            "11",
+            "10",
+            "21",
+            "0",
+            "0",
+            "ENDSEC",
+            "0",
+            "EOF",
+        ]
+        .join("\n");
+        let (drawing, _losses) = dxf(&source, None).expect("read layer flags");
+        let layer = drawing.layer("WALLS").expect("layer");
+        assert!(layer.frozen, "DXF flag 1 marks the layer frozen");
+        assert!(!layer.plottable, "DXF code 290 marks the layer non-plottable");
     }
 
     #[test]

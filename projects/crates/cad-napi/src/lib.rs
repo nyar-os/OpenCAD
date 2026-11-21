@@ -907,6 +907,8 @@ fn call_update_layer(handle: u64, request: &Value) -> std::result::Result<Value,
         color: request.get("color").and_then(Value::as_str).map(str::to_string),
         visible: request.get("visible").and_then(Value::as_bool),
         locked: request.get("locked").and_then(Value::as_bool),
+        frozen: request.get("frozen").and_then(Value::as_bool),
+        plottable: request.get("plottable").and_then(Value::as_bool),
         linetype: request.get("linetype").and_then(Value::as_str).map(str::to_string),
         lineweight: request.get("lineweight").and_then(Value::as_f64),
     };

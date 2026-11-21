@@ -539,14 +539,18 @@ impl<'a> Collector<'a> {
                     format!("entity `{}` sits on locked layer `{}`", entity.id, entity.layer),
                 );
             }
-            if self.layers && self.drawing.layer(&entity.layer).is_some_and(|layer| !layer.visible) {
+            if self.layers
+                && let Some(layer) = self.drawing.layer(&entity.layer)
+                && (!layer.visible || layer.frozen)
+            {
+                let state = if layer.visible { "frozen" } else { "hidden" };
                 self.push(
                     "layers/hidden",
                     Severity::Warning,
                     Some(&entity.layer),
                     Some(&entity.id),
                     true,
-                    format!("entity `{}` sits on hidden layer `{}` and is not exported", entity.id, entity.layer),
+                    format!("entity `{}` sits on {state} layer `{}` and is not exported", entity.id, entity.layer),
                 );
             }
         }

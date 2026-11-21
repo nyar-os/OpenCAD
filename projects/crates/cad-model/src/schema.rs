@@ -127,6 +127,11 @@ fn default_linetype_name() -> String {
     CONTINUOUS_LINETYPE.to_string()
 }
 
+/// Whether a layer that does not declare a plot flag is plotted.
+fn default_plottable() -> bool {
+    true
+}
+
 /// One layer of a drawing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -140,6 +145,13 @@ pub struct Layer {
     pub visible: bool,
     /// Whether new and existing geometry on the layer is writable.
     pub locked: bool,
+    /// Whether the layer is frozen. A frozen layer behaves like a hidden one:
+    /// exporters skip it and writing to it is refused.
+    #[serde(default)]
+    pub frozen: bool,
+    /// Whether plots and print exports include the layer.
+    #[serde(default = "default_plottable")]
+    pub plottable: bool,
     /// Line type id assigned to the layer's geometry.
     #[serde(default = "default_linetype_name")]
     pub linetype: String,
@@ -157,6 +169,8 @@ impl Layer {
             color: "#d0d7de".to_string(),
             visible: true,
             locked: false,
+            frozen: false,
+            plottable: true,
             linetype: CONTINUOUS_LINETYPE.to_string(),
             lineweight: 0.0,
         }
@@ -170,6 +184,8 @@ impl Layer {
             color: "#0b7285".to_string(),
             visible: true,
             locked: false,
+            frozen: false,
+            plottable: true,
             linetype: CONTINUOUS_LINETYPE.to_string(),
             lineweight: 0.0,
         }
@@ -793,6 +809,8 @@ impl Drawing {
                     "color": layer.color,
                     "visible": layer.visible,
                     "locked": layer.locked,
+                    "frozen": layer.frozen,
+                    "plottable": layer.plottable,
                     "linetype": layer.linetype,
                     "lineweight": layer.lineweight,
                     "entityCount": entity_count,

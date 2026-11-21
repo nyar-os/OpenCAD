@@ -384,6 +384,8 @@ export function updateLayer(handle: number, request: UpdateLayerRequest): LayerC
                 color: request.color,
                 visible: request.visible,
                 locked: request.locked,
+                frozen: request.frozen,
+                plottable: request.plottable,
                 linetype: request.linetype,
                 lineweight: request.lineweight,
             }),

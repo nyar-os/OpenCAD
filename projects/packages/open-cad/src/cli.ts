@@ -374,7 +374,7 @@ function describeHistory(result: HistoryResult, verb: 'undo' | 'redo'): string {
 
 function describeLayer(change: LayerChange): string {
     const layer = change.layer;
-    return `layer ${layer.id} name=${layer.name} color=${layer.color} visible=${layer.visible} locked=${layer.locked} entities=${layer.entityCount} revision=${change.revision}`;
+    return `layer ${layer.id} name=${layer.name} color=${layer.color} visible=${layer.visible} locked=${layer.locked} frozen=${layer.frozen} plottable=${layer.plottable} entities=${layer.entityCount} revision=${change.revision}`;
 }
 
 function describeMerge(result: LayerMerge): string {
@@ -1608,6 +1608,60 @@ layer
         const opened = await guard(ctx, () => app.open({ path: file }));
         try {
             const updated = await guard(ctx, () => opened.updateLayer({ layerId: name, locked }));
+            const change = layerChange(opened, updated);
+            ctx.emitResult(change, describeLayer(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+layer
+    .command('freeze', 'cli.cmd.layer-freeze')
+    .option('--name <name>', 'cli.opt.name')
+    .option('--frozen <on|off>', 'cli.opt.frozen', { enum: ['on', 'off'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        const frozen = toggle(options, 'frozen');
+        if (name === undefined || frozen === undefined) {
+            ctx.fail('open-cad.cli.layer-freeze-required', { message: '`--name <layer>` and `--frozen on|off` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const updated = await guard(ctx, () => opened.updateLayer({ layerId: name, frozen }));
+            const change = layerChange(opened, updated);
+            ctx.emitResult(change, describeLayer(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+layer
+    .command('plot', 'cli.cmd.layer-plot')
+    .option('--name <name>', 'cli.opt.name')
+    .option('--plottable <on|off>', 'cli.opt.plottable', { enum: ['on', 'off'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        const plottable = toggle(options, 'plottable');
+        if (name === undefined || plottable === undefined) {
+            ctx.fail('open-cad.cli.layer-plot-required', { message: '`--name <layer>` and `--plottable on|off` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const updated = await guard(ctx, () => opened.updateLayer({ layerId: name, plottable }));
             const change = layerChange(opened, updated);
             ctx.emitResult(change, describeLayer(change));
             return 0;
