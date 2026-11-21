@@ -344,6 +344,32 @@ test('radial and ordinate dimensions are editable entities', { skip: withAddon }
     }
 });
 
+test('offset copies circle and polyline geometry as new entities', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Offset' });
+        const circle = document.addCircle({ layer: '0', center: [0, 0], radius: 10 });
+        const grown = document.offset({ entityId: circle.id, distance: 2 });
+        assert.equal(grown.source, circle.id);
+        assert.equal(grown.entity.kind.type, 'circle');
+        if (grown.entity.kind.type === 'circle') {
+            assert.equal(grown.entity.kind.radius, 12);
+        }
+        assert.equal(document.entities, 2);
+
+        const polyline = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10]], closed: false });
+        const moved = document.offset({ entityId: polyline.id, distance: 1 });
+        assert.equal(moved.entity.kind.type, 'polyline');
+        if (moved.entity.kind.type === 'polyline') {
+            assert.deepEqual(moved.entity.kind.points, [[0, 1], [9, 1], [9, 10]]);
+        }
+        assert.equal(document.entities, 4);
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',

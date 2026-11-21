@@ -11,7 +11,8 @@ Working document core. The installed CLI and SDK can create and open `.ocad`
 drawings, add lines, circles, arcs, ellipses, polylines, text, linear, radial or
 diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
-explode a polyline and measure, move, update and delete entities, undo and redo,
+explode a polyline, offset a circle/arc/polyline and measure, move, update and
+delete entities, undo and redo,
 add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry and
 open contours, import the declared ASCII DXF subset (including SPLINE,
@@ -57,6 +58,7 @@ open-cad copy plan.ocad --ids entity-1 --dx 10 --dy 0 --count 3
 open-cad array plan.ocad --ids entity-1 --rows 2 --columns 3 --row-spacing 10 --column-spacing 10
 open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
+open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad measure plan.ocad
 
 open-cad undo plan.ocad
@@ -90,8 +92,8 @@ BREP (`MANIFOLD_SOLID_BREP`); open profiles are skipped with
 `step/open-profile`.
 
 `entity move` takes either `--dx/--dy` or `--to x,y`, never both. A locked layer
-refuses add, move, update, transform, copy, array, explode and delete with
-`drawing/layer-locked`.
+refuses add, move, update, transform, copy, array, explode, offset and delete
+with `drawing/layer-locked`.
 
 `transform` needs exactly one selection (`--ids a,b`, `--layer id` or `--all`)
 and exactly one operation (`--translate dx,dy`, `--rotate degrees --center x,y`,
@@ -104,7 +106,13 @@ optional `--row-spacing/--column-spacing`, or
 a rectangular grid creates `rows * columns - 1` copies and a polar array
 `count - 1` copies; both return the fresh ids. `explode` takes `--id` of one
 polyline and replaces it, at the same list position, with one line per edge
-(closed polylines gain the closing edge). `measure` reports bounds, width,
+(closed polylines gain the closing edge). `offset` takes `--id` of one circle,
+arc or polyline and `--distance`; it appends a new entity on the same layer
+without moving the source. A positive distance grows a radius or offsets an
+open polyline to the left of its travel direction; a negative distance shrinks
+or offsets right. Closed polylines miter every vertex. Text, point, ellipse and
+dimension entities are refused with `object/unsupported`, and a non-positive
+resulting radius with `session/argument-invalid`. `measure` reports bounds, width,
 height, entity count, path length and enclosed area: ellipse length is sampled at
 five-degree steps and area only covers closed polylines, full circles and full
 ellipses.

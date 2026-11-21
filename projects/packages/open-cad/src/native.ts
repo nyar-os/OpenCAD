@@ -45,6 +45,7 @@ export interface NativeBinding {
     drawing_copy(handle: number, requestJson: string): string;
     drawing_array(handle: number, requestJson: string): string;
     drawing_explode(handle: number, entityId: string): string;
+    drawing_offset(handle: number, requestJson: string): string;
     drawing_measure(handle: number, sheet?: string): string;
     drawing_import_dxf(requestJson: string): string;
     openGui(options?: { title?: string; contentDir?: string; width?: number; height?: number }): string;

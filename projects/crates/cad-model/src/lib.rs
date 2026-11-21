@@ -4,7 +4,7 @@
 //! list (line, circle, arc, ellipse, polyline, text, linear, radial/diameter
 //! and ordinate dimension), a
 //! process-wide handle store, JSON persistence (`.ocad`), inspection,
-//! transform/copy/measure operations, a read-only SVG preview,
+//! transform/copy/offset/measure operations, a read-only SVG preview,
 //! SVG/DXF/PDF/STEP/STL/OBJ export, a bounded undo/redo history, layer and
 //! entity management (including duplication and layer merge), an ASCII DXF
 //! reader for a declared subset and faceted BREP and mesh writers that extrude
@@ -157,8 +157,8 @@ pub fn capabilities() -> Value {
                 _ => "unsupported",
             },
         ),
-        "operations": map(&["transform", "copy", "array", "explode", "measure", "constraints", "kernel3d"], |name| match name {
-            "transform" | "copy" | "array" | "explode" | "measure" => "supported",
+        "operations": map(&["transform", "copy", "array", "explode", "offset", "measure", "constraints", "kernel3d"], |name| match name {
+            "transform" | "copy" | "array" | "explode" | "offset" | "measure" => "supported",
             _ => "unsupported",
         }),
     })
@@ -1370,6 +1370,133 @@ pub fn explode(handle: u64, entity: &str) -> Result<Value, ServiceError> {
     })
 }
 
+/// Offsets a circle, arc or polyline into a new entity on the same layer.
+///
+/// A positive `distance` grows circles and arcs and offsets an open polyline to
+/// the left of its travel direction; a negative distance shrinks or offsets to
+/// the right. Closed polylines offset around every vertex with mitered joins.
+/// Text, point, ellipse and dimension entities report `object/unsupported`; a
+/// resulting non-positive radius or a collapsed polyline reports
+/// `session/argument-invalid`; a locked layer reports `drawing/layer-locked`.
+/// The response carries `{ revision, drawing, entity, source }`.
+pub fn offset(handle: u64, entity_id: &str, distance: f64) -> Result<Value, ServiceError> {
+    if !distance.is_finite() || distance == 0.0 {
+        return Err(argument("`distance` must be a non-zero finite number"));
+    }
+    let created = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity_id)?;
+        let source = drawing.entities[index].clone();
+        if let Some(error) = locked_layer(drawing, &source.layer) {
+            return Err(error);
+        }
+        let kind = match &source.kind {
+            EntityKind::Circle { center, radius } => {
+                let offset_radius = radius + distance;
+                if offset_radius <= 0.0 {
+                    return Err(argument(format!("offsetting circle `{entity_id}` by {distance} leaves a non-positive radius")));
+                }
+                EntityKind::Circle { center: *center, radius: offset_radius }
+            }
+            EntityKind::Arc { center, radius, start_angle, end_angle } => {
+                let offset_radius = radius + distance;
+                if offset_radius <= 0.0 {
+                    return Err(argument(format!("offsetting arc `{entity_id}` by {distance} leaves a non-positive radius")));
+                }
+                EntityKind::Arc { center: *center, radius: offset_radius, start_angle: *start_angle, end_angle: *end_angle }
+            }
+            EntityKind::Polyline { points, closed } => {
+                EntityKind::Polyline { points: offset_polyline(points, *closed, distance)?, closed: *closed }
+            }
+            other => {
+                return Err(ServiceError::new(
+                    "object/unsupported",
+                    format!("entity `{entity_id}` is a {} and cannot be offset", kind_name(other)),
+                ));
+            }
+        };
+        let id = drawing.take_entity_id();
+        let entity = Entity { id, layer: source.layer.clone(), kind };
+        drawing.entities.push(entity.clone());
+        drawing.revision += 1;
+        Ok(entity)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": created,
+            "source": entity_id,
+        })
+    })
+}
+
+fn segment_normal(from: [f64; 2], to: [f64; 2]) -> Option<[f64; 2]> {
+    let dx = to[0] - from[0];
+    let dy = to[1] - from[1];
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 1e-12 { None } else { Some([-dy / length, dx / length]) }
+}
+
+fn offset_polyline(points: &[[f64; 2]], closed: bool, distance: f64) -> Result<Vec<[f64; 2]>, ServiceError> {
+    if points.len() < 2 {
+        return Err(argument("a polyline needs at least 2 vertices to offset"));
+    }
+    let repeated = closed && points.first() == points.last();
+    let unique = if repeated { &points[..points.len() - 1] } else { points };
+    let mut normals = unique
+        .windows(2)
+        .map(|pair| segment_normal(pair[0], pair[1]))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| argument("a polyline with a zero-length segment cannot be offset"))?;
+    if closed {
+        let closing = segment_normal(*unique.last().expect("non-empty"), unique[0])
+            .ok_or_else(|| argument("a polyline with a zero-length closing segment cannot be offset"))?;
+        normals.push(closing);
+    }
+    let mut moved = offset_vertices(unique, &normals, closed, distance)?;
+    if repeated {
+        moved.push(moved[0]);
+    }
+    Ok(moved)
+}
+
+fn offset_vertices(points: &[[f64; 2]], normals: &[[f64; 2]], closed: bool, distance: f64) -> Result<Vec<[f64; 2]>, ServiceError> {
+    let mut moved = Vec::with_capacity(points.len());
+    for (index, point) in points.iter().enumerate() {
+        let previous = if index > 0 {
+            Some(normals[index - 1])
+        }
+        else if closed && normals.len() == points.len() {
+            Some(normals[normals.len() - 1])
+        }
+        else {
+            None
+        };
+        let next = if index < normals.len() { Some(normals[index]) } else { None };
+        let displacement = match (previous, next) {
+            (Some(a), Some(b)) => {
+                let sum = [a[0] + b[0], a[1] + b[1]];
+                let denominator = 1.0 + a[0] * b[0] + a[1] * b[1];
+                if denominator.abs() < 1e-9 || (sum[0] * sum[0] + sum[1] * sum[1]).sqrt() < 1e-9 {
+                    [a[0] * distance, a[1] * distance]
+                }
+                else {
+                    let factor = distance / denominator;
+                    [sum[0] * factor, sum[1] * factor]
+                }
+            }
+            (Some(normal), None) | (None, Some(normal)) => [normal[0] * distance, normal[1] * distance],
+            (None, None) => return Err(argument("a polyline needs at least 2 distinct vertices to offset")),
+        };
+        let moved_point = [point[0] + displacement[0], point[1] + displacement[1]];
+        if !finite_point(moved_point) {
+            return Err(argument("the offset produces a non-finite vertex"));
+        }
+        moved.push(moved_point);
+    }
+    Ok(moved)
+}
+
 fn drawing_extents(drawing: &Drawing) -> ([f64; 2], [f64; 2], bool) {
     let mut extents: Option<Rect> = None;
     for entity in &drawing.entities {
@@ -1828,7 +1955,7 @@ mod tests {
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
         }
-        for operation in ["transform", "copy", "array", "explode", "measure"] {
+        for operation in ["transform", "copy", "array", "explode", "offset", "measure"] {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
         for operation in ["constraints", "kernel3d"] {
@@ -3564,6 +3691,61 @@ mod tests {
             assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
         }
         assert_eq!(report["passed"], json!(false));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn offset_copies_circles_and_arcs_with_a_new_radius() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
+        let grown = offset(handle, "entity-1", 2.0).expect("offset the circle outward");
+        assert_eq!(grown["entity"]["kind"]["type"], json!("circle"));
+        assert_eq!(grown["entity"]["kind"]["radius"], json!(12.0));
+        assert_eq!(grown["source"], json!("entity-1"));
+        assert_eq!(grown["revision"], json!(3));
+        let shrunk = offset(handle, "entity-1", -4.0).expect("offset the circle inward");
+        assert_eq!(shrunk["entity"]["kind"]["radius"], json!(6.0));
+        assert_eq!(offset(handle, "entity-1", -10.0).expect_err("collapsing radius").code, "session/argument-invalid");
+        assert_eq!(offset(handle, "entity-1", 0.0).expect_err("zero distance").code, "session/argument-invalid");
+
+        add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
+        let arc = offset(handle, "entity-4", 1.0).expect("offset the arc");
+        assert_eq!(arc["entity"]["kind"]["type"], json!("arc"));
+        assert_eq!(arc["entity"]["kind"]["radius"], json!(6.0));
+        assert_eq!(arc["entity"]["kind"]["start_angle"], json!(0.0));
+
+        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+        assert_eq!(offset(handle, "entity-6", 1.0).expect_err("text").code, "object/unsupported");
+        assert_eq!(offset(handle, "entity-404", 1.0).expect_err("missing").code, "object/not-found");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn offset_polylines_follow_mitered_normals() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let open = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("open polyline");
+        assert_eq!(open["entity"]["kind"]["type"], json!("polyline"));
+        let moved = offset(handle, "entity-1", 1.0).expect("offset the open polyline");
+        assert_eq!(moved["entity"]["kind"]["points"], json!([[0.0, 1.0], [9.0, 1.0], [9.0, 10.0]]));
+        assert_eq!(moved["entity"]["kind"]["closed"], json!(false));
+
+        let closed = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed polyline");
+        assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
+        let inset = offset(handle, "entity-3", 1.0).expect("offset the closed polyline inward");
+        assert_eq!(inset["entity"]["kind"]["points"], json!([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn offset_refuses_a_locked_layer() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+        add_circle(handle, "Structure", [0.0, 0.0], 4.0).expect("circle");
+        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(offset(handle, "entity-1", 1.0).expect_err("locked").code, "drawing/layer-locked");
         close(handle).expect("close");
     }
 }

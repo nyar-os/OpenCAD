@@ -43,6 +43,8 @@ import type {
     InspectReport,
     LayerMerge,
     LayerSummary,
+    OffsetRequest,
+    OffsetResult,
     MeasureResult,
     MergeLayerRequest,
     MoveEntityRequest,
@@ -363,6 +365,13 @@ export class DrawingDocument {
     /** Replaces one polyline with independent line entities. */
     explode(entityId: string): ExplodeResult {
         return this.edit((handle) => service.explode(handle, entityId), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Offsets a circle, arc or polyline into a new entity on the same layer. */
+    offset(request: OffsetRequest): OffsetResult {
+        return this.edit((handle) => service.offset(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

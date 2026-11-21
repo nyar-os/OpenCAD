@@ -49,7 +49,15 @@ export type EntityKindName =
     | 'ordinate-dimension';
 
 /** Edit operations in the capability matrix. */
-export type OperationName = 'transform' | 'copy' | 'array' | 'explode' | 'measure' | 'constraints' | 'kernel3d';
+export type OperationName =
+    | 'transform'
+    | 'copy'
+    | 'array'
+    | 'explode'
+    | 'offset'
+    | 'measure'
+    | 'constraints'
+    | 'kernel3d';
 
 /** Static render targets. */
 export type RenderFormat = 'svg' | 'png' | 'pdf';
@@ -426,6 +434,26 @@ export interface ExplodeResult {
     readonly entity: EntityId;
     readonly created: readonly EntityId[];
     readonly count: number;
+}
+
+/** Arguments of `offset()`. */
+export interface OffsetRequest {
+    readonly entityId: EntityId;
+    /** Positive grows a circle or arc and offsets left; negative shrinks or offsets right. */
+    readonly distance: number;
+}
+
+/**
+ * Result of `offset()`.
+ *
+ * The source entity stays in place and a new circle, arc or polyline is
+ * appended on the same layer.
+ */
+export interface OffsetResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly source: EntityId;
 }
 
 /**

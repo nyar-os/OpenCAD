@@ -13,7 +13,7 @@ Working document core. A `.ocad` project can be created, opened, edited, saved
 and reopened; lines, circles, arcs, ellipses, polylines, text, linear
 dimensions, radial/diameter dimensions and ordinate dimensions are real
 entities; transform (translate/rotate/scale/mirror), copy,
-rectangular/polar array, polyline explode and measure are supported; each handle
+rectangular/polar array, polyline explode, offset and measure are supported; each handle
 keeps a 32-snapshot undo/redo history;
 layers can be added, renamed, merged, hidden and locked; a drawing converts
 between millimetres and inches by scaling every length; inspection reports
@@ -57,6 +57,7 @@ open-cad copy plan.ocad --ids entity-1 --dx 10 --dy 0 --count 3
 open-cad array plan.ocad --ids entity-1 --rows 2 --columns 3 --row-spacing 10 --column-spacing 10
 open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
+open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad measure plan.ocad
 open-cad undo plan.ocad
 open-cad redo plan.ocad
@@ -138,11 +139,13 @@ What this build does NOT do
   as unsupported, and the unimplemented routes as `unsupported`. Its `entities`
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension and ordinate dimension as supported; its
-  `operations` matrix lists transform, copy, array, explode and measure as
-  supported while constraint solving and a 3D kernel stay unsupported. A
+  `operations` matrix lists transform, copy, array, explode, offset and measure
+  as supported while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
-  same. `explode` replaces one polyline with independent line entities. Document
+  same. `explode` replaces one polyline with independent line entities.
+  `offset` appends a new circle, arc or polyline: it grows or shrinks a radius,
+  or offsets polyline vertices along mitered left/right normals. Document
   checks: `units`, `layers`, `geometry`, `polylines`, `dimensions`,
   `duplicate-entity`, `zero-length` and `open-contour` run; `constraints` and
   `references` stay unsupported. `units` is conservative: it

@@ -347,6 +347,18 @@ fn drawing_explode(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Offsets a circle, arc or polyline into a new entity.
+#[function]
+fn drawing_offset(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let entity =
+        request.get("entityId").and_then(Value::as_str).ok_or_else(|| Error::new("session/argument-invalid: `entityId` is required"))?;
+    let distance = request_number(&request, "distance").map_err(Error::new)?;
+    let result = open_cad_drawing::offset(handle, entity, distance).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Measures the bounds, path length and enclosed area of an open drawing.
 #[function]
 fn drawing_measure(ctx: CallContext) -> Result<JsValue> {
@@ -1147,6 +1159,26 @@ impl IpcHandler for StudioIpcHandler {
                     Err(error) => failure(id, "explodeError", format!("{}: {}", error.code, error.message)),
                 }
             }
+            "drawing.offset" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "offsetError", "an offset request needs a drawing handle".to_string());
+                };
+                let entity = value
+                    .get("entityId")
+                    .or_else(|| value.get("entity"))
+                    .or_else(|| value.get("request").and_then(|request| request.get("entityId")))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let Some(distance) = value.get("distance").and_then(Value::as_f64)
+                else {
+                    return failure(id, "offsetError", "an offset request needs a numeric `distance`".to_string());
+                };
+                match open_cad_drawing::offset(handle, entity, distance) {
+                    Ok(result) => reply(id, "offsetResult", result),
+                    Err(error) => failure(id, "offsetError", service_failure(error)),
+                }
+            }
             "drawing.measure" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -1449,6 +1481,7 @@ register_module![
     drawing_copy,
     drawing_array,
     drawing_explode,
+    drawing_offset,
     drawing_measure,
     drawing_import_dxf,
     open_gui,

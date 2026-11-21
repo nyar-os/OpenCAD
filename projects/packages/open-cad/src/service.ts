@@ -42,6 +42,8 @@ import type {
     MeasureResult,
     MergeLayerRequest,
     MoveEntityRequest,
+    OffsetRequest,
+    OffsetResult,
     OpenCADCapabilities,
     SaveReport,
     TransformRequest,
@@ -374,6 +376,13 @@ export function array(handle: number, request: ArrayRequest): ArrayResult {
 /** Replaces one polyline with independent line entities. */
 export function explode(handle: number, entityId: string): ExplodeResult {
     return decode<ExplodeResult>(() => binding('drawing.explode').drawing_explode(handle, entityId));
+}
+
+/** Offsets a circle, arc or polyline into a new entity on the same layer. */
+export function offset(handle: number, request: OffsetRequest): OffsetResult {
+    return decode<OffsetResult>(() =>
+        binding('drawing.offset').drawing_offset(handle, JSON.stringify({ entityId: request.entityId, distance: request.distance })),
+    );
 }
 
 /** Measures bounds, path length and enclosed area. */

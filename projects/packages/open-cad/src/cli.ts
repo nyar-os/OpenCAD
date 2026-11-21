@@ -38,6 +38,7 @@ import type {
     LayerMerge,
     LayerSummary,
     MeasureResult,
+    OffsetResult,
     OpenCADCapabilities,
     Point,
     SaveReport,
@@ -239,6 +240,10 @@ function describeArray(result: ArrayResult): string {
 
 function describeExplode(result: ExplodeResult): string {
     return `exploded ${result.entity} into ${result.count} lines revision=${result.revision} created=${result.created.join(',')}`;
+}
+
+function describeOffset(result: OffsetResult): string {
+    return `offset ${result.source} into ${result.entity.id} revision=${result.revision}`;
 }
 
 function describeMeasure(result: MeasureResult): string {
@@ -1075,6 +1080,32 @@ cli
         try {
             const result = await guard(ctx, () => opened.explode(id));
             ctx.emitResult(result, describeExplode(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('offset', 'cli.cmd.offset')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--distance <number>', 'cli.opt.distance')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const distance = number(options, 'distance');
+        if (id === undefined || distance === undefined) {
+            ctx.fail('open-cad.cli.offset-required', { message: '`--id <entity>` and `--distance <number>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.offset({ entityId: id, distance }));
+            ctx.emitResult(result, describeOffset(result));
             return 0;
         } finally {
             opened.close();
