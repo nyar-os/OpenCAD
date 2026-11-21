@@ -223,6 +223,15 @@ fn drawing_add_ordinate_dimension(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Adds a hatch bounded by one closed polygon to an open drawing.
+#[function]
+fn drawing_add_hatch(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_hatch(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Deletes one entity from an open drawing.
 #[function]
 fn drawing_delete_entity(ctx: CallContext) -> Result<JsValue> {
@@ -547,6 +556,13 @@ fn call_add_ordinate_dimension(handle: u64, request: &Value) -> std::result::Res
     let offset = request.get("offset").and_then(Value::as_f64).unwrap_or(0.0);
     let text = request.get("text").and_then(Value::as_str).map(str::to_string);
     open_cad_drawing::add_ordinate_dimension(handle, &layer, origin, feature, axis, offset, text).map_err(service_failure)
+}
+
+fn call_add_hatch(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let points = request_points(request)?;
+    let pattern = request.get("pattern").and_then(Value::as_str).map(str::to_string);
+    open_cad_drawing::add_hatch(handle, &layer, points, pattern).map_err(service_failure)
 }
 
 fn call_delete_entity(handle: u64, entity: &str) -> std::result::Result<Value, String> {
@@ -997,6 +1013,17 @@ impl IpcHandler for StudioIpcHandler {
                 match call_add_ordinate_dimension(handle, &request) {
                     Ok(result) => reply(id, "addOrdinateDimensionResult", result),
                     Err(message) => failure(id, "addOrdinateDimensionError", message),
+                }
+            }
+            "drawing.addHatch" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "addHatchError", "an addHatch request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                match call_add_hatch(handle, &request) {
+                    Ok(result) => reply(id, "addHatchResult", result),
+                    Err(message) => failure(id, "addHatchError", message),
                 }
             }
             "drawing.deleteEntity" => {
@@ -1485,6 +1512,7 @@ register_module![
     drawing_add_dimension,
     drawing_add_radial_dimension,
     drawing_add_ordinate_dimension,
+    drawing_add_hatch,
     drawing_delete_entity,
     drawing_list_entities,
     drawing_undo,

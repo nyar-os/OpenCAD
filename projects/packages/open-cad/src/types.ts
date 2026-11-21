@@ -210,6 +210,13 @@ export type EntityKind =
           /** Signed perpendicular distance of the dimension line from the origin. */
           readonly offset: number;
           readonly text: string | null;
+      }
+    | {
+          readonly type: 'hatch';
+          /** Boundary vertices in order; the closing edge is implicit. */
+          readonly points: readonly Point[];
+          /** Pattern name kept as a description; `SOLID` is a solid fill. */
+          readonly pattern: string;
       };
 
 /** One drawable object. */
@@ -306,6 +313,15 @@ export interface AddOrdinateDimensionRequest {
     /** Signed perpendicular distance of the dimension line from the origin; defaults to `0`. */
     readonly offset?: number;
     readonly text?: string;
+}
+
+/** Arguments of `addHatch()`. */
+export interface AddHatchRequest {
+    readonly layer: LayerId;
+    /** At least three boundary vertices; the closing edge is implicit. */
+    readonly points: readonly Point[];
+    /** Pattern name; defaults to `SOLID`. */
+    readonly pattern?: string;
 }
 
 /** Result of an entity mutation. Carries the refreshed drawing summary. */

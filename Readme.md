@@ -11,7 +11,7 @@ Status
 
 Working document core. A `.ocad` project can be created, opened, edited, saved
 and reopened; lines, circles, arcs, ellipses, polylines, text, linear
-dimensions, radial/diameter dimensions and ordinate dimensions are real
+dimensions, radial/diameter dimensions, ordinate dimensions and hatches are real
 entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode, offset and measure are supported; each handle
 keeps a 32-snapshot undo/redo history;
@@ -47,6 +47,7 @@ open-cad entity add-circle plan.ocad --layer 0 --center 50,50 --radius 20
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 45 --offset 3
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 0 --diameter
 open-cad entity add-ordinate-dimension plan.ocad --layer dimensions --origin 0,0 --feature 50,20 --axis x --offset 10
+open-cad entity add-hatch plan.ocad --layer fills --points "0,0 80,0 80,60 0,60" --pattern ANSI31
 open-cad arc add plan.ocad --layer 0 --center 50,50 --radius 20 --start 0 --end 90
 open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotation 15
 open-cad entity move plan.ocad --id entity-1 --dx 10 --dy 5
@@ -99,11 +100,15 @@ What this build does NOT do
   ATTRIB values that follow an INSERT, and LINE, CIRCLE, ARC, ELLIPSE, POINT,
   TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND (a 3D polyline is
   projected onto the XY plane), SPLINE (read as a polyline through its fit
-  points, or its control polygon when no fit points exist) and LEADER (read as
-  an open polyline). Rotated or aligned linear DIMENSION references are read.
+  points, or its control polygon when no fit points exist), LEADER (read as
+  an open polyline) and HATCH (one closed boundary path). Rotated or aligned
+  linear DIMENSION references are read.
   ARC and ELLIPSE stay analytic, and only bulge arcs are flattened; rotated or
   aligned linear, radial, diameter and ordinate dimensions are read, while
-  angular dimensions, HATCH and MLEADER are skipped.
+  angular dimensions and MLEADER are skipped. A HATCH boundary made of line,
+  arc or polyline edges becomes a closed polygon; elliptical and spline edges
+  skip the entity, and the pattern name is kept as a description without a
+  pattern definition.
   Every approximation and skip is reported as a loss with a stable code, a
   severity (`notice` or `warning`) and a detail.
 - No STEP or OBJ reader, and no PNG writer, and no STL reader. STL and OBJ
@@ -115,7 +120,11 @@ What this build does NOT do
   triangles are skipped with `stl/degenerate-triangle` or
   `obj/degenerate-triangle`. PDF export exists as a minimal vector page and
   approximates arcs and ellipses with cubic Bezier segments; SVG and DXF export
-  also work.
+  also work. DXF export writes one HATCH record per hatch with a closed polyline
+  boundary path and, when the drawing holds a hatch, declares `$ACADVER`
+  `AC1015` instead of `AC1009`. A pattern name is stored on the record but no
+  pattern definition is emitted, so non-solid patterns are also reported as
+  `dxf/hatch-pattern`. SVG and PDF draw the hatch boundary polygon.
 - STEP export (`export --format step`) writes ISO-10303-21 AP203-style text and
   reuses the same closed-profile extrusion and ear-clipping triangulation as
   STL. Every triangle becomes one planar `ADVANCED_FACE`, and each closed
@@ -139,7 +148,7 @@ What this build does NOT do
   partial because only their export direction is implemented, STL import and DWG
   as unsupported, and the unimplemented routes as `unsupported`. Its `entities`
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
-  radial dimension and ordinate dimension as supported; its
+  radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, measure and
   stats as supported while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
@@ -153,9 +162,10 @@ What this build does NOT do
   `constraints` and `references` stay unsupported. `units` is conservative: it
   warns only when a dimension's explicit label carries a unit word or inch
   symbol that conflicts with the document unit.
-- `measure` sums line segments, polyline edges and analytic arc lengths; ellipse
-  length is sampled at five-degree steps, so it is approximate. Area covers
-  closed polylines (shoelace), full circles and full ellipses; partial curves
-  and self-intersecting polylines are not exact.
+- `measure` sums line segments, polyline edges, hatch boundaries and analytic
+  arc lengths; ellipse length is sampled at five-degree steps, so it is
+  approximate. Area covers closed polylines and hatches (shoelace), full
+  circles and full ellipses; partial curves and self-intersecting polylines are
+  not exact.
 - `stats` groups the same length and area by layer, adds per-layer entity counts
   and drawing-wide totals, so an audit can tell which layer owns the geometry.

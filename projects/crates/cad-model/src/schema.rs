@@ -198,6 +198,22 @@ pub enum EntityKind {
         #[serde(default)]
         text: Option<String>,
     },
+    /// A filled region bounded by one closed polygon.
+    ///
+    /// The pattern name is kept as a description; the exporters paint a solid
+    /// tint because no hatch pattern definition is modelled.
+    Hatch {
+        /// Boundary vertices in order; the closing edge is implicit.
+        points: Vec<[f64; 2]>,
+        /// Pattern name, `SOLID` for a solid fill.
+        #[serde(default = "default_hatch_pattern")]
+        pattern: String,
+    },
+}
+
+/// Default pattern of a [`EntityKind::Hatch`] that does not name one.
+pub fn default_hatch_pattern() -> String {
+    "SOLID".to_string()
 }
 
 /// Axis an ordinate dimension measures.
@@ -262,6 +278,7 @@ impl Entity {
                 let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
                 vec![*origin, *feature, base, guide]
             }
+            EntityKind::Hatch { points, .. } => points.clone(),
         }
     }
 
@@ -286,6 +303,7 @@ impl Entity {
             EntityKind::Dimension { from, .. } => *from,
             EntityKind::RadialDimension { center, .. } => *center,
             EntityKind::OrdinateDimension { origin, .. } => *origin,
+            EntityKind::Hatch { points, .. } => points.first().copied().unwrap_or([0.0, 0.0]),
         }
     }
 
@@ -319,6 +337,11 @@ impl Entity {
                 shift(origin);
                 shift(feature);
             }
+            EntityKind::Hatch { points, .. } => {
+                for point in points {
+                    shift(point);
+                }
+            }
         }
     }
 
@@ -348,6 +371,7 @@ impl Entity {
             EntityKind::OrdinateDimension { origin, feature, offset, .. } => {
                 finite_point(*origin) && finite_point(*feature) && offset.is_finite()
             }
+            EntityKind::Hatch { points, .. } => points.iter().all(|point| finite_point(*point)),
         }
     }
 
@@ -369,6 +393,9 @@ impl Entity {
             }
             EntityKind::RadialDimension { radius, .. } if non_positive(*radius) => {
                 return Err(format!("entity `{}` has a non-positive radius", self.id));
+            }
+            EntityKind::Hatch { points, .. } if points.len() < 3 => {
+                return Err(format!("entity `{}` hatch needs at least 3 boundary points", self.id));
             }
             _ => {}
         }

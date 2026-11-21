@@ -14,6 +14,7 @@ import type {
     AddCircleRequest,
     AddDimensionRequest,
     AddEllipseRequest,
+    AddHatchRequest,
     AddLayerRequest,
     AddLineRequest,
     AddOrdinateDimensionRequest,
@@ -251,6 +252,20 @@ export function addOrdinateDimension(handle: number, request: AddOrdinateDimensi
                 axis: request.axis,
                 offset: request.offset ?? 0,
                 text: request.text,
+            }),
+        ),
+    );
+}
+
+/** Adds a filled hatch bounded by one closed polygon. */
+export function addHatch(handle: number, request: AddHatchRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addHatch').drawing_add_hatch(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                points: request.points,
+                pattern: request.pattern,
             }),
         ),
     );

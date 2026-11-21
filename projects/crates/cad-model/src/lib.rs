@@ -30,8 +30,8 @@ mod store;
 
 pub use schema::{
     CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units, arc_point, arc_sweep,
-    ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc,
-    sample_ellipse,
+    default_hatch_pattern, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label,
+    radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -163,10 +163,11 @@ pub fn capabilities() -> Value {
                 "dimension",
                 "radial-dimension",
                 "ordinate-dimension",
+                "hatch",
             ],
             |name| match name {
                 "line" | "circle" | "arc" | "ellipse" | "point" | "polyline" | "text" | "dimension" | "radial-dimension"
-                | "ordinate-dimension" => "supported",
+                | "ordinate-dimension" | "hatch" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -596,6 +597,20 @@ pub fn add_ordinate_dimension(
     push_entity(handle, layer, EntityKind::OrdinateDimension { origin, feature, axis, offset, text })
 }
 
+/// Adds a filled hatch bounded by one closed polygon.
+///
+/// The boundary needs at least three distinct vertices; the closing edge is
+/// implicit. `pattern` is the pattern name (`SOLID` for a solid fill) and is
+/// kept as a description, because no pattern definition is modelled.
+pub fn add_hatch(handle: u64, layer: &str, points: Vec<[f64; 2]>, pattern: Option<String>) -> Result<Value, ServiceError> {
+    require_finite(&points, "points")?;
+    if points.len() < 3 {
+        return Err(argument("a hatch needs at least 3 boundary points"));
+    }
+    let pattern = pattern.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).unwrap_or_else(default_hatch_pattern);
+    push_entity(handle, layer, EntityKind::Hatch { points, pattern })
+}
+
 /// Deletes one entity by id.
 pub fn delete_entity(handle: u64, entity: &str) -> Result<Value, ServiceError> {
     store::edit(handle, |drawing| {
@@ -965,6 +980,7 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                     rotate(origin);
                     rotate(feature);
                 }
+                EntityKind::Hatch { points, .. } => points.iter_mut().for_each(rotate),
             }
         }
         TransformOp::Scale { factor, cx, cy } => {
@@ -1009,6 +1025,7 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                     scale(feature);
                     *offset *= factor;
                 }
+                EntityKind::Hatch { points, .. } => points.iter_mut().for_each(scale),
             }
         }
         TransformOp::Mirror { axis, at } => {
@@ -1064,6 +1081,7 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                         *offset = -*offset;
                     }
                 }
+                EntityKind::Hatch { points, .. } => points.iter_mut().for_each(mirror),
             }
         }
     }
@@ -1233,6 +1251,7 @@ fn kind_name(kind: &EntityKind) -> &'static str {
         EntityKind::Dimension { .. } => "dimension",
         EntityKind::RadialDimension { .. } => "radial dimension",
         EntityKind::OrdinateDimension { .. } => "ordinate dimension",
+        EntityKind::Hatch { .. } => "hatch",
     }
 }
 
@@ -1580,6 +1599,13 @@ fn entity_length_area(kind: &EntityKind) -> (f64, f64) {
             (length, area)
         }
         EntityKind::Circle { radius, .. } => (0.0, std::f64::consts::PI * radius * radius),
+        EntityKind::Hatch { points, .. } => {
+            let mut length = curve_length(points);
+            if points.len() > 1 {
+                length += point_distance(points[0], points[points.len() - 1]);
+            }
+            (length, polyline_area(points))
+        }
         EntityKind::Point { .. }
         | EntityKind::Text { .. }
         | EntityKind::Dimension { .. }
@@ -2030,7 +2056,7 @@ mod tests {
         for operation in ["constraints", "kernel3d"] {
             assert_eq!(matrix["operations"][operation], json!("unsupported"), "operation `{operation}`");
         }
-        for entity in ["radial-dimension", "ordinate-dimension"] {
+        for entity in ["radial-dimension", "ordinate-dimension", "hatch"] {
             assert_eq!(matrix["entities"][entity], json!("supported"), "entity `{entity}`");
         }
         assert_eq!(matrix["renderers"]["svg"], json!("supported"));
@@ -3640,6 +3666,56 @@ mod tests {
             _ => None,
         });
         assert_eq!(polyline, Some((vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true)));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn hatch_round_trips_through_dxf_with_its_pattern_name() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let hatch =
+            add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], Some("ANSI31".to_string())).expect("hatch");
+        assert_eq!(hatch["entity"]["kind"]["type"], json!("hatch"));
+        assert_eq!(hatch["entity"]["kind"]["pattern"], json!("ANSI31"));
+        let measured = measure(handle, None).expect("measure");
+        assert_eq!(measured["area"], json!(16.0));
+        assert_eq!(measured["length"], json!(16.0));
+
+        let (text, losses) = exchange::dxf(&drawing_of(handle));
+        assert!(text.contains("AC1015"), "a hatch needs a DXF version above R12");
+        assert!(text.contains("0\nHATCH\n"));
+        assert!(text.contains("2\nANSI31\n"));
+        assert!(losses.iter().any(|loss| loss.code == "dxf/hatch-pattern"));
+
+        let (imported, losses) = import::dxf(&text, None).expect("import the exported HATCH");
+        assert_eq!(imported.entities.len(), 1, "{losses:?}");
+        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+        let EntityKind::Hatch { points, pattern } = &imported.entities[0].kind
+        else {
+            panic!("expected a hatch, got {:?}", imported.entities[0].kind);
+        };
+        assert_eq!(points.as_slice(), &[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]);
+        assert_eq!(pattern, "ANSI31");
+        assert!(losses.iter().any(|loss| loss.code == "dxf/hatch-boundary"));
+
+        assert!(exchange::svg(&drawing_of(handle)).contains("data-open-cad"));
+
+        let solid = create(CreateRequest::default()).expect("create solid drawing");
+        let solid_handle = handle_of(&solid);
+        add_hatch(solid_handle, DEFAULT_LAYER, vec![[10.0, 10.0], [12.0, 10.0], [11.0, 12.0]], None).expect("solid hatch");
+        let (text, losses) = exchange::dxf(&drawing_of(solid_handle));
+        assert!(!losses.iter().any(|loss| loss.code == "dxf/hatch-pattern"), "{losses:?}");
+        assert!(text.contains("2\nSOLID\n"));
+        close(solid_handle).expect("close solid drawing");
+
+        assert_eq!(
+            add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0]], None).expect_err("too few points").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0], [f64::NAN, 2.0]], None).expect_err("non-finite").code,
+            "session/argument-invalid"
+        );
         close(handle).expect("close");
     }
 

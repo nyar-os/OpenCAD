@@ -292,6 +292,16 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
                 text_style.clone(),
             ));
         }
+        EntityKind::Hatch { points, .. } => {
+            if points.len() < 3 {
+                return;
+            }
+            let points = points.iter().map(|point| map(*point)).collect::<Vec<_>>();
+            let mut style = stroke_style.clone();
+            style.fill = Some(color);
+            style.opacity = 0.35;
+            flat.push(Element::new(Shape::Polygon { points }, style));
+        }
     }
 }
 
@@ -372,6 +382,34 @@ fn dxf_text_entity(out: &mut String, layer: &str, at: [f64; 2], height: f64, con
     dxf_pair(out, 1, dxf_text(content));
 }
 
+/// Writes one HATCH with a single external polygon boundary made of line edges.
+///
+/// The boundary is stored once and reused by every edge, which is how DXF
+/// describes a closed polygonal path. The pattern name is written on code 2;
+/// no pattern definition is emitted, so a non-solid pattern is reported as a
+/// loss by the caller.
+fn dxf_hatch(out: &mut String, layer: &str, points: &[[f64; 2]], pattern: &str) {
+    let solid = pattern.eq_ignore_ascii_case("SOLID") || pattern.trim().is_empty();
+    dxf_pair(out, 0, "HATCH");
+    dxf_pair(out, 8, dxf_layer_name(layer));
+    dxf_pair(out, 2, dxf_text(pattern));
+    dxf_pair(out, 70, if solid { 1 } else { 0 });
+    dxf_pair(out, 71, 0);
+    dxf_pair(out, 91, 1);
+    dxf_pair(out, 92, 1);
+    dxf_pair(out, 72, 0);
+    dxf_pair(out, 73, 1);
+    dxf_pair(out, 93, points.len());
+    for point in points {
+        dxf_pair(out, 10, num_exact(point[0]));
+        dxf_pair(out, 20, num_exact(point[1]));
+    }
+    dxf_pair(out, 97, 0);
+    dxf_pair(out, 75, 0);
+    dxf_pair(out, 76, 1);
+    dxf_pair(out, 98, 0);
+}
+
 /// Renders one drawing to ASCII DXF R12 and reports what the target lost.
 pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     let mut out = String::new();
@@ -380,7 +418,8 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     dxf_pair(&mut out, 0, "SECTION");
     dxf_pair(&mut out, 2, "HEADER");
     dxf_pair(&mut out, 9, "$ACADVER");
-    dxf_pair(&mut out, 1, "AC1009");
+    let version = if drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) { "AC1015" } else { "AC1009" };
+    dxf_pair(&mut out, 1, version);
     dxf_pair(&mut out, 9, "$INSUNITS");
     dxf_pair(&mut out, 70, drawing.units.dxf_insunits());
     dxf_pair(&mut out, 0, "ENDSEC");
@@ -532,6 +571,26 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
                 match text {
                     Some(label) => dxf_pair(&mut out, 1, dxf_text(label)),
                     None => dxf_pair(&mut out, 1, "<>"),
+                }
+            }
+            EntityKind::Hatch { points, pattern } => {
+                if points.len() < 3 {
+                    losses.push(Loss::warning(
+                        "dxf/hatch-boundary",
+                        Some(&entity.layer),
+                        Some(&entity.id),
+                        format!("hatch `{}` has fewer than 3 boundary points and was skipped", entity.id),
+                    ));
+                    continue;
+                }
+                dxf_hatch(&mut out, &entity.layer, points, pattern);
+                if !pattern.eq_ignore_ascii_case("SOLID") && !pattern.trim().is_empty() {
+                    losses.push(Loss::warning(
+                        "dxf/hatch-pattern",
+                        Some(&entity.layer),
+                        Some(&entity.id),
+                        format!("hatch pattern `{pattern}` is written by name; no pattern definition is emitted"),
+                    ));
                 }
             }
         }

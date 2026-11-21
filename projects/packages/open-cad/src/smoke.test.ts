@@ -344,6 +344,23 @@ test('radial and ordinate dimensions are editable entities', { skip: withAddon }
     }
 });
 
+test('a hatch keeps its closed boundary and pattern name', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Hatch' });
+        const solid = document.addHatch({ layer: 'fills', points: [[0, 0], [10, 0], [10, 10], [0, 10]] });
+        assert.equal(solid.kind.type, 'hatch');
+        const patterned = document.addHatch({ layer: 'fills', points: [[20, 0], [30, 0], [25, 8]], pattern: 'ANSI31' });
+        assert.equal(patterned.kind.type, 'hatch');
+        assert.deepEqual(document.measure().area, 140);
+        assert.equal(document.stats().totals.entities, 2);
+        assert.equal(document.inspect({ checks: ['geometry'] }).issues.length, 0);
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('offset copies circle and polyline geometry as new entities', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

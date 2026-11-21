@@ -547,6 +547,39 @@ entity
     });
 
 entity
+    .command('add-hatch', 'cli.cmd.add-hatch')
+    .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
+    .option('--points <list>', 'cli.opt.points')
+    .option('--pattern <name>', 'cli.opt.pattern')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const parsed = points(options, 'points');
+        if (parsed === undefined) {
+            ctx.fail('open-cad.cli.points-required', { message: '`--points "0,0 10,0 10,10"` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addHatch({
+                    layer: text(options, 'layer') ?? '0',
+                    points: parsed,
+                    pattern: text(options, 'pattern'),
+                }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
     .command('add-text', 'cli.cmd.add-text')
     .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
     .option('--at <x,y>', 'cli.opt.at')

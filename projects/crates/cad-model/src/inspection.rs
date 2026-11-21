@@ -506,6 +506,28 @@ impl<'a> Collector<'a> {
                         );
                     }
                 }
+                EntityKind::Hatch { points, pattern } => {
+                    if self.geometry && points.len() < 3 {
+                        self.push(
+                            "geometry/insufficient-points",
+                            Severity::Error,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("hatch `{}` has {} boundary point(s); at least 3 are required", entity.id, points.len()),
+                        );
+                    }
+                    if self.geometry && pattern.trim().is_empty() {
+                        self.push(
+                            "geometry/empty-hatch-pattern",
+                            Severity::Warning,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("hatch `{}` has no pattern name; it is drawn as a solid fill", entity.id),
+                        );
+                    }
+                }
             }
             if self.layers && locked.contains(&entity.layer.as_str()) {
                 self.push(

@@ -307,6 +307,139 @@ fn flatten_vertices(vertices: &[Vertex], closed: bool) -> Vec<[f64; 2]> {
     points
 }
 
+/// One HATCH boundary read from the entity body.
+struct HatchData {
+    points: Vec<[f64; 2]>,
+    pattern: String,
+    /// Boundary paths that used a bulge arc or were flattened.
+    bulges: usize,
+    /// Edge types the reader cannot represent; the whole hatch is skipped.
+    curved_edges: usize,
+}
+
+/// Index of the next group code that starts a new boundary path or ends the
+/// path list; used to bound one edge record.
+fn hatch_run_end(block: &[Pair], start: usize) -> usize {
+    let mut end = start;
+    while end < block.len() && !matches!(block[end].code, 72 | 91 | 92 | 97 | 98) {
+        end += 1;
+    }
+    end
+}
+
+/// Reads the vertices of a polyline boundary path, including their bulges.
+fn hatch_polyline_vertices(block: &[Pair], start: usize) -> Vec<Vertex> {
+    let mut vertices: Vec<Vertex> = Vec::new();
+    let mut pending_x: Option<f64> = None;
+    let mut cursor = start;
+    while cursor < block.len() {
+        let pair = &block[cursor];
+        match pair.code {
+            10 => {
+                pending_x = pair.value.trim().parse::<f64>().ok().filter(|value| value.is_finite());
+            }
+            20 => {
+                if let (Some(x), Ok(y)) = (pending_x.take(), pair.value.trim().parse::<f64>())
+                    && y.is_finite()
+                {
+                    vertices.push(Vertex { x, y, bulge: 0.0 });
+                }
+            }
+            42 => {
+                if let (Some(vertex), Ok(bulge)) = (vertices.last_mut(), pair.value.trim().parse::<f64>())
+                    && bulge.is_finite()
+                {
+                    vertex.bulge = bulge;
+                }
+            }
+            92 | 97 | 98 => break,
+            _ => {}
+        }
+        cursor += 1;
+    }
+    vertices
+}
+
+/// Samples one DXF arc edge into points between its two angles.
+fn hatch_arc_edge(edge: &[Pair]) -> Option<Vec<[f64; 2]>> {
+    let center = point_at(edge, 10, 20)?;
+    let radius = number(edge, 40).filter(|radius| *radius > 0.0)?;
+    let start = number(edge, 50).unwrap_or(0.0);
+    let end = number(edge, 51).unwrap_or(start + 360.0);
+    let counter_clockwise = integer(edge, 73).is_none_or(|flag| flag != 0);
+    let segments = segments_for((end - start).abs().rem_euclid(360.0).max(0.0));
+    let mut points = Vec::with_capacity(segments + 1);
+    for step in 0..=segments {
+        let fraction = step as f64 / segments as f64;
+        let angle = if counter_clockwise { start + (end - start) * fraction } else { start - (start - end) * fraction };
+        points.push([center[0] + radius * angle.to_radians().cos(), center[1] + radius * angle.to_radians().sin()]);
+    }
+    Some(points)
+}
+
+/// Reads the boundary points of the first HATCH path in an entity body.
+fn parse_hatch(block: &[Pair]) -> Option<HatchData> {
+    let solid = integer(block, 70).is_some_and(|flags| flags & 1 == 1);
+    let pattern = field(block, 2).map(str::trim).filter(|name| !name.is_empty()).unwrap_or("SOLID").to_string();
+    let start = block.iter().position(|pair| pair.code == 92)?;
+    let flags = integer(&block[start..], 92).unwrap_or(1);
+    let mut curved_edges = 0usize;
+    let mut bulges = 0usize;
+    let mut points = if flags & 2 == 0 {
+        let vertices = hatch_polyline_vertices(block, start + 1);
+        if vertices.iter().any(|vertex| vertex.bulge.abs() > 1e-12) {
+            bulges += 1;
+        }
+        flatten_vertices(&vertices, true)
+    }
+    else {
+        let mut points: Vec<[f64; 2]> = Vec::new();
+        let mut cursor = start + 1;
+        while cursor < block.len() {
+            if matches!(block[cursor].code, 92 | 97 | 98) {
+                break;
+            }
+            if block[cursor].code != 72 {
+                cursor += 1;
+                continue;
+            }
+            let edge_type = integer(&block[cursor..], 72).unwrap_or(0);
+            let end = hatch_run_end(block, cursor + 1);
+            let edge = &block[cursor + 1..end];
+            match edge_type {
+                1 => {
+                    if let (Some(from), Some(to)) = (point_at(edge, 10, 20), point_at(edge, 11, 21)) {
+                        points.push(from);
+                        points.push(to);
+                    }
+                }
+                2 => {
+                    if let Some(sampled) = hatch_arc_edge(edge) {
+                        points.extend(sampled);
+                    }
+                    else {
+                        curved_edges += 1;
+                    }
+                }
+                _ => curved_edges += 1,
+            }
+            cursor = end;
+        }
+        points
+    };
+
+    let mut unique: Vec<[f64; 2]> = Vec::with_capacity(points.len());
+    for point in points.drain(..) {
+        if unique.last() != Some(&point) {
+            unique.push(point);
+        }
+    }
+    while unique.len() > 1 && unique.first() == unique.last() {
+        unique.pop();
+    }
+    Some(HatchData { points: unique, pattern: if solid { "SOLID".to_string() } else { pattern }, bulges, curved_edges })
+}
+
 /// Accumulated placement of a block reference.
 #[derive(Debug, Clone, Copy)]
 struct Xform {
@@ -391,6 +524,8 @@ struct Reader {
     spline_control_polygons: usize,
     leaders: usize,
     projected_polylines: usize,
+    hatches: usize,
+    hatch_bulges: usize,
 }
 
 impl Reader {
@@ -412,6 +547,8 @@ impl Reader {
             spline_control_polygons: 0,
             leaders: 0,
             projected_polylines: 0,
+            hatches: 0,
+            hatch_bulges: 0,
         }
     }
 
@@ -635,6 +772,17 @@ impl Reader {
                     index = cursor.max(end);
                     continue;
                 }
+                "HATCH" => match parse_hatch(block) {
+                    Some(data) if data.curved_edges > 0 => self.skip("HATCH (curved boundary edge)", block),
+                    Some(data) if data.points.len() >= 3 => {
+                        self.hatches += 1;
+                        self.hatch_bulges += data.bulges;
+                        let points = data.points.into_iter().map(|point| xform.apply(point)).collect();
+                        self.push(layer, EntityKind::Hatch { points, pattern: data.pattern });
+                    }
+                    Some(_) => self.skip("HATCH (fewer than three boundary points)", block),
+                    None => self.skip("HATCH (no boundary path)", block),
+                },
                 "DIMENSION" => {
                     let dimension_type = match integer(block, 70) {
                         Some(flags) => flags & 0x07,
@@ -908,6 +1056,18 @@ impl Reader {
                 ),
             ));
         }
+        if self.hatches > 0 {
+            losses.push(Loss::notice(
+                "dxf/hatch-boundary",
+                format!("{} HATCH entity/entities were imported as closed filled polygons", self.hatches),
+            ));
+        }
+        if self.hatch_bulges > 0 {
+            losses.push(Loss::notice(
+                "dxf/hatch-bulge",
+                format!("{} HATCH boundary path(s) contained bulge arcs that were flattened to line segments", self.hatch_bulges),
+            ));
+        }
 
         (self.drawing, losses)
     }
@@ -1039,6 +1199,52 @@ mod tests {
 
     fn codes(losses: &[Loss]) -> Vec<&str> {
         losses.iter().map(|loss| loss.code.as_str()).collect()
+    }
+
+    #[test]
+    fn hatch_import_reads_a_polyline_boundary_and_keeps_its_pattern() {
+        let entities = [
+            "0", "HATCH", "8", "FILL", "2", "ANSI31", "70", "0", "71", "0", "91", "1", "92", "1", "72", "0", "73", "1", "93", "3", "10", "0",
+            "20", "0", "10", "4", "20", "0", "10", "4", "20", "4", "97", "0", "75", "0", "76", "1", "98", "0",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read hatch");
+
+        assert_eq!(drawing.entities.len(), 1);
+        let EntityKind::Hatch { points, pattern } = &drawing.entities[0].kind
+        else {
+            panic!("expected a hatch, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!(points.as_slice(), &[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0]]);
+        assert_eq!(pattern, "ANSI31");
+        assert_eq!(drawing.entities[0].layer, "FILL");
+        assert!(codes(&losses).contains(&"dxf/hatch-boundary"));
+        assert!(!codes(&losses).contains(&"dxf/unsupported-entity"), "{:?}", codes(&losses));
+    }
+
+    #[test]
+    fn hatch_import_samples_line_and_arc_edges_and_skips_unknown_edges() {
+        let entities = [
+            "0", "HATCH", "8", "FILL", "2", "SOLID", "70", "1", "91", "1", "92", "3", "93", "2", "72", "1", "10", "0", "20", "0", "11", "4",
+            "21", "0", "72", "2", "10", "4", "20", "0", "40", "2", "50", "0", "51", "180", "73", "1", "97", "0", "75", "0", "76", "1", "98",
+            "0",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read edge hatch");
+        assert_eq!(drawing.entities.len(), 1, "{:?}", codes(&losses));
+        let EntityKind::Hatch { points, .. } = &drawing.entities[0].kind
+        else {
+            panic!("expected a hatch, got {:?}", drawing.entities[0].kind);
+        };
+        assert!(points.len() > 4, "the arc edge is sampled: {points:?}");
+        assert_eq!(points[0], [0.0, 0.0]);
+        assert!((points.last().expect("points")[1]).abs() < 1e-9);
+
+        let spline_edge =
+            ["0", "HATCH", "8", "FILL", "2", "SOLID", "91", "1", "92", "3", "93", "1", "72", "4", "94", "3", "97", "0"].join("\n");
+        let (drawing, losses) = dxf(&document("", &spline_edge), None).expect("read unsupported hatch");
+        assert!(drawing.entities.is_empty());
+        assert!(losses.iter().any(|loss| loss.code == "dxf/unsupported-entity" && loss.detail.contains("curved")));
     }
 
     #[test]

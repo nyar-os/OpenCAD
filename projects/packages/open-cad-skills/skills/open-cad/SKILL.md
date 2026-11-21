@@ -8,8 +8,8 @@ description: Create, revise, inspect and deliver technical drawings with OpenCAD
 ## Status
 
 Working document core. The installed CLI and SDK can create and open `.ocad`
-drawings, add lines, circles, arcs, ellipses, polylines, text, linear, radial or
-diameter and ordinate dimensions,
+drawings, add lines, circles, arcs, ellipses, polylines, text, hatches, linear,
+radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline and measure, move, update and
 delete entities, undo and redo,
@@ -17,8 +17,8 @@ add, rename, merge, hide and lock layers, save atomically, inspect units, layers
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
 the declared ASCII DXF subset (including SPLINE,
-LEADER and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL, OBJ or
-STEP.
+LEADER, HATCH and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL,
+OBJ or STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
 reader and STL/OBJ import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
@@ -45,6 +45,7 @@ open-cad entity add-dimension plan.ocad --layer dimensions --from 0,0 --to 100,0
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 45 --offset 3
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 0 --diameter
 open-cad entity add-ordinate-dimension plan.ocad --layer dimensions --origin 0,0 --feature 50,20 --axis x --offset 10
+open-cad entity add-hatch plan.ocad --layer fills --points "0,0 80,0 80,60 0,60" --pattern ANSI31
 open-cad entity move plan.ocad --id entity-1 --dx 10 --dy 5
 open-cad entity update plan.ocad --id entity-3 --text "Hall" --height 3
 open-cad entity update plan.ocad --id entity-2 --radius 25
@@ -141,11 +142,14 @@ start a new document.
 - Entity ids are deterministic: `entity-1`, `entity-2`, ... and are never
   reused after a delete.
 - Entities are `line`, `circle`, `arc`, `ellipse`, `point`, `polyline`, `text`,
-  `dimension` (linear), `radial_dimension`, `ordinate_dimension`. A radial
+  `dimension` (linear), `radial_dimension`, `ordinate_dimension` and `hatch`. A
+  radial
   dimension stores a centre, radius, an angle locating the measured point and a
   leader offset; `diameter` switches the measured value from radius to diameter.
   An ordinate dimension stores a datum origin, a feature point, an `x` or `y`
-  axis and a perpendicular offset. Arcs store centre, radius and
+  axis and a perpendicular offset. A hatch stores one closed boundary polygon
+  and a pattern name (`SOLID` for a solid fill); the pattern is a description,
+  not a rendered pattern definition. Arcs store centre, radius and
   counter-clockwise start/end degrees. Ellipses store centre, `rx`/`ry`, a
   major-axis rotation and start/end parameters measured from that axis.
 - The revision increments on every mutation. Save does not change it, so a
@@ -162,9 +166,11 @@ start a new document.
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
   POLYLINE/VERTEX/SEQEND (3D polylines are projected onto the XY plane), SPLINE
   (a polyline through the fit points, or the control polygon when there are no
-  fit points) and LEADER (an open polyline). Rotated or aligned linear, radial,
+  fit points) and LEADER (an open polyline). HATCH imports one closed boundary
+  path made of line, arc or polyline edges as a filled polygon; elliptical or
+  spline boundary edges skip the entity. Rotated or aligned linear, radial,
   diameter and ordinate DIMENSION references are read. ARC and ELLIPSE stay
-  analytic; only polyline bulge arcs are flattened. HATCH, MLEADER and angular
+  analytic; only polyline bulge arcs are flattened. MLEADER and angular
   dimensions are reported as `dxf/unsupported-entity`, and every approximation
   is reported with its own notice code. The import result carries `losses` as
   `{ code, severity, detail }`.

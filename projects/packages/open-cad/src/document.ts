@@ -18,6 +18,7 @@ import type {
     AddCircleRequest,
     AddDimensionRequest,
     AddEllipseRequest,
+    AddHatchRequest,
     AddLayerRequest,
     AddLineRequest,
     AddOrdinateDimensionRequest,
@@ -268,6 +269,11 @@ export class DrawingDocument {
     /** Adds an ordinate dimension and returns the created entity. */
     addOrdinateDimension(request: AddOrdinateDimensionRequest): Entity {
         return this.adopt(this.edit((handle) => service.addOrdinateDimension(handle, request)));
+    }
+
+    /** Adds a filled hatch bounded by one closed polygon. */
+    addHatch(request: AddHatchRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addHatch(handle, request)));
     }
 
     /** Deletes one entity. */
