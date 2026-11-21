@@ -274,6 +274,39 @@ test('layer merge moves references and removes the source layer', { skip: withAd
     }
 });
 
+test('unit conversion scales lengths and round trips', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Units', units: 'mm' });
+        document.addLine({ layer: '0', from: [0, 0], to: [25.4, 0] });
+        const revision = document.revision;
+
+        const inches = document.convertUnits({ to: 'inch' });
+        assert.equal(inches.from, 'mm');
+        assert.equal(inches.to, 'inch');
+        assert.equal(inches.converted, true);
+        assert.equal(document.units, 'inch');
+        assert.equal(inches.revision, revision + 1);
+        const line = document.listEntities()[0];
+        if (line?.kind.type === 'line') {
+            assert.ok(Math.abs(line.kind.to[0] - 1) < 1e-12);
+        }
+
+        const same = document.convertUnits({ to: 'inch' });
+        assert.equal(same.converted, false);
+        assert.equal(same.revision, inches.revision);
+
+        const millimetres = document.convertUnits({ to: 'mm' });
+        assert.equal(millimetres.converted, true);
+        const back = document.listEntities()[0];
+        if (back?.kind.type === 'line') {
+            assert.ok(Math.abs(back.kind.to[0] - 25.4) < 1e-9);
+        }
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',

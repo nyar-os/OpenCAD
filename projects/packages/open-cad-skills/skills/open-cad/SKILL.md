@@ -64,6 +64,8 @@ open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
 
+open-cad units convert plan.ocad --to inch
+
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
 open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
@@ -111,7 +113,10 @@ start a new document.
 ## Drawing model
 
 - A `.ocad` file is UTF-8 JSON tagged `open-cad-drawing`, version `1`.
-- Units are `mm` or `inch`.
+- Units are `mm` or `inch`. `units convert --to mm|inch` scales every length by
+  25.4 or 1 / 25.4 and changes the declared unit. Explicit dimension labels are
+  kept as text, so a label that conflicts with the new unit is still reported by
+  the `units` check.
 - Every drawing starts with layer `0` (colour `#d0d7de`) and layer `dimensions`
   (colour `#0b7285`).
 - Entity ids are deterministic: `entity-1`, `entity-2`, ... and are never

@@ -461,6 +461,24 @@ export interface LayerMerge {
     readonly moved: number;
 }
 
+/** Arguments of `convertUnits()`. */
+export interface ConvertUnitsRequest {
+    /** Unit the drawing converts to. */
+    readonly to: 'mm' | 'inch';
+}
+
+/** Result of `convertUnits()`. */
+export interface UnitsConversion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly from: 'mm' | 'inch';
+    readonly to: 'mm' | 'inch';
+    /** Multiplier applied to every length; `1` for a no-op conversion. */
+    readonly factor: number;
+    /** False when the drawing already used the requested unit. */
+    readonly converted: boolean;
+}
+
 /** Arguments of `OpenCAD.importDxf()`. */
 export interface ImportDxfRequest {
     /** Path of the ASCII DXF file. */

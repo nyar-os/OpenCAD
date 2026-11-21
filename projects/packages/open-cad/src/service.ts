@@ -22,6 +22,7 @@ import type {
     ArrayResult,
     CopyRequest,
     CopyResult,
+    ConvertUnitsRequest,
     Drawing,
     EntityChange,
     EntityDeletion,
@@ -43,6 +44,7 @@ import type {
     SaveReport,
     TransformRequest,
     TransformResult,
+    UnitsConversion,
     UpdateEntityRequest,
     UpdateLayerRequest,
 } from './types.js';
@@ -260,6 +262,11 @@ export function updateLayer(handle: number, request: UpdateLayerRequest): LayerC
 /** Moves every entity of one layer onto another and drops the empty source. */
 export function mergeLayer(handle: number, request: MergeLayerRequest): LayerMerge {
     return decode<LayerMerge>(() => binding('drawing.mergeLayer').drawing_merge_layer(handle, request.from, request.to));
+}
+
+/** Converts one open drawing between millimetres and inches. */
+export function convertUnits(handle: number, request: ConvertUnitsRequest): UnitsConversion {
+    return decode<UnitsConversion>(() => binding('drawing.convertUnits').drawing_convert_units(handle, request.to));
 }
 
 /** Moves one entity by an offset or to an absolute anchor. */

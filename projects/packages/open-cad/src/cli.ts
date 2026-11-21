@@ -44,6 +44,7 @@ import type {
     TransformOperation,
     TransformResult,
     TransformTarget,
+    UnitsConversion,
 } from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -262,6 +263,10 @@ function describeLayer(change: LayerChange): string {
 
 function describeMerge(result: LayerMerge): string {
     return `merged layer ${result.from} into ${result.to} moved=${result.moved} revision=${result.revision} layers=${result.drawing.layers.length}`;
+}
+
+function describeUnits(result: UnitsConversion): string {
+    return `units ${result.from} -> ${result.to} factor=${result.factor} converted=${result.converted} revision=${result.revision}`;
 }
 
 function describeImport(
@@ -1136,6 +1141,32 @@ layer
         try {
             const result = await guard(ctx, () => opened.mergeLayer({ from, to }));
             ctx.emitResult(result, describeMerge(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const units = cli.command('units', 'cli.cmd.units');
+
+units
+    .command('convert', 'cli.cmd.units-convert')
+    .option('--to <unit>', 'cli.opt.to-unit', { enum: ['mm', 'inch'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const to = text(options, 'to') as 'mm' | 'inch' | undefined;
+        if (to === undefined) {
+            ctx.fail('open-cad.cli.units-required', { message: '`--to mm|inch` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.convertUnits({ to }));
+            ctx.emitResult(result, describeUnits(result));
             return 0;
         } finally {
             opened.close();

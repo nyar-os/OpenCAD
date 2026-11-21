@@ -26,6 +26,7 @@ import type {
     ArrayResult,
     CopyRequest,
     CopyResult,
+    ConvertUnitsRequest,
     Drawing,
     Entity,
     EntityDeletion,
@@ -47,6 +48,7 @@ import type {
     SaveReport,
     TransformRequest,
     TransformResult,
+    UnitsConversion,
     UpdateEntityRequest,
     UpdateLayerRequest,
 } from './types.js';
@@ -357,6 +359,19 @@ export class DrawingDocument {
     measure(sheet?: string): MeasureResult {
         this.assertOpen();
         return service.measure(this.handle, sheet);
+    }
+
+    /** Converts every length between millimetres and inches. */
+    convertUnits(request: ConvertUnitsRequest): UnitsConversion {
+        this.assertOpen();
+        if (this.state.units === request.to) {
+            const unchanged = service.convertUnits(this.handle, request);
+            this.state = unchanged.drawing;
+            return unchanged;
+        }
+        return this.edit((handle) => service.convertUnits(handle, request), (result) => {
+            this.state = result.drawing;
+        });
     }
 
     /** Releases the native handle. Idempotent. */

@@ -256,6 +256,15 @@ fn drawing_update_layer(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Converts one open drawing between millimetres and inches.
+#[function]
+fn drawing_convert_units(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let unit = text(&ctx, 1)?;
+    let result = open_cad_drawing::convert_units(handle, &unit).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Moves every entity of one layer onto another and drops the empty source.
 #[function]
 fn drawing_merge_layer(ctx: CallContext) -> Result<JsValue> {
@@ -987,6 +996,21 @@ impl IpcHandler for StudioIpcHandler {
                     Err(error) => failure(id, "mergeLayerError", format!("{}: {}", error.code, error.message)),
                 }
             }
+            "drawing.convertUnits" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "convertUnitsError", "a convertUnits request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                let unit = request.get("to").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                if unit.is_empty() {
+                    return failure(id, "convertUnitsError", "a convertUnits request needs `to`: `mm` or `inch`".to_string());
+                }
+                match open_cad_drawing::convert_units(handle, &unit) {
+                    Ok(result) => reply(id, "convertUnitsResult", result),
+                    Err(error) => failure(id, "convertUnitsError", format!("{}: {}", error.code, error.message)),
+                }
+            }
             "drawing.moveEntity" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -1351,6 +1375,7 @@ register_module![
     drawing_add_layer,
     drawing_update_layer,
     drawing_merge_layer,
+    drawing_convert_units,
     drawing_move_entity,
     drawing_update_entity,
     drawing_transform,

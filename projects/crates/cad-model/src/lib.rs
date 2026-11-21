@@ -1575,6 +1575,48 @@ pub fn merge_layer(handle: u64, from: &str, to: &str) -> Result<Value, ServiceEr
     })
 }
 
+/// Converts a drawing between millimetres and inches.
+///
+/// Every coordinate, radius, ellipse axis, text height and dimension offset is
+/// scaled about the origin by 25.4 (inch to mm) or 1 / 25.4 (mm to inch), and
+/// the declared unit changes. A request for the unit the drawing already uses
+/// changes nothing and does not add a history step. Explicit dimension labels
+/// are kept as text, so the `units` check still reports a label that conflicts.
+/// The response carries `{ revision, drawing, from, to, factor, converted }`.
+pub fn convert_units(handle: u64, unit: &str) -> Result<Value, ServiceError> {
+    let target = Units::parse(unit).ok_or_else(|| argument(format!("`{unit}` is not a drawing unit; use `mm` or `inch`")))?;
+    let current = store::read(handle, |session| session.drawing.units)?;
+    let factor = match (current, target) {
+        (Units::Mm, Units::Inch) => 1.0 / 25.4,
+        (Units::Inch, Units::Mm) => 25.4,
+        _ => 1.0,
+    };
+    let converted = if current != target {
+        store::edit(handle, |drawing| {
+            for entity in &mut drawing.entities {
+                apply_transform(entity, TransformOp::Scale { factor, cx: 0.0, cy: 0.0 });
+            }
+            drawing.units = target;
+            drawing.revision += 1;
+            Ok(())
+        })?;
+        true
+    }
+    else {
+        false
+    };
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "from": current.as_str(),
+            "to": target.as_str(),
+            "factor": factor,
+            "converted": converted,
+        })
+    })
+}
+
 /// Lists every entity of one drawing.
 pub fn list_entities(handle: u64) -> Result<Value, ServiceError> {
     store::read(handle, |session| {
@@ -2406,6 +2448,50 @@ mod tests {
         assert_eq!(merge_layer(handle, "Structure", DEFAULT_LAYER).expect_err("locked source").code, "drawing/layer-locked");
         assert_eq!(merge_layer(handle, DEFAULT_LAYER, "Structure").expect_err("locked target").code, "drawing/layer-locked");
 
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn convert_units_scales_geometry_and_round_trips() {
+        let created = create(CreateRequest { units: Some("mm".to_string()), ..CreateRequest::default() }).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [25.4, 0.0]).expect("line");
+        add_circle(handle, DEFAULT_LAYER, [25.4, 0.0], 12.7).expect("circle");
+        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.54, "Hall").expect("text");
+        add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [25.4, 0.0], 2.54, None).expect("dimension");
+        let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+
+        let inches = convert_units(handle, "inch").expect("convert to inches");
+        assert_eq!(inches["from"], json!("mm"));
+        assert_eq!(inches["to"], json!("inch"));
+        assert_eq!(inches["converted"], json!(true));
+        assert_eq!(inches["drawing"]["units"], json!("inch"));
+        assert_eq!(inches["revision"], json!(revision + 1));
+        let listed = list_entities(handle).expect("list");
+        let entities = listed["entities"].as_array().expect("entities");
+        let end = entities[0]["kind"]["to"][0].as_f64().expect("x");
+        assert!((end - 1.0).abs() < 1e-12, "line length converts to inches: {end}");
+        let radius = entities[1]["kind"]["radius"].as_f64().expect("radius");
+        assert!((radius - 0.5).abs() < 1e-12, "circle radius converts to inches: {radius}");
+        let height = entities[2]["kind"]["height"].as_f64().expect("height");
+        assert!((height - 0.1).abs() < 1e-12, "text height converts to inches: {height}");
+        let offset = entities[3]["kind"]["offset"].as_f64().expect("offset");
+        assert!((offset - 0.1).abs() < 1e-12, "dimension offset scales: {offset}");
+
+        let millimetres = convert_units(handle, "mm").expect("convert back");
+        assert_eq!(millimetres["converted"], json!(true));
+        let listed = list_entities(handle).expect("list");
+        let entities = listed["entities"].as_array().expect("entities");
+        let end = entities[0]["kind"]["to"][0].as_f64().expect("x");
+        assert!((end - 25.4).abs() < 1e-9, "round trip returns the original length: {end}");
+        let radius = entities[1]["kind"]["radius"].as_f64().expect("radius");
+        assert!((radius - 12.7).abs() < 1e-9);
+
+        let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+        let same = convert_units(handle, "mm").expect("same unit");
+        assert_eq!(same["converted"], json!(false));
+        assert_eq!(same["revision"], json!(revision), "a no-op conversion adds no revision");
+        assert_eq!(convert_units(handle, "metre").expect_err("unknown unit").code, "session/argument-invalid");
         close(handle).expect("close");
     }
 

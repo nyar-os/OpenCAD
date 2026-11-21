@@ -14,7 +14,8 @@ and reopened; lines, circles, arcs, ellipses, polylines, text and linear
 dimensions are real entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode and measure are supported; each handle
 keeps a 32-snapshot undo/redo history;
-layers can be added, renamed, merged, hidden and locked; inspection reports
+layers can be added, renamed, merged, hidden and locked; a drawing converts
+between millimetres and inches by scaling every length; inspection reports
 per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL and STEP export work, and a declared ASCII
 DXF subset can be imported. The interactive viewport, DWG/STEP import, a full
@@ -58,6 +59,7 @@ open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
+open-cad units convert plan.ocad --to inch
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
 open-cad export plan.ocad --format svg --out plan.svg
@@ -111,6 +113,10 @@ What this build does NOT do
   booleans, analytic surfaces or features. Open profiles are skipped with
   `step/open-profile` and never become a fabricated solid. STEP import is not
   implemented.
+- `units convert --to mm|inch` scales every coordinate, radius, ellipse axis,
+  text height and dimension offset by 25.4 or 1 / 25.4. Explicit dimension label
+  text is kept verbatim, so the `units` check still reports a label that
+  conflicts with the new unit.
 - No interactive viewport, selection or snapping.
 - No constraint solver or associative dimensions; `constraints` and `references`
   checks are reported as unsupported.

@@ -35,6 +35,8 @@
             "layer-visible": "Set a layer's visibility and save the file in place",
             "layer-lock": "Set a layer's lock state and save the file in place",
             "layer-merge": "Move every entity of one layer onto another and remove the empty source layer",
+            "units": "Convert the lengths of an existing drawing file between millimetres and inches",
+            "units-convert": "Scale every length and change the declared unit, then save the file in place",
             "gui": "Open the OpenCAD Studio window"
         },
         "opt": {
@@ -86,7 +88,8 @@
             "visible": "Layer visibility: on or off",
             "locked": "Layer lock state: on or off",
             "layer-from": "Source layer whose entities move; the layer is removed after the merge",
-            "layer-to": "Target layer that receives the entities"
+            "layer-to": "Target layer that receives the entities",
+            "to-unit": "Unit to convert to: mm or inch"
         }
     }
 }
