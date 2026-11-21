@@ -3051,4 +3051,55 @@ mod tests {
         assert_eq!(duplicate["severity"], json!("warning"));
         assert_eq!(report["passed"], json!(false), "a zero-length entity is an error");
     }
+
+    #[test]
+    fn dxf_export_import_round_trip_keeps_core_geometry() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+        add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
+        add_arc(handle, DEFAULT_LAYER, [1.0, 2.0], 3.0, 30.0, 120.0).expect("arc");
+        add_text(handle, DEFAULT_LAYER, [3.0, 4.0], 2.5, "Site").expect("text");
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("polyline");
+        let drawing = drawing_of(handle);
+        let (text, _) = exchange::dxf(&drawing);
+        for marker in ["$INSUNITS", "TABLES", "LAYER", "ENTITIES", "LINE", "CIRCLE", "ARC", "TEXT", "POLYLINE"] {
+            assert!(text.contains(marker), "export writes `{marker}`");
+        }
+
+        let (imported, _) = import::dxf(&text, None).expect("round trip import");
+        assert_eq!(imported.entities.len(), 5);
+        assert_eq!(imported.units, Units::Mm);
+        let mut kinds = imported.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
+        kinds.sort_unstable();
+        assert_eq!(kinds, vec!["arc", "circle", "line", "polyline", "text"]);
+        let line = imported.entities.iter().find_map(|entity| match &entity.kind {
+            EntityKind::Line { from, to } => Some((*from, *to)),
+            _ => None,
+        });
+        assert_eq!(line, Some(([0.0, 0.0], [10.0, 0.0])));
+        let circle = imported.entities.iter().find_map(|entity| match &entity.kind {
+            EntityKind::Circle { center, radius } => Some((*center, *radius)),
+            _ => None,
+        });
+        assert_eq!(circle, Some(([5.0, 5.0], 2.0)));
+        let arc = imported.entities.iter().find_map(|entity| match &entity.kind {
+            EntityKind::Arc { center, radius, start_angle, end_angle } => Some((*center, *radius, *start_angle, *end_angle)),
+            _ => None,
+        });
+        assert!(arc.is_some_and(|(center, radius, start_angle, end_angle)| {
+            center == [1.0, 2.0] && (radius - 3.0).abs() < 1e-9 && (start_angle - 30.0).abs() < 1e-9 && (end_angle - 120.0).abs() < 1e-9
+        }));
+        let text = imported.entities.iter().find_map(|entity| match &entity.kind {
+            EntityKind::Text { at, height, content } => Some((*at, *height, content.clone())),
+            _ => None,
+        });
+        assert_eq!(text, Some(([3.0, 4.0], 2.5, "Site".to_string())));
+        let polyline = imported.entities.iter().find_map(|entity| match &entity.kind {
+            EntityKind::Polyline { points, closed } => Some((points.clone(), *closed)),
+            _ => None,
+        });
+        assert_eq!(polyline, Some((vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true)));
+        close(handle).expect("close");
+    }
 }
