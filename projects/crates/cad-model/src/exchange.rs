@@ -743,6 +743,96 @@ pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
     StlReport { content, triangles, losses }
 }
 
+/// Result of one OBJ projection.
+pub(crate) struct ObjReport {
+    /// Wavefront OBJ text.
+    pub(crate) content: String,
+    /// Number of triangles written.
+    pub(crate) triangles: usize,
+    /// Profiles or triangles the projection could not keep.
+    pub(crate) losses: Vec<Loss>,
+}
+
+/// Extrudes every closed profile along +Z and writes a Wavefront OBJ mesh.
+///
+/// The projection uses the same closed-profile selection and extrusion as the
+/// STL writer, so both formats describe the same solid. Circles, text and
+/// dimensions are not extruded, and an open profile is reported with
+/// `obj/open-profile` instead of being closed silently.
+pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
+    let height = if thickness.is_finite() && thickness > 0.0 { thickness } else { STL_DEFAULT_THICKNESS };
+    let mut content = String::from("# OpenCAD OBJ extrusion\n");
+    let mut vertices = 0usize;
+    let mut triangles = 0usize;
+    let mut degenerate = 0usize;
+    let mut losses = Vec::new();
+
+    for entity in &drawing.entities {
+        let (profile, closed) = match &entity.kind {
+            EntityKind::Polyline { points, closed } => (closed_profile(points), *closed),
+            EntityKind::Arc { center, radius, start_angle, end_angle } => {
+                (closed_profile(&sample_arc(*center, radius.abs(), *start_angle, *end_angle)), false)
+            }
+            EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+                let sampled = sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle);
+                let closed = arc_sweep(*start_angle, *end_angle) >= 360.0 - 1e-9;
+                (closed_profile(&sampled), closed)
+            }
+            _ => continue,
+        };
+        if !closed {
+            losses.push(Loss::warning(
+                "obj/open-profile",
+                Some(&entity.layer),
+                Some(&entity.id),
+                format!("profile `{}` is not closed and was not extruded", entity.id),
+            ));
+            continue;
+        }
+        if profile.len() < 3 {
+            losses.push(Loss::warning(
+                "obj/degenerate-triangle",
+                Some(&entity.layer),
+                Some(&entity.id),
+                format!("polyline `{}` has fewer than three distinct vertices", entity.id),
+            ));
+            continue;
+        }
+        let Some(cap) = triangulate(&profile)
+        else {
+            losses.push(Loss::warning(
+                "obj/invalid-profile",
+                Some(&entity.layer),
+                Some(&entity.id),
+                format!("polyline `{}` could not be triangulated", entity.id),
+            ));
+            continue;
+        };
+
+        for triangle in extrusion_triangles(&profile, &cap, height) {
+            let u = [triangle[1][0] - triangle[0][0], triangle[1][1] - triangle[0][1], triangle[1][2] - triangle[0][2]];
+            let v = [triangle[2][0] - triangle[0][0], triangle[2][1] - triangle[0][1], triangle[2][2] - triangle[0][2]];
+            let normal = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            if (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt() < 1e-12 {
+                degenerate += 1;
+                continue;
+            }
+            for vertex in triangle {
+                content.push_str(&format!("v {} {} {}\n", num(vertex[0]), num(vertex[1]), num(vertex[2])));
+            }
+            vertices += 3;
+            content.push_str(&format!("f {} {} {}\n", vertices - 2, vertices - 1, vertices));
+            triangles += 1;
+        }
+    }
+
+    if degenerate > 0 {
+        losses.push(Loss::warning("obj/degenerate-triangle", None, None, format!("{degenerate} degenerate triangle(s) were skipped")));
+    }
+    content.push_str("# end of OpenCAD OBJ\n");
+    ObjReport { content, triangles, losses }
+}
+
 /// Result of one STEP projection.
 pub(crate) struct StepReport {
     /// ISO-10303-21 text.

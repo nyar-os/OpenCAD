@@ -45,7 +45,7 @@ export type OperationName = 'transform' | 'copy' | 'array' | 'explode' | 'measur
 export type RenderFormat = 'svg' | 'png' | 'pdf';
 
 /** Exchange formats `export()` can write. */
-export type ExportFormat = 'dxf' | 'step' | 'stl' | 'svg' | 'pdf';
+export type ExportFormat = 'dxf' | 'obj' | 'step' | 'stl' | 'svg' | 'pdf';
 
 /** Hard limits applied before work starts. */
 export interface ResourceBudgets {
@@ -566,7 +566,7 @@ export interface ExportReport {
     readonly path?: string;
     /** Number of bytes written. */
     readonly bytes?: number;
-    /** Triangles written by an `stl` projection. */
+    /** Triangles written by an `stl` or `obj` projection. */
     readonly triangles?: number;
     /** Planar faces written by a `step` projection. */
     readonly faces?: number;

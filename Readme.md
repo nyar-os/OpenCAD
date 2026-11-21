@@ -17,11 +17,12 @@ keeps a 32-snapshot undo/redo history;
 layers can be added, renamed, merged, hidden and locked; a drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
-SVG, ASCII DXF, vector PDF, ASCII STL and STEP export work, and a declared ASCII
-DXF subset can be imported. The interactive viewport, DWG/STEP import, a full
-DXF reader, the STL reader, the constraint solver and a modelling kernel are not
-implemented and return the stable `capability/not-implemented` code. STEP output
-is a faceted BREP projection of closed profiles, not a solid model.
+SVG, ASCII DXF, vector PDF, ASCII STL, Wavefront OBJ and STEP export work, and
+a declared ASCII DXF subset can be imported. The interactive viewport, DWG/STEP
+import, a full DXF reader, the STL and OBJ readers, the constraint solver and a
+modelling kernel are not implemented and return the stable
+`capability/not-implemented` code. STEP output is a faceted BREP projection of
+closed profiles, not a solid model; OBJ output is the same extrusion as a mesh.
 
 What is here
 ------------
@@ -66,6 +67,7 @@ open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
 open-cad export plan.ocad --format pdf --out plan.pdf
 open-cad export plan.ocad --format stl --out plan.stl
+open-cad export plan.ocad --format obj --out plan.obj
 open-cad export plan.ocad --format step --out plan.step
 open-cad import site.dxf --out site.ocad
 ```
@@ -97,14 +99,16 @@ What this build does NOT do
   radial, diameter and ordinate dimensions, HATCH and MLEADER are skipped.
   Every approximation and skip is reported as a loss with a stable code, a
   severity (`notice` or `warning`) and a detail.
-- No STEP reader or PNG writer, and no STL reader. STL export extrudes closed
-  profiles along +Z (default thickness 1.0 drawing units) into caps and side
-  walls; arcs and ellipses are sampled at five-degree steps, and a full ellipse
-  is a closed profile. It is not a surface or solid modeller and performs no
-  boolean operations. Open profiles are skipped with `stl/open-profile`;
-  degenerate triangles are skipped with `stl/degenerate-triangle`. PDF export
-  exists as a minimal vector page and approximates arcs and ellipses with cubic
-  Bezier segments; SVG and DXF export also work.
+- No STEP or OBJ reader, and no PNG writer, and no STL reader. STL and OBJ
+  export extrude closed profiles along +Z (default thickness 1.0 drawing units);
+  arcs and ellipses are sampled at five-degree steps, and a full ellipse is a
+  closed profile. OBJ writes the same triangles as `v`/`f` records. Neither is a
+  surface or solid modeller and neither performs boolean operations. Open
+  profiles are skipped with `stl/open-profile` or `obj/open-profile`; degenerate
+  triangles are skipped with `stl/degenerate-triangle` or
+  `obj/degenerate-triangle`. PDF export exists as a minimal vector page and
+  approximates arcs and ellipses with cubic Bezier segments; SVG and DXF export
+  also work.
 - STEP export (`export --format step`) writes ISO-10303-21 AP203-style text and
   reuses the same closed-profile extrusion and ear-clipping triangulation as
   STL. Every triangle becomes one planar `ADVANCED_FACE`, and each closed
@@ -123,10 +127,10 @@ What this build does NOT do
 - No bare layer deletion. `layer merge --from A --to B` moves every entity of
   `A` onto `B` and removes the now-empty `A` in one history step. A locked
   source or target layer refuses the merge.
-- `capabilities()` reports `project: partial`, SVG/PDF/STEP/STL export as
-  supported, DXF as partial because of its import subset, STEP as partial
-  because only export is implemented, STL import and DWG as unsupported, and the
-  unimplemented routes as `unsupported`. Its `entities` matrix lists line,
+- `capabilities()` reports `project: partial`, SVG/PDF/STEP/STL/OBJ export as
+  supported, DXF as partial because of its import subset, STEP and OBJ as
+  partial because only their export direction is implemented, STL import and DWG
+  as unsupported, and the unimplemented routes as `unsupported`. Its `entities` matrix lists line,
   circle, arc, ellipse, point, polyline, text and dimension as supported; its
   `operations` matrix lists transform, copy, array, explode and measure as
   supported while constraint solving and a 3D kernel stay unsupported. A

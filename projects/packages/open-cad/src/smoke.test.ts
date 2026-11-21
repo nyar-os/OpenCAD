@@ -102,6 +102,7 @@ test('format registry classifies the drawing format family', () => {
     assert.equal(formatInfo('dxf').exchangeTarget, true);
     assert.equal(formatInfo('step').family, 'exchange');
     assert.equal(formatInfo('stl').family, 'mesh');
+    assert.equal(formatInfo('obj').exchangeTarget, true);
     assert.equal(formatInfo('svg').markup, 'xml');
     assert.equal(formatInfo('pdf').family, 'document');
     assert.equal(formatInfo('png').family, 'raster');
@@ -131,8 +132,10 @@ test('capability matrix matches the implemented core', { skip: withAddon }, asyn
     assert.equal(matrix.exportTargets.dxf, 'supported');
     assert.equal(matrix.exportTargets.pdf, 'supported');
     assert.equal(matrix.exportTargets.stl, 'supported');
+    assert.equal(matrix.exportTargets.obj, 'supported');
     assert.equal(matrix.exportTargets.step, 'supported');
     assert.equal(matrix.formats.stl, 'unsupported', 'the STL reader stays unsupported');
+    assert.equal(matrix.formats.obj, 'partial', 'OBJ is export-only');
     assert.equal(matrix.formats.step, 'partial', 'STEP is export-only');
     await cad.dispose();
 });
@@ -192,6 +195,16 @@ test('drawing core round trip, inspection and export', { skip: withAddon }, asyn
         assert.ok(stl.startsWith('solid open-cad'));
         assert.match(stl, /facet normal/);
         assert.ok(stl.trimEnd().endsWith('endsolid'));
+
+        const objPath = path.join(dir, 'plan.obj');
+        const objReport = document.export({ format: 'obj', target: objPath });
+        assert.equal(objReport.format, 'obj');
+        assert.equal(objReport.editable, false);
+        assert.ok((objReport.triangles ?? 0) > 0);
+        const obj = fs.readFileSync(objPath, 'utf8');
+        assert.ok(obj.startsWith('# OpenCAD OBJ extrusion'));
+        assert.match(obj, /^v \S+ \S+ \S+$/m);
+        assert.match(obj, /^f \d+ \d+ \d+$/m);
 
         const pdfPath = path.join(dir, 'plan.pdf');
         const pdfReport = document.export({ format: 'pdf', target: pdfPath });

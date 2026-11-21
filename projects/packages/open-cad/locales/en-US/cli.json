@@ -46,7 +46,7 @@
             "template": "Accepted for compatibility; no template is loaded yet",
             "overwrite": "Replace the output file when it already exists",
             "checks": "Comma-separated checks: units, layers, geometry, polylines, dimensions, duplicate-entity, zero-length, open-contour (constraints and references are not implemented)",
-            "format": "Exchange format to write: dxf, step, stl, svg or pdf (step and stl extrude closed profiles)",
+            "format": "Exchange format to write: dxf, obj, step, stl, svg or pdf (obj, step and stl extrude closed profiles)",
             "layer": "Target layer id (defaults to 0; dimensions default to dimensions)",
             "from": "Start point as x,y",
             "to": "End point as x,y",

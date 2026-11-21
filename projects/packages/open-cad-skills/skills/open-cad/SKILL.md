@@ -14,10 +14,10 @@ explode a polyline and measure, move, update and delete entities, undo and redo,
 add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry and
 open contours, import the declared ASCII DXF subset (including SPLINE,
-LEADER and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL or
+LEADER and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL, OBJ or
 STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
-reader and STL import are not implemented. Those routes report
+reader and STL/OBJ import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
 substitute local geometry, parser or drawing code.
 
@@ -71,15 +71,17 @@ open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
 open-cad export plan.ocad --format pdf --out plan.pdf
 open-cad export plan.ocad --format stl --out plan.stl
+open-cad export plan.ocad --format obj --out plan.obj
 open-cad export plan.ocad --format step --out plan.step
 open-cad import site.dxf --out site.ocad
 ```
 
 `--out` on `create` and `import` refuses to replace an existing file unless
 `--overwrite` is given. `--format` accepts the declared targets; `svg`, `dxf`,
-`pdf`, `stl` and `step` are implemented. STL and STEP are export-only: they
-extrude closed polylines along +Z and do not read STL/STEP, model surfaces or
-run boolean operations. STEP writes ISO-10303-21 AP203-style text as a faceted
+`pdf`, `stl`, `obj` and `step` are implemented. STL, OBJ and STEP are
+export-only: they extrude closed polylines along +Z and do not read STL/OBJ/STEP,
+model surfaces or run boolean operations. OBJ writes the same extrusion as
+`v`/`f` mesh records. STEP writes ISO-10303-21 AP203-style text as a faceted
 BREP (`MANIFOLD_SOLID_BREP`); open profiles are skipped with
 `step/open-profile`.
 
@@ -201,7 +203,7 @@ when an error-level finding exists.
   The studio viewport is not implemented; SVG, DXF and PDF output is the visual
   deliverable today.
 - Describe DXF import as the declared subset only. Do not claim a full DXF
-  reader, and do not describe STEP, STL, PNG or the constraint solver as
+  reader, and do not describe STEP, STL, OBJ, PNG or the constraint solver as
   working.
 - Another CAD application may serve only as an optional independent verification
   source. The workflow must not require one.

@@ -4,9 +4,10 @@
 //! list (line, circle, arc, ellipse, polyline, text and linear dimension), a
 //! process-wide handle store, JSON persistence (`.ocad`), inspection,
 //! transform/copy/measure operations, a read-only SVG preview,
-//! SVG/DXF/PDF/STEP/STL export, a bounded undo/redo history, layer and entity
-//! management (including duplication), an ASCII DXF reader for a declared
-//! subset and faceted BREP writers that extrude closed profiles.
+//! SVG/DXF/PDF/STEP/STL/OBJ export, a bounded undo/redo history, layer and
+//! entity management (including duplication and layer merge), an ASCII DXF
+//! reader for a declared subset and faceted BREP and mesh writers that extrude
+//! closed profiles.
 //!
 //! It deliberately does not ship a constraint solver, an interactive viewport,
 //! a STEP reader or a modelling kernel. Unimplemented routes report the stable
@@ -48,7 +49,7 @@ pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
 pub const ARRAY_MODES: &[&str] = &["rectangular", "polar"];
 
 /// Exchange formats [`export`] knows about.
-pub const EXPORT_TARGETS: &[&str] = &["dxf", "step", "stl", "svg", "pdf"];
+pub const EXPORT_TARGETS: &[&str] = &["dxf", "obj", "step", "stl", "svg", "pdf"];
 
 const FILE_FORMAT: &str = "open-cad-drawing";
 const FILE_VERSION: u64 = 1;
@@ -92,11 +93,12 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// What this build can actually do.
 ///
 /// The matrix only claims what the test suite exercises: the native `.ocad`
-/// project is partial, SVG, PDF, STEP and STL export are supported, DXF export
-/// plus the declared ASCII import subset are partial, and the supported document
-/// checks run. SVG is the only preview renderer; DWG and the STL reader stay
-/// unsupported. STEP is partial overall because only its export direction is
-/// implemented: `exportTargets.step` is supported and there is no STEP reader.
+/// project is partial, SVG, PDF, STEP, STL and OBJ export are supported, DXF
+/// export plus the declared ASCII import subset are partial, and the supported
+/// document checks run. SVG is the only preview renderer; DWG and the STL
+/// reader stay unsupported. STEP and OBJ are partial overall because only their
+/// export direction is implemented: `exportTargets.step` and
+/// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode and
 /// measure); constraint solving and a 3D kernel stay unsupported.
@@ -111,7 +113,7 @@ pub fn capabilities() -> Value {
 
     let format_level = |name: &str| match name {
         "svg" | "pdf" => "supported",
-        "dxf" | "step" => "partial",
+        "dxf" | "step" | "obj" => "partial",
         _ => "unsupported",
     };
     let check_level = |name: &str| match name {
@@ -123,7 +125,7 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let export_level = |name: &str| match name {
-        "svg" | "dxf" | "pdf" | "stl" | "step" => "supported",
+        "svg" | "dxf" | "pdf" | "stl" | "step" | "obj" => "supported",
         _ => "unsupported",
     };
 
@@ -316,10 +318,10 @@ pub struct ExportOptions {
 
 /// Projects one drawing into an exchange format.
 ///
-/// `svg`, `dxf`, `pdf`, `stl` and `step` are written atomically and report any
-/// loss. The STL and STEP writers extrude closed profiles with the default
-/// thickness; use [`export_with_options`] to choose another. An unknown format
-/// reports `format/unsupported`.
+/// `svg`, `dxf`, `pdf`, `stl`, `obj` and `step` are written atomically and
+/// report any loss. The STL, OBJ and STEP writers extrude closed profiles with
+/// the default thickness; use [`export_with_options`] to choose another. An
+/// unknown format reports `format/unsupported`.
 pub fn export(handle: u64, format: &str, path: &Path) -> Result<Value, ServiceError> {
     export_with_options(handle, format, path, ExportOptions::default())
 }
@@ -327,7 +329,7 @@ pub fn export(handle: u64, format: &str, path: &Path) -> Result<Value, ServiceEr
 /// Projects one drawing into an exchange format with explicit options.
 ///
 /// The report carries `{ revision, format, target, path, bytes, losses,
-/// editable }` plus `triangles` for STL and `faces` for STEP.
+/// editable }` plus `triangles` for STL and OBJ and `faces` for STEP.
 pub fn export_with_options(handle: u64, format: &str, path: &Path, options: ExportOptions) -> Result<Value, ServiceError> {
     let format = format.trim().to_ascii_lowercase();
     store::persist(handle, |drawing| {
@@ -342,6 +344,11 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
                 triangles = Some(report.triangles);
                 (report.content, report.losses)
             }
+            "obj" => {
+                let report = exchange::obj(drawing, options.thickness.unwrap_or(exchange::STL_DEFAULT_THICKNESS));
+                triangles = Some(report.triangles);
+                (report.content, report.losses)
+            }
             "step" => {
                 let report = exchange::step(drawing, options.thickness.unwrap_or(exchange::STL_DEFAULT_THICKNESS));
                 faces = Some(report.faces);
@@ -350,7 +357,7 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
             other => {
                 return Err(ServiceError::new(
                     "format/unsupported",
-                    format!("`{other}` is not an export target of this build; use `svg`, `dxf`, `pdf`, `stl` or `step`"),
+                    format!("`{other}` is not an export target of this build; use `svg`, `dxf`, `pdf`, `stl`, `obj` or `step`"),
                 ));
             }
         };
@@ -1710,6 +1717,7 @@ mod tests {
         assert_eq!(matrix["formats"]["pdf"], json!("supported"));
         assert_eq!(matrix["formats"]["dxf"], json!("partial"));
         assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
+        assert_eq!(matrix["formats"]["obj"], json!("partial"), "OBJ is export-only, so the format is partial");
         assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
         for check in ["units", "layers", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
             assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
@@ -1731,6 +1739,7 @@ mod tests {
         assert_eq!(matrix["exportTargets"]["dxf"], json!("supported"));
         assert_eq!(matrix["exportTargets"]["pdf"], json!("supported"));
         assert_eq!(matrix["exportTargets"]["stl"], json!("supported"));
+        assert_eq!(matrix["exportTargets"]["obj"], json!("supported"));
         assert_eq!(matrix["exportTargets"]["step"], json!("supported"));
         assert_eq!(matrix["formats"]["stl"], json!("unsupported"), "the STL reader stays unsupported");
         assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
@@ -2841,6 +2850,31 @@ mod tests {
         let stl = fs::read_to_string(&path).expect("read stl");
         assert!(stl.starts_with("solid open-cad\n"));
         assert!(stl.trim_end().ends_with("endsolid"));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn obj_export_writes_a_triangulated_extrusion() {
+        let dir = TempDir::new("obj");
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed square");
+        add_polyline(handle, DEFAULT_LAYER, vec![[10.0, 0.0], [12.0, 0.0], [12.0, 2.0]], false).expect("open polyline");
+
+        let path = dir.path.join("solid.obj");
+        let report = export(handle, "obj", &path).expect("export obj");
+        assert_eq!(report["format"], json!("obj"));
+        assert_eq!(report["editable"], json!(false));
+        assert_eq!(report["triangles"], json!(12), "2 cap triangles per side and 4 wall quads");
+        let losses = report["losses"].as_array().expect("losses");
+        assert_eq!(losses.len(), 1);
+        assert_eq!(losses[0]["code"], json!("obj/open-profile"));
+        let obj = fs::read_to_string(&path).expect("read obj");
+        assert!(obj.starts_with("# OpenCAD OBJ extrusion\n"));
+        assert_eq!(obj.matches("\nv ").count(), 36, "three vertices per triangle");
+        assert_eq!(obj.matches("\nf ").count(), 12);
+        assert!(obj.contains("f 1 2 3"));
+        assert!(obj.trim_end().ends_with("# end of OpenCAD OBJ"));
         close(handle).expect("close");
     }
 
