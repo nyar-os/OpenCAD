@@ -22,7 +22,9 @@ dimension styles (scale, arrowhead size, text height, extension length, origin
 offset and label precision) that can be listed, added, updated and removed and
 round-trip through the DXF `DIMSTYLE` table; named text styles (font, fixed
 height, width factor and oblique angle) round-trip through the DXF `STYLE`
-table and can be listed, added, updated and removed; a rectangular window or
+table and can be listed, added, updated and removed; named line types (dash
+pattern) round-trip through the DXF `LTYPE` table and each layer carries a line
+type id and a lineweight; a rectangular window or
 crossing query returns the matching entity ids without adding a history step;
 text content can be found and replaced in bulk (ASCII case-insensitive by
 default) in one history step; entities can be collected into named groups;
@@ -87,6 +89,11 @@ open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
+open-cad layer set plan.ocad --name Structure --linetype DASHED --lineweight 0.5
+open-cad linetype list plan.ocad
+open-cad linetype add plan.ocad --name DASHED --description "Dashed" --pattern 5,2
+open-cad linetype update plan.ocad --name DASHED --to DASH-1 --pattern 6,2
+open-cad linetype delete plan.ocad --name DASH-1
 open-cad dimstyle list plan.ocad
 open-cad dimstyle add plan.ocad --name ARCH --scale 2.5 --arrow-size 3 --text-height 3.5 --precision 2
 open-cad dimstyle update plan.ocad --name ARCH --to ARCH-1 --scale 3
@@ -133,7 +140,7 @@ What this build does NOT do
 ---------------------------
 
 - No DWG or STEP import, and no full DXF reader. `import` accepts the declared
-  ASCII subset only: `$INSUNITS`, the LAYER, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, the
+  ASCII subset only: `$INSUNITS`, the LAYER, LTYPE, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, the
   ATTRIB values that follow an INSERT, and LINE, CIRCLE, ARC, ELLIPSE, POINT,
   TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND (a 3D polyline is
   projected onto the XY plane), SPLINE (read as a polyline through its fit
@@ -213,8 +220,8 @@ What this build does NOT do
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
   chamfer, measure, measure-entity, stats, dimension-style, text-style,
-  text-search, group, select, properties and snap as supported while constraint
-  solving and a 3D kernel stay unsupported. A
+  text-search, group, select, properties, snap and linetype as supported while
+  constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
@@ -237,6 +244,11 @@ What this build does NOT do
   approximate. Area covers closed polylines and hatches (shoelace), full
   circles and full ellipses; partial curves and self-intersecting polylines are
   not exact.
+- Line types store a name, description and dash pattern and a drawing always
+  keeps at least one. Layers carry a line type id and a lineweight in
+  millimetres; both round-trip through the DXF `LTYPE` and LAYER tables
+  (lineweight as code 370). SVG and PDF ignore lineweight and dash patterns;
+  per-entity overrides are not modelled.
 - Drawing properties are stored in the `.ocad` document only; the DXF header,
   title-block geometry and sheet attributes are not written or read. Values are
   trimmed, empty values clear a field, and each value is limited to 512

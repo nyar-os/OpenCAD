@@ -18,6 +18,7 @@ import type {
     AddHatchRequest,
     AddLayerRequest,
     AddLineRequest,
+    AddLinetypeRequest,
     AddOrdinateDimensionRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
@@ -57,6 +58,9 @@ import type {
     LayerChange,
     LayerMerge,
     DrawingStats,
+    LinetypeChange,
+    LinetypeDeletion,
+    LinetypeList,
     MeasureResult,
     MergeLayerRequest,
     MoveEntityRequest,
@@ -80,6 +84,7 @@ import type {
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdateLinetypeRequest,
     UpdatePropertiesRequest,
     UpdateTextStyleRequest,
 } from './types.js';
@@ -377,6 +382,8 @@ export function updateLayer(handle: number, request: UpdateLayerRequest): LayerC
                 color: request.color,
                 visible: request.visible,
                 locked: request.locked,
+                linetype: request.linetype,
+                lineweight: request.lineweight,
             }),
         ),
     );
@@ -475,6 +482,45 @@ export function updateTextStyle(handle: number, request: UpdateTextStyleRequest)
 /** Removes one text style from an open drawing. */
 export function deleteTextStyle(handle: number, styleId: string): TextStyleDeletion {
     return decode<TextStyleDeletion>(() => binding('drawing.deleteTextStyle').drawing_delete_text_style(handle, styleId));
+}
+
+/** Lists the line types of one open drawing. */
+export function listLinetypes(handle: number): LinetypeList {
+    return decode<LinetypeList>(() => binding('drawing.listLinetypes').drawing_list_linetypes(handle));
+}
+
+/** Adds one line type to an open drawing. */
+export function addLinetype(handle: number, request: AddLinetypeRequest): LinetypeChange {
+    return decode<LinetypeChange>(() =>
+        binding('drawing.addLinetype').drawing_add_linetype(
+            handle,
+            JSON.stringify({
+                name: request.name,
+                description: request.description,
+                pattern: request.pattern,
+            }),
+        ),
+    );
+}
+
+/** Updates one line type, rewriting layer references when the name changes. */
+export function updateLinetype(handle: number, request: UpdateLinetypeRequest): LinetypeChange {
+    return decode<LinetypeChange>(() =>
+        binding('drawing.updateLinetype').drawing_update_linetype(
+            handle,
+            JSON.stringify({
+                linetypeId: request.linetypeId,
+                name: request.name,
+                description: request.description,
+                pattern: request.pattern,
+            }),
+        ),
+    );
+}
+
+/** Removes one line type from an open drawing. */
+export function deleteLinetype(handle: number, linetypeId: string): LinetypeDeletion {
+    return decode<LinetypeDeletion>(() => binding('drawing.deleteLinetype').drawing_delete_linetype(handle, linetypeId));
 }
 
 /** Lists the entity groups of one open drawing. */

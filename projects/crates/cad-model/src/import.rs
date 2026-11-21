@@ -21,7 +21,9 @@ use serde::Serialize;
 
 use crate::{
     ServiceError,
-    schema::{DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, TextStyle, Units},
+    schema::{
+        CONTINUOUS_LINETYPE, DimensionStyle, Drawing, Entity, EntityKind, Layer, Linetype, MAX_LINEWEIGHT, OrdinateAxis, TextStyle, Units,
+    },
 };
 
 /// Maximum INSERT nesting the reader expands before it stops.
@@ -194,12 +196,41 @@ fn hsv_hex(hue: f64, saturation: f64, value: f64) -> String {
     format!("#{:02x}{:02x}{:02x}", channel(red), channel(green), channel(blue))
 }
 
-fn parse_layer(block: &[Pair]) -> Option<(String, Option<i64>)> {
+/// One LAYER table entry with the variables the document models.
+struct LayerEntry {
+    name: String,
+    color: Option<i64>,
+    linetype: Option<String>,
+    lineweight: Option<i64>,
+}
+
+fn parse_layer(block: &[Pair]) -> Option<LayerEntry> {
     let name = field(block, 2)?.trim().to_string();
     if name.is_empty() {
         return None;
     }
-    Some((name, integer(block, 62)))
+    Some(LayerEntry {
+        name,
+        color: integer(block, 62),
+        linetype: field(block, 6).map(str::trim).filter(|name| !name.is_empty()).map(str::to_string),
+        lineweight: integer(block, 370),
+    })
+}
+
+/// Reads one `LTYPE` table entry, keeping its description and dash pattern.
+fn parse_linetype(block: &[Pair]) -> Option<Linetype> {
+    let name = field(block, 2)?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let description = field(block, 3).map(str::trim).unwrap_or("").to_string();
+    let pattern = block
+        .iter()
+        .filter(|pair| pair.code == 49)
+        .filter_map(|pair| pair.value.trim().parse::<f64>().ok())
+        .filter(|dash| dash.is_finite() && *dash >= 0.0)
+        .collect::<Vec<_>>();
+    Some(Linetype { id: name.clone(), name, description, pattern })
 }
 
 /// Reads one `DIMSTYLE` table entry, keeping only the modelled variables.
@@ -710,6 +741,8 @@ impl Reader {
                 color: "#d0d7de".to_string(),
                 visible: true,
                 locked: false,
+                linetype: CONTINUOUS_LINETYPE.to_string(),
+                lineweight: 0.0,
             });
             *self.implicit_layers.entry(name.to_string()).or_insert(0) += 1;
         }
@@ -734,8 +767,8 @@ impl Reader {
         }
     }
 
-    fn apply_layer_table_entry(&mut self, name: &str, color: Option<i64>) {
-        let color = match color {
+    fn apply_layer_table_entry(&mut self, entry: LayerEntry) {
+        let color = match entry.color {
             Some(index) => match aci_color(index) {
                 Some(value) => value,
                 None => {
@@ -745,11 +778,31 @@ impl Reader {
             },
             None => "#d0d7de".to_string(),
         };
-        if let Some(layer) = self.drawing.layer_mut(name) {
+        let linetype = entry.linetype.unwrap_or_else(|| CONTINUOUS_LINETYPE.to_string());
+        if self.drawing.linetypes.iter().all(|existing| existing.id != linetype) {
+            self.drawing.linetypes.push(Linetype {
+                id: linetype.clone(),
+                name: linetype.clone(),
+                description: String::new(),
+                pattern: Vec::new(),
+            });
+        }
+        let lineweight = entry.lineweight.map_or(0.0, |value| (value as f64 / 100.0).clamp(0.0, MAX_LINEWEIGHT));
+        if let Some(layer) = self.drawing.layer_mut(&entry.name) {
             layer.color = color;
+            layer.linetype = linetype;
+            layer.lineweight = lineweight;
         }
         else {
-            self.drawing.layers.push(Layer { id: name.to_string(), name: name.to_string(), color, visible: true, locked: false });
+            self.drawing.layers.push(Layer {
+                id: entry.name.clone(),
+                name: entry.name,
+                color,
+                visible: true,
+                locked: false,
+                linetype,
+                lineweight,
+            });
         }
     }
 
@@ -1111,14 +1164,38 @@ impl Reader {
         }
     }
 
+    /// Reads the LTYPE table entries of the TABLES section.
+    ///
+    /// An entry whose name matches a line type already in the document replaces
+    /// it, so a drawing never carries duplicate line type names.
+    fn parse_linetype_table(&mut self, pairs: &[Pair]) {
+        let mut index = 0;
+        while index < pairs.len() {
+            if pairs[index].code == 0 && pairs[index].value.trim().eq_ignore_ascii_case("LTYPE") {
+                let end = block_end(pairs, index + 1);
+                if let Some(linetype) = parse_linetype(&pairs[index + 1..end]) {
+                    if let Some(existing) = self.drawing.linetypes.iter_mut().find(|existing| existing.id == linetype.id) {
+                        *existing = linetype;
+                    }
+                    else {
+                        self.drawing.linetypes.push(linetype);
+                    }
+                }
+                index = end;
+                continue;
+            }
+            index += 1;
+        }
+    }
+
     /// Reads the LAYER table entries of the TABLES section.
     fn parse_layer_table(&mut self, pairs: &[Pair]) {
         let mut index = 0;
         while index < pairs.len() {
             if pairs[index].code == 0 && pairs[index].value.trim().eq_ignore_ascii_case("LAYER") {
                 let end = block_end(pairs, index + 1);
-                if let Some((name, color)) = parse_layer(&pairs[index + 1..end]) {
-                    self.apply_layer_table_entry(&name, color);
+                if let Some(entry) = parse_layer(&pairs[index + 1..end]) {
+                    self.apply_layer_table_entry(entry);
                 }
                 index = end;
                 continue;
@@ -1426,6 +1503,7 @@ pub(crate) fn dxf(text: &str, title: Option<String>) -> Result<(Drawing, Vec<Los
         reader.losses.push(Loss::notice("dxf/assumed-units", detail));
     }
     if let Some(tables) = section_pairs(&pairs, "TABLES") {
+        reader.parse_linetype_table(tables);
         reader.parse_layer_table(tables);
         reader.parse_text_style_table(tables);
         reader.parse_dim_style_table(tables);

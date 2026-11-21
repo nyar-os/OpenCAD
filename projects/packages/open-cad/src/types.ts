@@ -67,6 +67,7 @@ export type OperationName =
     | 'select'
     | 'properties'
     | 'snap'
+    | 'linetype'
     | 'constraints'
     | 'kernel3d';
 
@@ -151,7 +152,57 @@ export interface LayerSummary {
     readonly color: string;
     readonly visible: boolean;
     readonly locked: boolean;
+    /** Line type id assigned to the layer's geometry. */
+    readonly linetype: string;
+    /** Lineweight in millimetres; `0` uses the exporter default. */
+    readonly lineweight: number;
     readonly entityCount: number;
+}
+
+/** One named line type; mirrors a DXF `LTYPE` table entry. */
+export interface Linetype {
+    readonly id: string;
+    readonly name: string;
+    readonly description: string;
+    /** Dash lengths in drawing units; empty is a solid line. */
+    readonly pattern: readonly number[];
+}
+
+/** Result of `listLinetypes()`. */
+export interface LinetypeList {
+    readonly revision: number;
+    readonly linetypes: readonly Linetype[];
+}
+
+/** Arguments of `addLinetype()`. */
+export interface AddLinetypeRequest {
+    /** Line type name; also becomes the id. */
+    readonly name: string;
+    readonly description?: string;
+    /** Dash lengths in drawing units; empty is a solid line. */
+    readonly pattern?: readonly number[];
+}
+
+/** Arguments of `updateLinetype()`. */
+export interface UpdateLinetypeRequest {
+    readonly linetypeId: string;
+    readonly name?: string;
+    readonly description?: string;
+    readonly pattern?: readonly number[];
+}
+
+/** Result of adding or updating one line type. */
+export interface LinetypeChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly linetype: Linetype;
+}
+
+/** Result of deleting one line type. */
+export interface LinetypeDeletion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly deleted: string;
 }
 
 /**
@@ -238,6 +289,8 @@ export interface Drawing {
     readonly dimStyles: readonly DimensionStyle[];
     /** Named text styles; a drawing always keeps at least one. */
     readonly textStyles: readonly TextStyle[];
+    /** Named line types; a drawing always keeps at least one. */
+    readonly linetypes: readonly Linetype[];
     /** Number of named entity groups. */
     readonly groups: number;
     /** Descriptive title-block properties. */
@@ -939,6 +992,10 @@ export interface UpdateLayerRequest {
     readonly color?: string;
     readonly visible?: boolean;
     readonly locked?: boolean;
+    /** Line type id assigned to the layer; it must already exist. */
+    readonly linetype?: string;
+    /** Lineweight in millimetres, 0-10; `0` uses the exporter default. */
+    readonly lineweight?: number;
 }
 
 /** Result of a layer mutation. Carries the refreshed drawing summary. */

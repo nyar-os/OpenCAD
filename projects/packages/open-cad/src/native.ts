@@ -48,6 +48,10 @@ export interface NativeBinding {
     drawing_add_text_style(handle: number, requestJson: string): string;
     drawing_update_text_style(handle: number, requestJson: string): string;
     drawing_delete_text_style(handle: number, styleId: string): string;
+    drawing_list_linetypes(handle: number): string;
+    drawing_add_linetype(handle: number, requestJson: string): string;
+    drawing_update_linetype(handle: number, requestJson: string): string;
+    drawing_delete_linetype(handle: number, linetypeId: string): string;
     drawing_list_groups(handle: number): string;
     drawing_create_group(handle: number, requestJson: string): string;
     drawing_delete_group(handle: number, groupId: string): string;

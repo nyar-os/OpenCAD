@@ -22,6 +22,7 @@ import type {
     AddHatchRequest,
     AddLayerRequest,
     AddLineRequest,
+    AddLinetypeRequest,
     AddOrdinateDimensionRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
@@ -57,6 +58,8 @@ import type {
     InspectReport,
     LayerMerge,
     LayerSummary,
+    Linetype,
+    LinetypeDeletion,
     OffsetRequest,
     OffsetResult,
     MeasureResult,
@@ -79,6 +82,7 @@ import type {
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdateLinetypeRequest,
     UpdatePropertiesRequest,
     UpdateTextStyleRequest,
 } from './types.js';
@@ -168,6 +172,11 @@ export class DrawingDocument {
     /** Named text styles of this document. */
     get textStyles(): readonly TextStyle[] {
         return this.state.textStyles;
+    }
+
+    /** Named line types of this document. */
+    get linetypes(): readonly Linetype[] {
+        return this.state.linetypes;
     }
 
     /** Number of entities. */
@@ -464,6 +473,45 @@ export class DrawingDocument {
     /** Removes one text style. */
     deleteTextStyle(styleId: string): TextStyleDeletion {
         return this.edit((handle) => service.deleteTextStyle(handle, styleId), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Lists the line types of this document. */
+    listLinetypes(): readonly Linetype[] {
+        this.assertOpen();
+        return service.listLinetypes(this.handle).linetypes;
+    }
+
+    /** Adds one line type and returns it. */
+    addLinetype(request: AddLinetypeRequest): Linetype {
+        let linetype: Linetype | undefined;
+        this.edit(
+            (handle) => service.addLinetype(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                linetype = result.linetype;
+            },
+        );
+        return linetype as Linetype;
+    }
+
+    /** Updates one line type and returns it. A rename rewrites layer references. */
+    updateLinetype(request: UpdateLinetypeRequest): Linetype {
+        let linetype: Linetype | undefined;
+        this.edit(
+            (handle) => service.updateLinetype(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                linetype = result.linetype;
+            },
+        );
+        return linetype as Linetype;
+    }
+
+    /** Removes one line type. */
+    deleteLinetype(linetypeId: string): LinetypeDeletion {
+        return this.edit((handle) => service.deleteLinetype(handle, linetypeId), (result) => {
             this.state = result.drawing;
         });
     }

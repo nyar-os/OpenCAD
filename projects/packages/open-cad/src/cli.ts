@@ -43,6 +43,8 @@ import type {
     LayerChange,
     LayerMerge,
     LayerSummary,
+    Linetype,
+    LinetypeChange,
     MeasureResult,
     OffsetResult,
     OpenCADCapabilities,
@@ -159,8 +161,23 @@ const idList = (options: ParsedOptions, key: string): string[] | undefined => {
     return ids.length > 0 ? ids : undefined;
 };
 
-const points = (options: ParsedOptions, key: string): Point[] | undefined => {
+const numberList = (options: ParsedOptions, key: string): number[] | undefined => {
     const raw = text(options, key);
+    if (raw === undefined) {
+        return undefined;
+    }
+    const values = raw
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+        .map((entry) => Number(entry));
+    if (values.length === 0 || values.some((value) => !Number.isFinite(value))) {
+        return undefined;
+    }
+    return values;
+};
+
+const points = (options: ParsedOptions, key: string): Point[] | undefined => {    const raw = text(options, key);
     if (raw === undefined) {
         return undefined;
     }
@@ -376,6 +393,17 @@ function describeTextStyles(styles: readonly TextStyle[]): string {
 
 function describeTextStyle(change: TextStyleChange): string {
     return `text style ${change.style.name} revision=${change.revision}`;
+}
+
+function describeLinetype(change: LinetypeChange): string {
+    return `line type ${change.linetype.name} pattern=${change.linetype.pattern.join(',')} revision=${change.revision}`;
+}
+
+function describeLinetypes(linetypes: readonly Linetype[]): string {
+    if (linetypes.length === 0) {
+        return 'no line types';
+    }
+    return linetypes.map((linetype) => `${linetype.name} pattern=${linetype.pattern.join(',')} ${linetype.description}`.trim()).join('\n');
 }
 
 function describeSelection(result: SelectionResult): string {
@@ -1551,6 +1579,35 @@ layer
     });
 
 layer
+    .command('set', 'cli.cmd.layer-set')
+    .option('--name <name>', 'cli.opt.name')
+    .option('--linetype <name>', 'cli.opt.linetype')
+    .option('--lineweight <mm>', 'cli.opt.lineweight')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        const linetype = text(options, 'linetype');
+        const lineweight = number(options, 'lineweight');
+        if (name === undefined || (linetype === undefined && lineweight === undefined)) {
+            ctx.fail('open-cad.cli.layer-set-required', { message: '`--name <layer>` and `--linetype` or `--lineweight` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const updated = await guard(ctx, () => opened.updateLayer({ layerId: name, linetype, lineweight }));
+            const change = layerChange(opened, updated);
+            ctx.emitResult(change, describeLayer(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+layer
     .command('merge', 'cli.cmd.layer-merge')
     .option('--from <layer>', 'cli.opt.layer-from')
     .option('--to <layer>', 'cli.opt.layer-to')
@@ -1824,6 +1881,112 @@ textstyle
         try {
             const deletion = await guard(ctx, () => opened.deleteTextStyle(name));
             ctx.emitResult(deletion, `deleted text style ${deletion.deleted} revision=${deletion.revision}`);
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const linetype = cli.command('linetype', 'cli.cmd.linetype');
+
+linetype.command('list', 'cli.cmd.linetype-list').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+        return 2;
+    }
+    const opened = await guard(ctx, () => app.open({ path: file }));
+    try {
+        const entries = await guard(ctx, () => opened.listLinetypes());
+        ctx.emitResult({ revision: opened.revision, linetypes: entries }, describeLinetypes(entries));
+        return 0;
+    } finally {
+        opened.close();
+    }
+});
+
+linetype
+    .command('add', 'cli.cmd.linetype-add')
+    .option('--name <name>', 'cli.opt.linetype-name')
+    .option('--description <text>', 'cli.opt.linetype-description')
+    .option('--pattern <list>', 'cli.opt.linetype-pattern')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entry = await guard(ctx, () =>
+                opened.addLinetype({
+                    name,
+                    description: text(options, 'description'),
+                    pattern: numberList(options, 'pattern'),
+                }),
+            );
+            const change: LinetypeChange = { revision: opened.revision, drawing: opened.summary(), linetype: entry };
+            ctx.emitResult(change, describeLinetype(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+linetype
+    .command('update', 'cli.cmd.linetype-update')
+    .option('--name <name>', 'cli.opt.linetype-name')
+    .option('--to <name>', 'cli.opt.to-name')
+    .option('--description <text>', 'cli.opt.linetype-description')
+    .option('--pattern <list>', 'cli.opt.linetype-pattern')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        const to = text(options, 'to');
+        const description = text(options, 'description');
+        const pattern = numberList(options, 'pattern');
+        if (name === undefined || (to === undefined && description === undefined && pattern === undefined)) {
+            ctx.fail('open-cad.cli.linetype-update-required', { message: '`--name <name>` and one of `--to`, `--description` or `--pattern` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entry = await guard(ctx, () => opened.updateLinetype({ linetypeId: name, name: to, description, pattern }));
+            const change: LinetypeChange = { revision: opened.revision, drawing: opened.summary(), linetype: entry };
+            ctx.emitResult(change, describeLinetype(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+linetype
+    .command('delete', 'cli.cmd.linetype-delete')
+    .option('--name <name>', 'cli.opt.linetype-name')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const deletion = await guard(ctx, () => opened.deleteLinetype(name));
+            ctx.emitResult(deletion, `deleted line type ${deletion.deleted} revision=${deletion.revision}`);
             return 0;
         } finally {
             opened.close();

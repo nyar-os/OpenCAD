@@ -17,7 +17,8 @@ delete entities, undo and redo,
 add, rename, merge, hide and lock layers, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
-table), find and replace text content in bulk, collect entities into named
+table), list, add, update and remove line types (which round-trip through the
+DXF `LTYPE` table) and assign a layer line type and lineweight, find and replace text content in bulk, collect entities into named
 groups, select entities with a
 rectangular window or crossing query, compute endpoint, midpoint, centre and
 line-intersection snap points near a probe point, read and write title-block properties
@@ -84,6 +85,12 @@ open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
+open-cad layer set plan.ocad --name Structure --linetype DASHED --lineweight 0.5
+
+open-cad linetype list plan.ocad
+open-cad linetype add plan.ocad --name DASHED --description "Dashed" --pattern 5,2
+open-cad linetype update plan.ocad --name DASHED --to DASH-1 --pattern 6,2
+open-cad linetype delete plan.ocad --name DASH-1
 
 open-cad dimstyle list plan.ocad
 open-cad dimstyle add plan.ocad --name ARCH --scale 2.5 --arrow-size 3 --text-height 3.5 --precision 2
@@ -231,6 +238,11 @@ start a new document.
   style stores a primary font, fixed height, width factor and oblique angle;
   those variables round-trip through the DXF `STYLE` table. Big-font and
   generation flags, and a per-text style reference, are not modelled.
+- Line types are unique by name and a drawing always keeps at least one. Each
+  stores a description and a dash pattern in drawing units; an empty pattern is
+  solid. Layers carry a line type id and a lineweight in millimetres (0-10).
+  Both round-trip through the DXF `LTYPE` and LAYER tables; SVG and PDF ignore
+  dash patterns and lineweight, and per-entity overrides are not modelled.
 - Drawing properties store the title-block metadata (title, author, company,
   project, description and keywords) in the `.ocad` document. Values are
   trimmed, an empty value clears the field and each value is limited to 512
@@ -249,7 +261,7 @@ start a new document.
   narrow the entities. Intersections are computed between two straight lines
   only; candidates are sorted by distance and capped at 1000.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
-  `$INSUNITS`, the LAYER, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
+  `$INSUNITS`, the LAYER, LTYPE, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
   POLYLINE/VERTEX/SEQEND (3D polylines are projected onto the XY plane), SPLINE
   (a polyline through the fit points, or the control polygon when there are no

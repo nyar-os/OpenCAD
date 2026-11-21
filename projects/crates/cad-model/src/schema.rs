@@ -59,6 +59,74 @@ impl Units {
     }
 }
 
+/// Name of the solid line type every drawing declares.
+pub const CONTINUOUS_LINETYPE: &str = "continuous";
+
+/// Most dash lengths one line type pattern may carry.
+pub const LINETYPE_PATTERN_LIMIT: usize = 32;
+
+/// Heaviest lineweight a layer may declare, in millimetres.
+pub const MAX_LINEWEIGHT: f64 = 10.0;
+
+/// One named line type, mirroring the DXF `LTYPE` table entry.
+///
+/// `pattern` holds dash lengths in drawing units, alternating dash and gap. An
+/// empty pattern is a solid line; `0.0` is a dot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Linetype {
+    /// Stable line type identifier inside the document; equals the name.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Dash lengths in drawing units; empty means a solid line.
+    pub pattern: Vec<f64>,
+}
+
+impl Linetype {
+    /// Builds the `continuous` line type every drawing declares by default.
+    pub fn continuous() -> Self {
+        Self {
+            id: CONTINUOUS_LINETYPE.to_string(),
+            name: CONTINUOUS_LINETYPE.to_string(),
+            description: "Solid line".to_string(),
+            pattern: Vec::new(),
+        }
+    }
+
+    /// Validates the invariants an opened document must keep.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() || self.name.trim().is_empty() {
+            return Err("a line type needs a non-empty name".to_string());
+        }
+        if self.description.chars().count() > 256 {
+            return Err(format!("line type `{}` has a description longer than 256 characters", self.name));
+        }
+        if self.pattern.len() > LINETYPE_PATTERN_LIMIT {
+            return Err(format!("line type `{}` has more than {LINETYPE_PATTERN_LIMIT} dashes", self.name));
+        }
+        if self.pattern.iter().any(|dash| !dash.is_finite() || *dash < 0.0) {
+            return Err(format!("line type `{}` has a negative or non-finite dash", self.name));
+        }
+        if !self.pattern.is_empty() && self.pattern.iter().all(|dash| *dash == 0.0) {
+            return Err(format!("line type `{}` has a pattern of only zero dashes", self.name));
+        }
+        Ok(())
+    }
+}
+
+/// Line types a document starts with.
+pub fn default_linetypes() -> Vec<Linetype> {
+    vec![Linetype::continuous()]
+}
+
+/// Name assigned to a layer that does not declare a line type.
+fn default_linetype_name() -> String {
+    CONTINUOUS_LINETYPE.to_string()
+}
+
 /// One layer of a drawing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -72,17 +140,39 @@ pub struct Layer {
     pub visible: bool,
     /// Whether new and existing geometry on the layer is writable.
     pub locked: bool,
+    /// Line type id assigned to the layer's geometry.
+    #[serde(default = "default_linetype_name")]
+    pub linetype: String,
+    /// Lineweight in millimetres; `0` uses the exporter default.
+    #[serde(default)]
+    pub lineweight: f64,
 }
 
 impl Layer {
     /// Builds the default geometry layer.
     pub fn default_geometry() -> Self {
-        Self { id: DEFAULT_LAYER.to_string(), name: DEFAULT_LAYER.to_string(), color: "#d0d7de".to_string(), visible: true, locked: false }
+        Self {
+            id: DEFAULT_LAYER.to_string(),
+            name: DEFAULT_LAYER.to_string(),
+            color: "#d0d7de".to_string(),
+            visible: true,
+            locked: false,
+            linetype: CONTINUOUS_LINETYPE.to_string(),
+            lineweight: 0.0,
+        }
     }
 
     /// Builds the default dimension layer.
     pub fn default_dimension() -> Self {
-        Self { id: DIMENSION_LAYER.to_string(), name: DIMENSION_LAYER.to_string(), color: "#0b7285".to_string(), visible: true, locked: false }
+        Self {
+            id: DIMENSION_LAYER.to_string(),
+            name: DIMENSION_LAYER.to_string(),
+            color: "#0b7285".to_string(),
+            visible: true,
+            locked: false,
+            linetype: CONTINUOUS_LINETYPE.to_string(),
+            lineweight: 0.0,
+        }
     }
 }
 
@@ -649,6 +739,9 @@ pub struct Drawing {
     /// Named entity groups.
     #[serde(default)]
     pub groups: Vec<EntityGroup>,
+    /// Named line types; a document always keeps at least one.
+    #[serde(default = "default_linetypes")]
+    pub linetypes: Vec<Linetype>,
     /// Descriptive title-block properties.
     #[serde(default)]
     pub properties: DrawingProperties,
@@ -670,6 +763,7 @@ impl Drawing {
             dim_styles: default_dimension_styles(),
             text_styles: default_text_styles(),
             groups: Vec::new(),
+            linetypes: default_linetypes(),
             properties: DrawingProperties::default(),
             entities: Vec::new(),
             next_entity: 1,
@@ -699,6 +793,8 @@ impl Drawing {
                     "color": layer.color,
                     "visible": layer.visible,
                     "locked": layer.locked,
+                    "linetype": layer.linetype,
+                    "lineweight": layer.lineweight,
                     "entityCount": entity_count,
                 })
             })
@@ -711,6 +807,7 @@ impl Drawing {
             "layers": layers,
             "dimStyles": self.dim_styles,
             "textStyles": self.text_styles,
+            "linetypes": self.linetypes,
             "groups": self.groups.len(),
             "properties": self.properties,
             "entities": self.entities.len(),
@@ -754,6 +851,24 @@ impl Drawing {
         }
         if self.text_styles.is_empty() {
             return Err("the drawing has no text style".to_string());
+        }
+        if self.linetypes.is_empty() {
+            return Err("the drawing has no line type".to_string());
+        }
+        let mut linetype_ids = std::collections::HashSet::new();
+        for linetype in &self.linetypes {
+            linetype.validate()?;
+            if !linetype_ids.insert(linetype.id.as_str()) {
+                return Err(format!("duplicate line type id `{}`", linetype.id));
+            }
+        }
+        for layer in &self.layers {
+            if !linetype_ids.contains(layer.linetype.as_str()) {
+                return Err(format!("layer `{}` references missing line type `{}`", layer.id, layer.linetype));
+            }
+            if !layer.lineweight.is_finite() || !(0.0..=MAX_LINEWEIGHT).contains(&layer.lineweight) {
+                return Err(format!("layer `{}` has a lineweight outside 0..={MAX_LINEWEIGHT} mm", layer.id));
+            }
         }
         let mut text_style_ids = std::collections::HashSet::new();
         for style in &self.text_styles {

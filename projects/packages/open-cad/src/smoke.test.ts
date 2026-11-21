@@ -346,6 +346,39 @@ test('text styles are read and written through the document', { skip: withAddon 
     }
 });
 
+test('linetypes and layer lineweights are read and written', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Line types' });
+        assert.equal(document.linetypes.length, 1);
+        assert.equal(document.linetypes[0]?.name, 'continuous');
+
+        const dashed = document.addLinetype({ name: 'DASHED', description: 'Dashed', pattern: [5, 2] });
+        assert.equal(dashed.id, 'DASHED');
+        assert.deepEqual(dashed.pattern, [5, 2]);
+
+        const layer = document.updateLayer({ layerId: '0', linetype: 'DASHED', lineweight: 0.5 });
+        assert.equal(layer.linetype, 'DASHED');
+        assert.equal(layer.lineweight, 0.5);
+
+        const renamed = document.updateLinetype({ linetypeId: 'DASHED', name: 'DASH-1' });
+        assert.equal(renamed.id, 'DASH-1');
+        assert.equal(document.layers[0]?.linetype, 'DASH-1');
+
+        assert.throws(
+            () => document.deleteLinetype('continuous'),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/linetype-in-use',
+        );
+        assert.throws(
+            () => document.updateLayer({ layerId: '0', linetype: 'missing' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('selection returns window and crossing matches', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

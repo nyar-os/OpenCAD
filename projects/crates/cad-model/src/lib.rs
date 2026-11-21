@@ -29,10 +29,10 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, DrawingProperties, Entity, EntityGroup, EntityKind, Layer,
-    OrdinateAxis, PROPERTY_VALUE_LIMIT, TextStyle, Units, arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern,
-    default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label,
-    radial_target, sample_arc, sample_ellipse,
+    CONTINUOUS_LINETYPE, CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, DrawingProperties, Entity, EntityGroup,
+    EntityKind, LINETYPE_PATTERN_LIMIT, Layer, Linetype, MAX_LINEWEIGHT, OrdinateAxis, PROPERTY_VALUE_LIMIT, TextStyle, Units, arc_point,
+    arc_sweep, default_dimension_styles, default_hatch_pattern, default_linetypes, default_text_styles, ellipse_point, finite_point,
+    normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -191,12 +191,13 @@ pub fn capabilities() -> Value {
                 "select",
                 "properties",
                 "snap",
+                "linetype",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity" | "stats"
-                | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap" => "supported",
+                | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap" | "linetype" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -819,6 +820,8 @@ fn layer_json(drawing: &Drawing, id: &str) -> Option<Value> {
             "color": layer.color,
             "visible": layer.visible,
             "locked": layer.locked,
+            "linetype": layer.linetype,
+            "lineweight": layer.lineweight,
             "entityCount": drawing.entities.iter().filter(|entity| entity.layer == layer.id).count(),
         })
     })
@@ -2308,7 +2311,15 @@ pub fn add_layer(handle: u64, name: &str, color: Option<&str>) -> Result<Value, 
         if drawing.layers.iter().any(|layer| layer.id == name || layer.name.eq_ignore_ascii_case(&name)) {
             return Err(ServiceError::new("drawing/layer-exists", format!("a layer named `{name}` already exists")));
         }
-        drawing.layers.push(Layer { id: name.clone(), name: name.clone(), color, visible: true, locked: false });
+        drawing.layers.push(Layer {
+            id: name.clone(),
+            name: name.clone(),
+            color,
+            visible: true,
+            locked: false,
+            linetype: CONTINUOUS_LINETYPE.to_string(),
+            lineweight: 0.0,
+        });
         drawing.revision += 1;
         Ok(())
     })?;
@@ -2333,12 +2344,22 @@ pub struct LayerUpdate {
     pub visible: Option<bool>,
     /// Whether geometry on the layer is writable.
     pub locked: Option<bool>,
+    /// Line type id assigned to the layer; it must already exist.
+    pub linetype: Option<String>,
+    /// Lineweight in millimetres, `0..=10`; `0` uses the exporter default.
+    pub lineweight: Option<f64>,
 }
 
 /// Updates one layer and rewrites entity references when the name changes.
 pub fn update_layer(handle: u64, id: &str, update: LayerUpdate) -> Result<Value, ServiceError> {
-    if update.name.is_none() && update.color.is_none() && update.visible.is_none() && update.locked.is_none() {
-        return Err(argument("pass at least one of `name`, `color`, `visible` or `locked`"));
+    if update.name.is_none()
+        && update.color.is_none()
+        && update.visible.is_none()
+        && update.locked.is_none()
+        && update.linetype.is_none()
+        && update.lineweight.is_none()
+    {
+        return Err(argument("pass at least one of `name`, `color`, `visible`, `locked`, `linetype` or `lineweight`"));
     }
     let new_name = match update.name {
         Some(name) => {
@@ -2354,6 +2375,15 @@ pub fn update_layer(handle: u64, id: &str, update: LayerUpdate) -> Result<Value,
         && !valid_color(color)
     {
         return Err(argument(format!("`{color}` is not a #rgb or #rrggbb colour")));
+    }
+    if let Some(lineweight) = update.lineweight
+        && (!lineweight.is_finite() || !(0.0..=MAX_LINEWEIGHT).contains(&lineweight))
+    {
+        return Err(argument(format!("a lineweight must be between 0 and {MAX_LINEWEIGHT} millimetres")));
+    }
+    let linetype = update.linetype.as_ref().map(|name| name.trim().to_string());
+    if linetype.as_ref().is_some_and(String::is_empty) {
+        return Err(argument("a line type id cannot be empty"));
     }
     let target = id.to_string();
     let next_id = new_name.clone().unwrap_or_else(|| target.clone());
@@ -2372,6 +2402,11 @@ pub fn update_layer(handle: u64, id: &str, update: LayerUpdate) -> Result<Value,
         {
             return Err(ServiceError::new("drawing/layer-exists", format!("a layer named `{name}` already exists")));
         }
+        if let Some(linetype) = &linetype
+            && !drawing.linetypes.iter().any(|entry| entry.id == *linetype)
+        {
+            return Err(ServiceError::new("object/not-found", format!("line type `{linetype}` does not exist")));
+        }
         let Some(layer) = drawing.layers.get_mut(index)
         else {
             return Err(ServiceError::new("object/not-found", format!("layer `{target}` does not exist")));
@@ -2388,6 +2423,12 @@ pub fn update_layer(handle: u64, id: &str, update: LayerUpdate) -> Result<Value,
         }
         if let Some(locked) = update.locked {
             layer.locked = locked;
+        }
+        if let Some(linetype) = linetype {
+            layer.linetype = linetype;
+        }
+        if let Some(lineweight) = update.lineweight {
+            layer.lineweight = lineweight;
         }
         let renamed = layer.id.clone();
         for entity in &mut drawing.entities {
@@ -2844,6 +2885,184 @@ fn read_text_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
             "revision": session.drawing.revision,
             "drawing": session.summary(),
             "style": style,
+        })
+    })
+}
+
+/// Validates one line type dash pattern.
+fn validate_linetype_pattern(pattern: &[f64]) -> Result<(), ServiceError> {
+    if pattern.len() > LINETYPE_PATTERN_LIMIT {
+        return Err(argument(format!("a line type pattern holds at most {LINETYPE_PATTERN_LIMIT} dashes")));
+    }
+    if pattern.iter().any(|dash| !dash.is_finite() || *dash < 0.0) {
+        return Err(argument("line type dashes must be finite and non-negative"));
+    }
+    if !pattern.is_empty() && pattern.iter().all(|dash| *dash == 0.0) {
+        return Err(argument("a line type pattern cannot be all zero dashes"));
+    }
+    Ok(())
+}
+
+/// Lists the line types of one drawing.
+pub fn list_linetypes(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "linetypes": session.drawing.linetypes,
+        })
+    })
+}
+
+/// Fields used to create one line type.
+#[derive(Debug, Clone, Default)]
+pub struct LinetypeRequest {
+    /// Line type name; it also becomes the id.
+    pub name: String,
+    /// Human-readable description.
+    pub description: Option<String>,
+    /// Dash lengths in drawing units; empty is a solid line.
+    pub pattern: Option<Vec<f64>>,
+}
+
+/// Fields an update to one line type may change.
+#[derive(Debug, Clone, Default)]
+pub struct LinetypeUpdate {
+    /// New name; it also becomes the id.
+    pub name: Option<String>,
+    /// New description.
+    pub description: Option<String>,
+    /// New dash pattern.
+    pub pattern: Option<Vec<f64>>,
+}
+
+fn read_linetype(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let linetype = session.drawing.linetypes.iter().find(|linetype| linetype.id == id);
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "linetype": linetype,
+        })
+    })
+}
+
+/// Adds one line type and returns `{ revision, drawing, linetype }`.
+pub fn add_linetype(handle: u64, request: LinetypeRequest) -> Result<Value, ServiceError> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err(argument("a line type needs a non-empty name"));
+    }
+    let description = request.description.map(|value| value.trim().to_string()).unwrap_or_default();
+    let pattern = request.pattern.unwrap_or_default();
+    validate_linetype_pattern(&pattern)?;
+    store::edit(handle, |drawing| {
+        if drawing.linetypes.iter().any(|linetype| linetype.id == name || linetype.name.eq_ignore_ascii_case(&name)) {
+            return Err(ServiceError::new("drawing/linetype-exists", format!("a line type named `{name}` already exists")));
+        }
+        let linetype = Linetype { id: name.clone(), name: name.clone(), description, pattern };
+        linetype.validate().map_err(argument)?;
+        drawing.linetypes.push(linetype);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    read_linetype(handle, &name)
+}
+
+/// Updates one line type, renaming layer references when the name changes.
+pub fn update_linetype(handle: u64, id: &str, update: LinetypeUpdate) -> Result<Value, ServiceError> {
+    if update.name.is_none() && update.description.is_none() && update.pattern.is_none() {
+        return Err(argument("pass at least one of `name`, `description` or `pattern`"));
+    }
+    let new_name = match update.name.as_deref() {
+        Some(raw) => {
+            let name = raw.trim().to_string();
+            if name.is_empty() {
+                return Err(argument("a line type needs a non-empty name"));
+            }
+            Some(name)
+        }
+        None => None,
+    };
+    if let Some(pattern) = &update.pattern {
+        validate_linetype_pattern(pattern)?;
+    }
+    let target = id.to_string();
+    let next_id = new_name.clone().unwrap_or_else(|| target.clone());
+    store::edit(handle, |drawing| {
+        let index = drawing
+            .linetypes
+            .iter()
+            .position(|linetype| linetype.id == target)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("line type `{target}` does not exist")))?;
+        if let Some(name) = &new_name
+            && drawing
+                .linetypes
+                .iter()
+                .enumerate()
+                .any(|(other, linetype)| other != index && (linetype.id == *name || linetype.name.eq_ignore_ascii_case(name)))
+        {
+            return Err(ServiceError::new("drawing/linetype-exists", format!("a line type named `{name}` already exists")));
+        }
+        let Some(linetype) = drawing.linetypes.get_mut(index)
+        else {
+            return Err(ServiceError::new("object/not-found", format!("line type `{target}` does not exist")));
+        };
+        if let Some(name) = new_name {
+            linetype.id = name.clone();
+            linetype.name = name;
+        }
+        if let Some(description) = update.description {
+            linetype.description = description.trim().to_string();
+        }
+        if let Some(pattern) = update.pattern {
+            linetype.pattern = pattern;
+        }
+        linetype.validate().map_err(argument)?;
+        let renamed = linetype.id.clone();
+        if renamed != target {
+            for layer in &mut drawing.layers {
+                if layer.linetype == target {
+                    layer.linetype = renamed.clone();
+                }
+            }
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    read_linetype(handle, &next_id)
+}
+
+/// Removes one line type and returns `{ revision, drawing, deleted }`.
+///
+/// A line type any layer still references refuses with
+/// `drawing/linetype-in-use`; removing the last line type refuses with
+/// `drawing/linetype-last`.
+pub fn delete_linetype(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::edit(handle, |drawing| {
+        let index = drawing
+            .linetypes
+            .iter()
+            .position(|linetype| linetype.id == id)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("line type `{id}` does not exist")))?;
+        if drawing.linetypes.len() <= 1 {
+            return Err(ServiceError::new(
+                "drawing/linetype-last",
+                format!("line type `{id}` is the last one; a drawing must keep at least one line type"),
+            ));
+        }
+        let count = drawing.layers.iter().filter(|layer| layer.linetype == id).count();
+        if count > 0 {
+            return Err(ServiceError::new("drawing/linetype-in-use", format!("line type `{id}` is referenced by {count} layer(s)")));
+        }
+        drawing.linetypes.remove(index);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "deleted": id,
         })
     })
 }
@@ -4133,6 +4352,63 @@ mod tests {
     }
 
     #[test]
+    fn linetypes_and_layer_lineweights_round_trip() {
+        let dir = TempDir::new("linetypes");
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let listed = list_linetypes(handle).expect("list");
+        assert_eq!(listed["linetypes"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listed["linetypes"][0]["name"], json!("continuous"));
+
+        let added = add_linetype(
+            handle,
+            LinetypeRequest { name: "DASHED".to_string(), description: Some("Dashed".to_string()), pattern: Some(vec![5.0, 2.0]) },
+        )
+        .expect("add linetype");
+        assert_eq!(added["linetype"]["pattern"], json!([5.0, 2.0]));
+
+        let layer = update_layer(
+            handle,
+            DEFAULT_LAYER,
+            LayerUpdate { linetype: Some("DASHED".to_string()), lineweight: Some(0.5), ..LayerUpdate::default() },
+        )
+        .expect("assign linetype");
+        assert_eq!(layer["layer"]["linetype"], json!("DASHED"));
+        assert_eq!(layer["layer"]["lineweight"], json!(0.5));
+
+        assert!(delete_linetype(handle, "continuous").is_err(), "a referenced line type cannot be removed");
+        let renamed = update_linetype(handle, "DASHED", LinetypeUpdate { name: Some("DASH-1".to_string()), ..LinetypeUpdate::default() })
+            .expect("rename");
+        assert_eq!(renamed["linetype"]["name"], json!("DASH-1"));
+        assert_eq!(renamed["drawing"]["layers"][0]["linetype"], json!("DASH-1"));
+
+        let path = dir.path.join("plan.dxf");
+        export(handle, "dxf", &path).expect("export dxf");
+        let text = fs::read_to_string(&path).expect("read dxf");
+        assert!(text.contains("LTYPE"));
+        assert!(text.contains("DASH-1"));
+        assert!(text.contains("370"));
+
+        let imported = import_dxf(&path, None).expect("import dxf");
+        let imported_handle = handle_of(&imported);
+        let linetypes = list_linetypes(imported_handle).expect("list imported");
+        let dashed = linetypes["linetypes"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["name"] == json!("DASH-1")))
+            .cloned()
+            .expect("imported line type");
+        assert_eq!(dashed["pattern"], json!([5.0, 2.0]));
+        let imported_layer = imported["drawing"]["layers"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["id"] == json!(DEFAULT_LAYER)))
+            .cloned()
+            .expect("imported layer");
+        assert_eq!(imported_layer["lineweight"], json!(0.5));
+        close(imported_handle).expect("close imported");
+        close(handle).expect("close");
+    }
+
+    #[test]
     fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
         let created = create(CreateRequest::default()).expect("create");
         let handle = handle_of(&created);
@@ -4616,6 +4892,8 @@ mod tests {
             color: "#000000".to_string(),
             visible: true,
             locked: false,
+            linetype: CONTINUOUS_LINETYPE.to_string(),
+            lineweight: 0.0,
         });
         drawing.entities.push(Entity {
             id: "entity-1".to_string(),

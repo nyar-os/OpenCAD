@@ -15,8 +15,8 @@ use geometry_planar::{Point as PlanarPoint, Rect, signed_polygon_area};
 use serde::Serialize;
 
 use crate::schema::{
-    Drawing, Entity, EntityKind, OrdinateAxis, Units, arc_sweep, offset_points, ordinate_points, ordinate_value, radial_label, radial_target,
-    sample_arc, sample_ellipse,
+    CONTINUOUS_LINETYPE, Drawing, Entity, EntityKind, OrdinateAxis, Units, arc_sweep, offset_points, ordinate_points, ordinate_value,
+    radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// One item an exchange target could not keep.
@@ -418,7 +418,9 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     dxf_pair(&mut out, 0, "SECTION");
     dxf_pair(&mut out, 2, "HEADER");
     dxf_pair(&mut out, 9, "$ACADVER");
-    let version = if drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) { "AC1015" } else { "AC1009" };
+    let custom_lines = drawing.layers.iter().any(|layer| layer.linetype != CONTINUOUS_LINETYPE || layer.lineweight > 0.0);
+    let version =
+        if custom_lines || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) { "AC1015" } else { "AC1009" };
     dxf_pair(&mut out, 1, version);
     dxf_pair(&mut out, 9, "$INSUNITS");
     dxf_pair(&mut out, 70, drawing.units.dxf_insunits());
@@ -427,6 +429,23 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     dxf_pair(&mut out, 0, "SECTION");
     dxf_pair(&mut out, 2, "TABLES");
     dxf_pair(&mut out, 0, "TABLE");
+    dxf_pair(&mut out, 2, "LTYPE");
+    dxf_pair(&mut out, 70, drawing.linetypes.len());
+    for linetype in &drawing.linetypes {
+        let total = linetype.pattern.iter().sum::<f64>();
+        dxf_pair(&mut out, 0, "LTYPE");
+        dxf_pair(&mut out, 2, dxf_text(&linetype.name));
+        dxf_pair(&mut out, 70, 0);
+        dxf_pair(&mut out, 3, dxf_text(&linetype.description));
+        dxf_pair(&mut out, 72, 65);
+        dxf_pair(&mut out, 73, linetype.pattern.len());
+        dxf_pair(&mut out, 40, num_exact(total));
+        for dash in &linetype.pattern {
+            dxf_pair(&mut out, 49, num_exact(*dash));
+        }
+    }
+    dxf_pair(&mut out, 0, "ENDTAB");
+    dxf_pair(&mut out, 0, "TABLE");
     dxf_pair(&mut out, 2, "LAYER");
     dxf_pair(&mut out, 70, drawing.layers.len());
     for layer in &drawing.layers {
@@ -434,7 +453,8 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
         dxf_pair(&mut out, 2, dxf_layer_name(&layer.id));
         dxf_pair(&mut out, 70, 0);
         dxf_pair(&mut out, 62, 7);
-        dxf_pair(&mut out, 6, "CONTINUOUS");
+        dxf_pair(&mut out, 6, dxf_text(&layer.linetype));
+        dxf_pair(&mut out, 370, (layer.lineweight * 100.0).round() as i64);
         if layer.color != "#ffffff" {
             losses.push(Loss::warning(
                 "dxf/layer-color",

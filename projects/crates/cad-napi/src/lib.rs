@@ -401,6 +401,61 @@ fn drawing_delete_text_style(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Lists the line types of an open drawing.
+#[function]
+fn drawing_list_linetypes(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::list_linetypes(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Adds one line type to an open drawing.
+#[function]
+fn drawing_add_linetype(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let pattern = request["pattern"].as_array().map(|entries| entries.iter().filter_map(Value::as_f64).collect::<Vec<_>>());
+    let result = open_cad_drawing::add_linetype(
+        handle,
+        open_cad_drawing::LinetypeRequest {
+            name: request_string(&request, "name").map_err(Error::new)?,
+            description: request["description"].as_str().map(str::to_string),
+            pattern,
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Updates one line type of an open drawing.
+#[function]
+fn drawing_update_linetype(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let linetype = request_string(&request, "linetypeId").map_err(Error::new)?;
+    let pattern = request["pattern"].as_array().map(|entries| entries.iter().filter_map(Value::as_f64).collect::<Vec<_>>());
+    let result = open_cad_drawing::update_linetype(
+        handle,
+        &linetype,
+        open_cad_drawing::LinetypeUpdate {
+            name: request["name"].as_str().map(str::to_string),
+            description: request["description"].as_str().map(str::to_string),
+            pattern,
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Removes one line type from an open drawing.
+#[function]
+fn drawing_delete_linetype(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let linetype = text(&ctx, 1)?;
+    let result = open_cad_drawing::delete_linetype(handle, &linetype).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Lists the entity groups of an open drawing.
 #[function]
 fn drawing_list_groups(ctx: CallContext) -> Result<JsValue> {
@@ -842,6 +897,8 @@ fn call_update_layer(handle: u64, request: &Value) -> std::result::Result<Value,
         color: request.get("color").and_then(Value::as_str).map(str::to_string),
         visible: request.get("visible").and_then(Value::as_bool),
         locked: request.get("locked").and_then(Value::as_bool),
+        linetype: request.get("linetype").and_then(Value::as_str).map(str::to_string),
+        lineweight: request.get("lineweight").and_then(Value::as_f64),
     };
     open_cad_drawing::update_layer(handle, &layer, update).map_err(service_failure)
 }
@@ -1950,6 +2007,10 @@ register_module![
     drawing_add_text_style,
     drawing_update_text_style,
     drawing_delete_text_style,
+    drawing_list_linetypes,
+    drawing_add_linetype,
+    drawing_update_linetype,
+    drawing_delete_linetype,
     drawing_list_groups,
     drawing_create_group,
     drawing_delete_group,
