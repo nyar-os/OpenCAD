@@ -12,9 +12,9 @@ drawings, add lines, circles, arcs, ellipses, polylines, text and dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline and measure, move, update and delete entities, undo and redo,
 add, rename, hide and lock layers, save atomically, inspect units, layers,
-geometry, polylines, dimensions, duplicate entities and zero-length geometry,
-import the declared ASCII DXF subset, and export SVG, ASCII DXF, PDF, STL or
-STEP.
+geometry, polylines, dimensions, duplicate entities, zero-length geometry and
+open contours, import the declared ASCII DXF subset, and export SVG, ASCII DXF,
+PDF, STL or STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
 reader and STL import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
@@ -62,7 +62,7 @@ open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
 
-open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length
+open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
 open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
 open-cad export plan.ocad --format pdf --out plan.pdf
@@ -137,11 +137,14 @@ start a new document.
 ## Inspection
 
 The implemented checks are `units`, `layers`, `geometry`, `polylines`,
-`dimensions`, `duplicate-entity` and `zero-length`. `units` only warns when a
-dimension label carries an explicit unit word or inch symbol that conflicts with
-the document unit. `duplicate-entity` reports entities whose layer and geometry
-are identical; `zero-length` reports lines whose ends coincide and polylines
-whose whole length collapses to one point.
+`dimensions`, `duplicate-entity`, `zero-length` and `open-contour`. `units` only
+warns when a dimension label carries an explicit unit word or inch symbol that
+conflicts with the document unit. `duplicate-entity` reports entities whose
+layer and geometry are identical; `zero-length` reports lines whose ends
+coincide and polylines whose whole length collapses to one point;
+`open-contour` reports chains of two or more lines or open polyline segments
+that do not close back on themselves (vertices within one millionth of a
+drawing unit count as joined).
 Findings carry a code, severity, revision, layer id, object id, recoverability
 and message. A drawing without error-level findings passes; a locked-layer
 finding is a warning.

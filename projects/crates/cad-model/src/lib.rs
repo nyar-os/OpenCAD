@@ -39,7 +39,7 @@ pub const DRAWING_FORMATS: &[&str] = &["dwg", "dxf", "step", "stp", "iges", "igs
 
 /// Inspection checks exposed by [`capabilities`].
 pub const INSPECT_CHECKS: &[&str] =
-    &["units", "layers", "geometry", "polylines", "constraints", "dimensions", "references", "duplicate-entity", "zero-length"];
+    &["units", "layers", "geometry", "polylines", "constraints", "dimensions", "references", "duplicate-entity", "zero-length", "open-contour"];
 
 /// Static render targets.
 pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
@@ -115,7 +115,7 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let check_level = |name: &str| match name {
-        "units" | "layers" | "geometry" | "polylines" | "dimensions" | "duplicate-entity" | "zero-length" => "supported",
+        "units" | "layers" | "geometry" | "polylines" | "dimensions" | "duplicate-entity" | "zero-length" | "open-contour" => "supported",
         _ => "unsupported",
     };
     let renderer_level = |name: &str| match name {
@@ -254,9 +254,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Runs the requested checks and reports every finding.
 ///
-/// `units`, `layers`, `geometry` and `dimensions` run; `constraints` and
-/// `references` are not implemented and request them fails with
-/// `capability/not-implemented` rather than reporting a false pass.
+/// `units`, `layers`, `geometry`, `polylines`, `dimensions`, `duplicate-entity`,
+/// `zero-length` and `open-contour` run; `constraints` and `references` are not
+/// implemented and requesting them fails with `capability/not-implemented`
+/// rather than reporting a false pass.
 pub fn inspect(handle: u64, checks: Option<Vec<String>>) -> Result<Value, ServiceError> {
     let requested = match checks {
         Some(names) if !names.is_empty() => names,
@@ -1618,7 +1619,7 @@ mod tests {
         assert_eq!(matrix["formats"]["dxf"], json!("partial"));
         assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
         assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
-        for check in ["units", "layers", "geometry", "dimensions", "duplicate-entity", "zero-length"] {
+        for check in ["units", "layers", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
             assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
         }
         for check in ["constraints", "references"] {
@@ -3050,6 +3051,34 @@ mod tests {
         assert_eq!(duplicate["objectId"], json!("entity-2"));
         assert_eq!(duplicate["severity"], json!("warning"));
         assert_eq!(report["passed"], json!(false), "a zero-length entity is an error");
+    }
+
+    #[test]
+    fn open_contour_check_flags_chains_that_do_not_close() {
+        let entity = |id: &str, kind| Entity { id: id.to_string(), layer: DEFAULT_LAYER.to_string(), kind };
+        let mut drawing = Drawing::empty(None, Units::Mm);
+        drawing.entities.push(entity("entity-1", EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] }));
+        drawing.entities.push(entity("entity-2", EntityKind::Line { from: [10.0, 0.0], to: [10.0, 10.0] }));
+        drawing.entities.push(entity("entity-3", EntityKind::Line { from: [10.0, 10.0], to: [0.0, 10.0] }));
+        drawing.entities.push(entity("entity-4", EntityKind::Line { from: [0.0, 10.0], to: [0.0, 0.0] }));
+        drawing
+            .entities
+            .push(entity("entity-5", EntityKind::Polyline { points: vec![[20.0, 0.0], [24.0, 0.0], [24.0, 4.0], [20.0, 4.0]], closed: true }));
+        let closed = inspection::run(&drawing, &["open-contour"]).to_json();
+        assert_eq!(closed["issues"], json!([]), "closed loops are not flagged");
+        assert_eq!(closed["passed"], json!(true));
+
+        drawing.entities.push(entity("entity-6", EntityKind::Line { from: [40.0, 0.0], to: [45.0, 0.0] }));
+        drawing.entities.push(entity("entity-7", EntityKind::Line { from: [45.0, 0.0], to: [45.0, 5.0] }));
+        drawing.entities.push(entity("entity-8", EntityKind::Line { from: [45.0, 5.0], to: [40.0, 5.0] }));
+        drawing.entities.push(entity("entity-9", EntityKind::Line { from: [60.0, 0.0], to: [65.0, 0.0] }));
+        let report = inspection::run(&drawing, &["open-contour"]).to_json();
+        let issues = report["issues"].as_array().expect("issues");
+        let codes = issues.iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+        assert_eq!(codes, ["inspection/open-contour"], "one open chain and one isolated line that is not a contour");
+        assert_eq!(issues[0]["objectId"], json!("entity-6"));
+        assert_eq!(issues[0]["severity"], json!("warning"));
+        assert_eq!(report["passed"], json!(true), "an open contour is a warning");
     }
 
     #[test]

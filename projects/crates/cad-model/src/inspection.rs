@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 use crate::schema::{Drawing, EntityKind, Units};
 
 /// Checks this build executes.
-pub(crate) const SUPPORTED_CHECKS: &[&str] = &["units", "layers", "geometry", "polylines", "dimensions", "duplicate-entity", "zero-length"];
+pub(crate) const SUPPORTED_CHECKS: &[&str] =
+    &["units", "layers", "geometry", "polylines", "dimensions", "duplicate-entity", "zero-length", "open-contour"];
 
 /// Result of one inspection run.
 #[derive(Debug, Clone)]
@@ -143,6 +144,81 @@ impl<'a> Collector<'a> {
                     format!("{name} `{}` has zero length", entity.id),
                 );
             }
+        }
+    }
+
+    /// Flags chains of lines and open polylines that do not close back on
+    /// themselves.
+    ///
+    /// Every line and every open polyline contributes one edge per segment.
+    /// Points closer than one millionth of a drawing unit are treated as the
+    /// same vertex, so chained entities connect. A connected chain is closed
+    /// when every vertex joins exactly two edges. Closed polylines, curves and
+    /// annotations are ignored, and a single isolated line is not a contour.
+    fn check_open_contours(&mut self) {
+        let mut graph = ContourGraph::default();
+        let mut edges = Vec::new();
+        for (index, entity) in self.drawing.entities.iter().enumerate() {
+            match &entity.kind {
+                EntityKind::Line { from, to } => {
+                    if let Some((vertex, _)) = graph.edge(*from, *to) {
+                        edges.push((index, vertex));
+                    }
+                }
+                EntityKind::Polyline { points, closed } => {
+                    if *closed {
+                        continue;
+                    }
+                    for pair in points.windows(2) {
+                        if let Some((vertex, _)) = graph.edge(pair[0], pair[1]) {
+                            edges.push((index, vertex));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if edges.len() < 2 {
+            return;
+        }
+
+        let mut order = Vec::new();
+        let mut segments: HashMap<usize, usize> = HashMap::new();
+        let mut first_entity: HashMap<usize, usize> = HashMap::new();
+        for (index, vertex) in edges {
+            let root = graph.root(vertex);
+            if !segments.contains_key(&root) {
+                order.push(root);
+                first_entity.insert(root, index);
+            }
+            *segments.entry(root).or_default() += 1;
+        }
+        let mut loose: HashMap<usize, usize> = HashMap::new();
+        for vertex in 0..graph.parent.len() {
+            let root = graph.root(vertex);
+            if graph.degree[vertex] != 2 {
+                *loose.entry(root).or_default() += 1;
+            }
+        }
+
+        let findings = order
+            .into_iter()
+            .filter_map(|root| {
+                let count = segments.get(&root).copied().unwrap_or(0);
+                let loose = loose.get(&root).copied().unwrap_or(0);
+                (count >= 2 && loose > 0).then(|| (first_entity[&root], count, loose))
+            })
+            .collect::<Vec<_>>();
+        for (index, count, loose) in findings {
+            let entity = &self.drawing.entities[index];
+            self.push(
+                "inspection/open-contour",
+                Severity::Warning,
+                Some(&entity.layer),
+                Some(&entity.id),
+                true,
+                format!("contour starting at `{}` joins {count} segment(s) and has {loose} loose or branching vertex(es)", entity.id),
+            );
         }
     }
 
@@ -351,6 +427,67 @@ impl<'a> Collector<'a> {
     }
 }
 
+/// Vertex key shared by points closer than one millionth of a drawing unit.
+fn vertex_key(point: [f64; 2]) -> (i64, i64) {
+    const SCALE: f64 = 1_000_000.0;
+    ((point[0] * SCALE).round() as i64, (point[1] * SCALE).round() as i64)
+}
+
+/// Undirected graph of the line segments that form line and polyline chains.
+#[derive(Default)]
+struct ContourGraph {
+    vertices: HashMap<(i64, i64), usize>,
+    parent: Vec<usize>,
+    degree: Vec<usize>,
+}
+
+impl ContourGraph {
+    fn vertex(&mut self, point: [f64; 2]) -> Option<usize> {
+        if !point[0].is_finite() || !point[1].is_finite() {
+            return None;
+        }
+        if let Some(index) = self.vertices.get(&vertex_key(point)) {
+            return Some(*index);
+        }
+        let index = self.parent.len();
+        self.vertices.insert(vertex_key(point), index);
+        self.parent.push(index);
+        self.degree.push(0);
+        Some(index)
+    }
+
+    /// Adds one undirected edge and returns its two vertex indices.
+    ///
+    /// A zero-length edge is rejected, so it cannot make a chain look closed.
+    fn edge(&mut self, from: [f64; 2], to: [f64; 2]) -> Option<(usize, usize)> {
+        let (from, to) = (self.vertex(from)?, self.vertex(to)?);
+        if from == to {
+            return None;
+        }
+        self.degree[from] += 1;
+        self.degree[to] += 1;
+        let (from_root, to_root) = (self.root(from), self.root(to));
+        if from_root != to_root {
+            self.parent[to_root] = from_root;
+        }
+        Some((from, to))
+    }
+
+    fn root(&mut self, index: usize) -> usize {
+        let mut root = index;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut current = index;
+        while self.parent[current] != current {
+            let next = self.parent[current];
+            self.parent[current] = root;
+            current = next;
+        }
+        root
+    }
+}
+
 /// Whether a dimension label names a unit that conflicts with the document.
 ///
 /// The check is deliberately conservative: it only looks at ASCII unit words
@@ -391,6 +528,7 @@ pub(crate) fn run(drawing: &Drawing, checks: &[&str]) -> Report {
     let dimensions = checks.contains(&"dimensions");
     let duplicate_entity = checks.contains(&"duplicate-entity");
     let zero_length = checks.contains(&"zero-length");
+    let open_contour = checks.contains(&"open-contour");
     let mut collector =
         Collector { drawing, issues: CheckReport::new(), seen_ids: HashMap::new(), geometry, layers, units, polylines, dimensions };
     if geometry {
@@ -402,6 +540,9 @@ pub(crate) fn run(drawing: &Drawing, checks: &[&str]) -> Report {
     }
     if zero_length {
         collector.check_zero_length();
+    }
+    if open_contour {
+        collector.check_open_contours();
     }
     if layers {
         collector.check_layer_names();

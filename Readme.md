@@ -58,7 +58,7 @@ open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
 open-cad entity list plan.ocad
-open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length
+open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
 open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
 open-cad export plan.ocad --format pdf --out plan.pdf
@@ -122,8 +122,8 @@ What this build does NOT do
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities. Document
   checks: `units`, `layers`, `geometry`, `polylines`, `dimensions`,
-  `duplicate-entity` and `zero-length` run; `constraints` and `references` stay
-  unsupported. `units` is conservative: it
+  `duplicate-entity`, `zero-length` and `open-contour` run; `constraints` and
+  `references` stay unsupported. `units` is conservative: it
   warns only when a dimension's explicit label carries a unit word or inch
   symbol that conflicts with the document unit.
 - `measure` sums line segments, polyline edges and analytic arc lengths; ellipse

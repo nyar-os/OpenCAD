@@ -32,7 +32,8 @@ export type InspectCheck =
     | 'dimensions'
     | 'references'
     | 'duplicate-entity'
-    | 'zero-length';
+    | 'zero-length'
+    | 'open-contour';
 
 /** Entity kinds in the capability matrix. */
 export type EntityKindName = 'line' | 'circle' | 'arc' | 'ellipse' | 'point' | 'polyline' | 'text' | 'dimension';
