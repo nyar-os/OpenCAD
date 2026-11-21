@@ -17,7 +17,8 @@ delete entities, undo and redo,
 add, rename, merge, hide and lock layers, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
-table), select entities with a rectangular window or crossing query, save
+table), find and replace text content in bulk, select entities with a
+rectangular window or crossing query, save
 atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
@@ -90,6 +91,9 @@ open-cad textstyle add plan.ocad --name NOTES --font romans.shx --width-factor 0
 open-cad textstyle update plan.ocad --name NOTES --to NOTES-1 --height 3
 open-cad textstyle delete plan.ocad --name NOTES-1
 
+open-cad text find plan.ocad --pattern hall
+open-cad text replace plan.ocad --pattern hall --to "main hall"
+
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
 
@@ -150,6 +154,12 @@ ellipses. `stats` applies the same rules per layer and adds per-layer entity
 counts plus drawing-wide totals. The `empty-layer` inspection check is opt-in:
 `inspect --checks empty-layer` warns about each layer with no entities, and a
 default inspection run does not include it.
+
+`text find` is a read-only query over `TEXT` entities and `text replace` is one
+history step. Both match ASCII case-insensitively unless `--match-case` is
+passed, accept `--layer` to narrow the scope, and never touch dimension labels
+or attributes. A replacement on a locked layer refuses the whole edit with
+`drawing/layer-locked`.
 
 `undo` and `redo` use the `<file>.history.json` sidecar that every mutating
 command maintains (up to 32 prior documents, atomic writes), so they work across

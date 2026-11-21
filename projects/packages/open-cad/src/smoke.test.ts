@@ -426,6 +426,31 @@ test('radial and ordinate dimensions are editable entities', { skip: withAddon }
     }
 });
 
+test('find and replace update every matching text entity', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Text search' });
+        const first = document.addText({ layer: '0', at: [0, 0], height: 2.5, content: 'Main Hall' });
+        const second = document.addText({ layer: '0', at: [0, 5], height: 2.5, content: 'Side hall' });
+        document.addText({ layer: '0', at: [0, 10], height: 2.5, content: 'Room' });
+
+        const found = document.findText({ pattern: 'hall' });
+        assert.equal(found.count, 2);
+        assert.deepEqual(found.matches.map((match) => match.id), [first.id, second.id]);
+
+        const revision = document.revision;
+        const replaced = document.replaceText({ pattern: 'hall', replacement: 'lobby' });
+        assert.equal(replaced.count, 2);
+        assert.equal(replaced.occurrences, 2);
+        assert.equal(replaced.revision, revision + 1);
+        const contents = document.listEntities().flatMap((entity) => (entity.kind.type === 'text' ? [entity.kind.content] : []));
+        assert.deepEqual(contents, ['Main lobby', 'Side lobby', 'Room']);
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('a hatch keeps its closed boundary and pattern name', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

@@ -184,13 +184,14 @@ pub fn capabilities() -> Value {
                 "stats",
                 "dimension-style",
                 "text-style",
+                "text-search",
                 "select",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" | "dimension-style"
-                | "text-style" | "select" => "supported",
+                | "text-style" | "text-search" | "select" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -825,6 +826,150 @@ pub fn update_entity(
             "revision": session.drawing.revision,
             "drawing": session.summary(),
             "entity": entity,
+        })
+    })
+}
+
+/// Options of [`find_text`] and [`replace_text`].
+#[derive(Debug, Clone, Default)]
+pub struct TextSearchOptions {
+    /// Match case exactly; `false` matches ASCII letters case-insensitively.
+    pub match_case: bool,
+    /// Restrict the search to one layer id.
+    pub layer: Option<String>,
+}
+
+fn text_selected(layer: &str, options: &TextSearchOptions) -> bool {
+    options.layer.as_deref().is_none_or(|wanted| wanted == layer)
+}
+
+fn text_matches(content: &str, pattern: &str, match_case: bool) -> bool {
+    if match_case { content.contains(pattern) } else { content.to_ascii_lowercase().contains(&pattern.to_ascii_lowercase()) }
+}
+
+fn text_occurrences(content: &str, pattern: &str, match_case: bool) -> usize {
+    if match_case { content.matches(pattern).count() } else { content.to_ascii_lowercase().matches(&pattern.to_ascii_lowercase()).count() }
+}
+
+/// Replaces every occurrence of `pattern` in `content`.
+///
+/// The case-insensitive path lowercases ASCII letters only, so byte offsets stay
+/// aligned with the original string and the replacement keeps the original case
+/// of every character it does not replace.
+fn text_replace(content: &str, pattern: &str, replacement: &str, match_case: bool) -> String {
+    if match_case {
+        return content.replace(pattern, replacement);
+    }
+    let haystack = content.to_ascii_lowercase();
+    let needle = pattern.to_ascii_lowercase();
+    let mut result = String::with_capacity(content.len());
+    let mut cursor = 0;
+    while let Some(offset) = haystack[cursor..].find(&needle) {
+        let start = cursor + offset;
+        result.push_str(&content[cursor..start]);
+        result.push_str(replacement);
+        cursor = start + needle.len();
+    }
+    result.push_str(&content[cursor..]);
+    result
+}
+
+/// Finds text entities whose content contains `pattern`.
+///
+/// Matching is ASCII case-insensitive unless `options.match_case` is set, and
+/// `options.layer` narrows the search to one layer. The response carries
+/// `{ revision, pattern, matchCase, layer, count, matches }`, where every match
+/// is `{ id, layer, content, at }`. The query never mutates the drawing.
+pub fn find_text(handle: u64, pattern: &str, options: TextSearchOptions) -> Result<Value, ServiceError> {
+    if pattern.is_empty() {
+        return Err(argument("a text search needs a non-empty pattern"));
+    }
+    store::read(handle, |session| {
+        let matches = session
+            .drawing
+            .entities
+            .iter()
+            .filter(|entity| text_selected(&entity.layer, &options))
+            .filter_map(|entity| match &entity.kind {
+                EntityKind::Text { at, content, .. } if text_matches(content, pattern, options.match_case) => {
+                    Some(json!({ "id": entity.id, "layer": entity.layer, "content": content, "at": at }))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "revision": session.drawing.revision,
+            "pattern": pattern,
+            "matchCase": options.match_case,
+            "layer": options.layer,
+            "count": matches.len(),
+            "matches": matches,
+        })
+    })
+}
+
+/// Replaces `pattern` in every matching text entity and returns one history step.
+///
+/// Matching uses the same rule as [`find_text`]. The response carries
+/// `{ revision, drawing, pattern, replacement, matchCase, count, occurrences }`;
+/// `count` is the number of changed entities and `occurrences` the number of
+/// replaced substrings. A match on a locked layer refuses the whole edit with
+/// `drawing/layer-locked`; when nothing matches the revision does not change.
+pub fn replace_text(handle: u64, pattern: &str, replacement: &str, options: TextSearchOptions) -> Result<Value, ServiceError> {
+    if pattern.is_empty() {
+        return Err(argument("a text search needs a non-empty pattern"));
+    }
+    let pending = store::read(handle, |session| {
+        session.drawing.entities.iter().any(|entity| {
+            text_selected(&entity.layer, &options)
+                && matches!(&entity.kind, EntityKind::Text { content, .. } if text_matches(content, pattern, options.match_case))
+        })
+    })?;
+    let (count, occurrences) = if pending {
+        store::edit(handle, |drawing| {
+            for entity in &drawing.entities {
+                if !text_selected(&entity.layer, &options) {
+                    continue;
+                }
+                if let EntityKind::Text { content, .. } = &entity.kind
+                    && text_matches(content, pattern, options.match_case)
+                    && let Some(error) = locked_layer(drawing, &entity.layer)
+                {
+                    return Err(error);
+                }
+            }
+            let mut count = 0usize;
+            let mut occurrences = 0usize;
+            for entity in &mut drawing.entities {
+                if !text_selected(&entity.layer, &options) {
+                    continue;
+                }
+                if let EntityKind::Text { content, .. } = &mut entity.kind
+                    && text_matches(content, pattern, options.match_case)
+                {
+                    occurrences += text_occurrences(content, pattern, options.match_case);
+                    *content = text_replace(content, pattern, replacement, options.match_case);
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                drawing.revision += 1;
+            }
+            Ok((count, occurrences))
+        })?
+    }
+    else {
+        (0, 0)
+    };
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "pattern": pattern,
+            "replacement": replacement,
+            "matchCase": options.match_case,
+            "count": count,
+            "occurrences": occurrences,
         })
     })
 }
@@ -3415,6 +3560,58 @@ mod tests {
         update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock default layer");
         assert_eq!(update_entity(handle, "entity-3", Some("X".to_string()), None, None).expect_err("locked").code, "drawing/layer-locked");
 
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn find_text_matches_case_insensitively_and_filters_by_layer() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "Main Hall").expect("text");
+        add_text(handle, DEFAULT_LAYER, [0.0, 4.0], 2.5, "Side hall").expect("text");
+        add_text(handle, DEFAULT_LAYER, [0.0, 8.0], 2.5, "Room").expect("text");
+        add_layer(handle, "Notes", None).expect("layer");
+
+        let found = find_text(handle, "HALL", TextSearchOptions::default()).expect("find");
+        assert_eq!(found["count"], json!(2));
+        assert_eq!(found["matches"][0]["id"], json!("entity-1"));
+        assert_eq!(found["matches"][1]["content"], json!("Side hall"));
+
+        let exact = find_text(handle, "HALL", TextSearchOptions { match_case: true, layer: None }).expect("exact");
+        assert_eq!(exact["count"], json!(0));
+        let scoped = find_text(handle, "hall", TextSearchOptions { match_case: false, layer: Some("Notes".to_string()) }).expect("scoped");
+        assert_eq!(scoped["count"], json!(0));
+        assert_eq!(find_text(handle, "", TextSearchOptions::default()).expect_err("empty pattern").code, "session/argument-invalid");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn replace_text_rewrites_every_match_in_one_history_step() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "hall hall").expect("text");
+        add_text(handle, DEFAULT_LAYER, [0.0, 4.0], 2.5, "Hall").expect("text");
+        add_text(handle, DEFAULT_LAYER, [0.0, 8.0], 2.5, "Room").expect("text");
+
+        let replaced = replace_text(handle, "hall", "lobby", TextSearchOptions::default()).expect("replace");
+        assert_eq!(replaced["count"], json!(2));
+        assert_eq!(replaced["occurrences"], json!(3));
+        assert_eq!(replaced["revision"], json!(5));
+        let drawing = drawing_of(handle);
+        assert!(matches!(&drawing.entities[0].kind, EntityKind::Text { content, .. } if content == "lobby lobby"));
+        assert!(matches!(&drawing.entities[1].kind, EntityKind::Text { content, .. } if content == "lobby"));
+
+        undo(handle).expect("undo");
+        let restored = drawing_of(handle);
+        assert!(matches!(&restored.entities[0].kind, EntityKind::Text { content, .. } if content == "hall hall"));
+
+        let before = restored.revision;
+        let none = replace_text(handle, "zzz", "x", TextSearchOptions::default()).expect("no match");
+        assert_eq!(none["count"], json!(0));
+        assert_eq!(none["revision"], json!(before));
+
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(replace_text(handle, "hall", "x", TextSearchOptions::default()).expect_err("locked layer").code, "drawing/layer-locked");
         close(handle).expect("close");
     }
 

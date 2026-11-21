@@ -399,6 +399,24 @@ fn drawing_update_entity(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Finds text entities whose content contains a pattern.
+#[function]
+fn drawing_find_text(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_find_text(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Replaces a pattern in every matching text entity.
+#[function]
+fn drawing_replace_text(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_replace_text(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Applies a translate/rotate/scale/mirror operation to a selection.
 #[function]
 fn drawing_transform(ctx: CallContext) -> Result<JsValue> {
@@ -817,6 +835,24 @@ fn call_update_entity(handle: u64, request: &Value) -> std::result::Result<Value
     let height = request.get("height").and_then(Value::as_f64);
     let radius = request.get("radius").and_then(Value::as_f64);
     open_cad_drawing::update_entity(handle, &entity, content, height, radius).map_err(service_failure)
+}
+
+fn text_search_options(request: &Value) -> open_cad_drawing::TextSearchOptions {
+    open_cad_drawing::TextSearchOptions {
+        match_case: request.get("matchCase").and_then(Value::as_bool).unwrap_or(false),
+        layer: request.get("layer").and_then(Value::as_str).map(str::to_string),
+    }
+}
+
+fn call_find_text(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let pattern = request_string(request, "pattern")?;
+    open_cad_drawing::find_text(handle, &pattern, text_search_options(request)).map_err(service_failure)
+}
+
+fn call_replace_text(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let pattern = request_string(request, "pattern")?;
+    let replacement = request.get("replacement").and_then(Value::as_str).unwrap_or("");
+    open_cad_drawing::replace_text(handle, &pattern, replacement, text_search_options(request)).map_err(service_failure)
 }
 
 fn call_transform(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -1773,6 +1809,8 @@ register_module![
     drawing_convert_units,
     drawing_move_entity,
     drawing_update_entity,
+    drawing_find_text,
+    drawing_replace_text,
     drawing_transform,
     drawing_copy,
     drawing_array,

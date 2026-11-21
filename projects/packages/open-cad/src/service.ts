@@ -39,6 +39,7 @@ import type {
     ExplodeResult,
     ExportFormat,
     ExportReport,
+    FindTextRequest,
     HistoryResult,
     ImportDxfRequest,
     ImportDxfResult,
@@ -53,12 +54,15 @@ import type {
     OffsetRequest,
     OffsetResult,
     OpenCADCapabilities,
+    ReplaceTextRequest,
     SaveReport,
     SelectionRequest,
     SelectionResult,
     TextStyleChange,
     TextStyleDeletion,
     TextStyleList,
+    TextMatchResult,
+    TextReplaceResult,
     TransformRequest,
     TransformResult,
     UnitsConversion,
@@ -474,6 +478,35 @@ export function updateEntity(handle: number, request: UpdateEntityRequest): Enti
                 content: request.content,
                 height: request.height,
                 radius: request.radius,
+            }),
+        ),
+    );
+}
+
+/** Finds text entities whose content contains a pattern. */
+export function findText(handle: number, request: FindTextRequest): TextMatchResult {
+    return decode<TextMatchResult>(() =>
+        binding('drawing.findText').drawing_find_text(
+            handle,
+            JSON.stringify({
+                pattern: request.pattern,
+                matchCase: request.matchCase ?? false,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
+/** Replaces a pattern in every matching text entity. */
+export function replaceText(handle: number, request: ReplaceTextRequest): TextReplaceResult {
+    return decode<TextReplaceResult>(() =>
+        binding('drawing.replaceText').drawing_replace_text(
+            handle,
+            JSON.stringify({
+                pattern: request.pattern,
+                replacement: request.replacement,
+                matchCase: request.matchCase ?? false,
+                layer: request.layer,
             }),
         ),
     );

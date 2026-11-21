@@ -43,6 +43,7 @@ import type {
     ExplodeResult,
     ExportOptions,
     ExportReport,
+    FindTextRequest,
     HistoryMode,
     HistoryResult,
     ImportLoss,
@@ -55,12 +56,15 @@ import type {
     MeasureResult,
     MergeLayerRequest,
     MoveEntityRequest,
+    ReplaceTextRequest,
     SaveOptions,
     SaveReport,
     SelectionRequest,
     SelectionResult,
     TextStyle,
     TextStyleDeletion,
+    TextMatchResult,
+    TextReplaceResult,
     TransformRequest,
     TransformResult,
     UnitsConversion,
@@ -445,6 +449,19 @@ export class DrawingDocument {
     /** Updates the content/height of text or the radius of a circle or arc. */
     updateEntity(request: UpdateEntityRequest): Entity {
         return this.adopt(this.edit((handle) => service.updateEntity(handle, request)));
+    }
+
+    /** Finds text entities whose content contains a pattern. */
+    findText(request: FindTextRequest): TextMatchResult {
+        this.assertOpen();
+        return service.findText(this.handle, request);
+    }
+
+    /** Replaces a pattern in every matching text entity. */
+    replaceText(request: ReplaceTextRequest): TextReplaceResult {
+        return this.edit((handle) => service.replaceText(handle, request), (result) => {
+            this.state = result.drawing;
+        });
     }
 
     /** Applies one affine transform to a selection and refreshes the summary. */

@@ -60,6 +60,7 @@ export type OperationName =
     | 'stats'
     | 'dimension-style'
     | 'text-style'
+    | 'text-search'
     | 'select'
     | 'constraints'
     | 'kernel3d';
@@ -694,6 +695,62 @@ export interface UpdateEntityRequest {
     readonly content?: string;
     readonly height?: number;
     readonly radius?: number;
+}
+
+/** Arguments of `findText()`. */
+export interface FindTextRequest {
+    /** Non-empty substring to look for. */
+    readonly pattern: string;
+    /** Match case exactly; defaults to false, which is ASCII case-insensitive. */
+    readonly matchCase?: boolean;
+    /** Restrict the search to one layer id. */
+    readonly layer?: LayerId;
+}
+
+/** One text entity matched by `findText()`. */
+export interface TextMatch {
+    readonly id: EntityId;
+    readonly layer: LayerId;
+    readonly content: string;
+    readonly at: Point;
+}
+
+/** Result of `findText()`. The query never changes the drawing. */
+export interface TextMatchResult {
+    readonly revision: number;
+    readonly pattern: string;
+    readonly matchCase: boolean;
+    readonly layer: string | null;
+    readonly count: number;
+    readonly matches: readonly TextMatch[];
+}
+
+/** Arguments of `replaceText()`. */
+export interface ReplaceTextRequest {
+    /** Non-empty substring to replace. */
+    readonly pattern: string;
+    /** Replacement text; an empty string deletes the matched substrings. */
+    readonly replacement: string;
+    /** Match case exactly; defaults to false, which is ASCII case-insensitive. */
+    readonly matchCase?: boolean;
+    /** Restrict the edit to one layer id. */
+    readonly layer?: LayerId;
+}
+
+/**
+ * Result of `replaceText()`.
+ *
+ * `count` is the number of changed text entities and `occurrences` the number
+ * of replaced substrings. A match on a locked layer refuses the whole edit.
+ */
+export interface TextReplaceResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly pattern: string;
+    readonly replacement: string;
+    readonly matchCase: boolean;
+    readonly count: number;
+    readonly occurrences: number;
 }
 
 /** Result of `undo()` and `redo()`. */

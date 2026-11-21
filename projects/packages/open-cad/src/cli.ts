@@ -48,6 +48,8 @@ import type {
     SelectionResult,
     TextStyle,
     TextStyleChange,
+    TextMatchResult,
+    TextReplaceResult,
     TransformOperation,
     TransformResult,
     TransformTarget,
@@ -291,6 +293,18 @@ function describeStats(result: DrawingStats): string {
         ...layers,
         `  total: entities=${result.totals.entities} length=${result.totals.length} area=${result.totals.area}`,
     ].join('\n');
+}
+
+function describeTextMatches(result: TextMatchResult): string {
+    const lines = [`text match revision=${result.revision} count=${result.count} pattern=${result.pattern}`];
+    for (const match of result.matches) {
+        lines.push(`  ${match.id} layer=${match.layer} at=${match.at[0]},${match.at[1]} ${match.content}`);
+    }
+    return lines.join('\n');
+}
+
+function describeTextReplace(result: TextReplaceResult): string {
+    return `replaced ${result.occurrences} occurrence(s) in ${result.count} text entities revision=${result.revision}`;
 }
 
 function describeHistory(result: HistoryResult, verb: 'undo' | 'redo'): string {
@@ -1728,6 +1742,70 @@ textstyle
         try {
             const deletion = await guard(ctx, () => opened.deleteTextStyle(name));
             ctx.emitResult(deletion, `deleted text style ${deletion.deleted} revision=${deletion.revision}`);
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const textCommand = cli.command('text', 'cli.cmd.text');
+
+textCommand
+    .command('find', 'cli.cmd.text-find')
+    .option('--pattern <text>', 'cli.opt.pattern')
+    .option('--match-case', 'cli.opt.match-case')
+    .option('--layer <layer>', 'cli.opt.select-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const pattern = text(options, 'pattern');
+        if (pattern === undefined) {
+            ctx.fail('open-cad.cli.pattern-required', { message: '`--pattern <text>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.findText({ pattern, matchCase: flag(options, 'match-case'), layer: text(options, 'layer') }),
+            );
+            ctx.emitResult(result, describeTextMatches(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+textCommand
+    .command('replace', 'cli.cmd.text-replace')
+    .option('--pattern <text>', 'cli.opt.pattern')
+    .option('--to <text>', 'cli.opt.replacement')
+    .option('--match-case', 'cli.opt.match-case')
+    .option('--layer <layer>', 'cli.opt.select-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const pattern = text(options, 'pattern');
+        if (pattern === undefined) {
+            ctx.fail('open-cad.cli.pattern-required', { message: '`--pattern <text>` is required' });
+            return 2;
+        }
+        const replacement = text(options, 'to');
+        if (replacement === undefined) {
+            ctx.fail('open-cad.cli.replacement-required', { message: '`--to <text>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.replaceText({ pattern, replacement, matchCase: flag(options, 'match-case'), layer: text(options, 'layer') }),
+            );
+            ctx.emitResult(result, describeTextReplace(result));
             return 0;
         } finally {
             opened.close();

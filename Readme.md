@@ -21,7 +21,9 @@ offset and label precision) that can be listed, added, updated and removed and
 round-trip through the DXF `DIMSTYLE` table; named text styles (font, fixed
 height, width factor and oblique angle) round-trip through the DXF `STYLE`
 table and can be listed, added, updated and removed; a rectangular window or
-crossing query returns the matching entity ids without adding a history step; a
+crossing query returns the matching entity ids without adding a history step;
+text content can be found and replaced in bulk (ASCII case-insensitive by
+default) in one history step; a
 drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
@@ -86,6 +88,8 @@ open-cad textstyle list plan.ocad
 open-cad textstyle add plan.ocad --name NOTES --font romans.shx --width-factor 0.8 --oblique 10
 open-cad textstyle update plan.ocad --name NOTES --to NOTES-1 --height 3
 open-cad textstyle delete plan.ocad --name NOTES-1
+open-cad text find plan.ocad --pattern hall
+open-cad text replace plan.ocad --pattern hall --to "main hall"
 open-cad units convert plan.ocad --to inch
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
@@ -175,6 +179,10 @@ What this build does NOT do
 - Text styles keep only the primary font, fixed height, width factor and
   oblique angle. Big-font, generation-flag and per-text style references are
   not modelled.
+- `text find` is a read-only query and `text replace` is one history step. Both
+  scan `TEXT` entities only, not dimension labels or attributes, and matching is
+  ASCII case-insensitive unless `--match-case` is passed. A replacement on a
+  locked layer refuses the whole edit.
 - Selection is a rectangular query. There is no interactive viewport, fence or
   lasso selection, and curves are tested against their sampled outlines.
   Locked and hidden layers stay selectable unless `--layer` narrows the query.
@@ -188,8 +196,8 @@ What this build does NOT do
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
-  chamfer, measure, stats, dimension-style, text-style and select as supported
-  while constraint solving and a 3D kernel stay unsupported. A
+  chamfer, measure, stats, dimension-style, text-style, text-search and select as
+  supported while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
