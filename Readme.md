@@ -15,9 +15,11 @@ dimensions, radial/diameter dimensions, ordinate dimensions and hatches are real
 entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode, offset, fillet, chamfer and measure are supported;
 a selected entity or set of entities can be measured for its path length and
-enclosed area; each handle
+enclosed area; two points can be measured for distance and three points for the
+angle at the middle vertex; each handle
 keeps a 32-snapshot undo/redo history;
-layers can be added, renamed, merged, hidden and locked; a drawing keeps named
+layers can be added, renamed, merged, hidden, locked, frozen and marked as
+non-plottable; a drawing keeps named
 dimension styles (scale, arrowhead size, text height, extension length, origin
 offset and label precision) that can be listed, added, updated and removed and
 round-trip through the DXF `DIMSTYLE` table; named text styles (font, fixed
@@ -32,7 +34,9 @@ drawing title-block properties (title, author, company, project, description and
 keywords) can be read and written; endpoint, midpoint, centre and line
 intersection snap points can be computed near a probe point;
 a drawing converts
-between millimetres and inches by scaling every length; inspection reports
+between millimetres and inches by scaling every length; points and entities can
+be converted between world coordinates and a user coordinate system defined by
+an origin and an X-axis angle; inspection reports
 per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL, Wavefront OBJ and STEP export work, and
 a declared ASCII DXF subset can be imported. The interactive viewport, DWG/STEP
@@ -79,6 +83,8 @@ open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
 open-cad measure plan.ocad --ids entity-1,entity-2
+open-cad measure-points plan.ocad --points "0,0 3,4"
+open-cad measure-points plan.ocad --points "0,10 0,0 5,0"
 open-cad stats plan.ocad
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
@@ -89,6 +95,8 @@ open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
+open-cad layer freeze plan.ocad --name Structure --frozen on
+open-cad layer plot plan.ocad --name Structure --plottable off
 open-cad layer set plan.ocad --name Structure --linetype DASHED --lineweight 0.5
 open-cad linetype list plan.ocad
 open-cad linetype add plan.ocad --name DASHED --description "Dashed" --pattern 5,2
@@ -112,6 +120,8 @@ open-cad group delete plan.ocad --name Walls
 open-cad properties show plan.ocad
 open-cad properties set plan.ocad --title "Harbour plan" --author "Design team" --company OpenCAD --project Harbour
 open-cad units convert plan.ocad --to inch
+open-cad ucs plan.ocad --origin 10,0 --rotation 90 --direction to-world --points "0,0 10,0"
+open-cad ucs plan.ocad --origin 0,0 --rotation 30 --direction to-ucs --ids entity-1,entity-2
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
 open-cad export plan.ocad --format svg --out plan.svg
@@ -210,8 +220,8 @@ What this build does NOT do
   lasso selection, and curves are tested against their sampled outlines.
   Locked and hidden layers stay selectable unless `--layer` narrows the query.
 - No bare layer deletion. `layer merge --from A --to B` moves every entity of
-  `A` onto `B` and removes the now-empty `A` in one history step. A locked
-  source or target layer refuses the merge.
+  `A` onto `B` and removes the now-empty `A` in one history step. A locked or
+  frozen source or target layer refuses the merge.
 - `capabilities()` reports `project: partial`, SVG/PDF/STEP/STL/OBJ export as
   supported, DXF as partial because of its import subset, STEP and OBJ as
   partial because only their export direction is implemented, STL import and DWG
@@ -219,9 +229,9 @@ What this build does NOT do
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
-  chamfer, measure, measure-entity, stats, dimension-style, text-style,
-  text-search, group, select, properties, snap and linetype as supported while
-  constraint solving and a 3D kernel stay unsupported. A
+  chamfer, measure, measure-entity, measure-points, stats, dimension-style,
+  text-style, text-search, group, select, properties, snap, linetype and ucs as
+  supported while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
@@ -260,5 +270,20 @@ What this build does NOT do
   entity plus totals, using the same rules as the drawing-wide `measure`. A
   closed polyline reports its perimeter as `length`; circle circumference is not
   included, matching `measure`.
+- `measure-points` is a read-only query. Two points report the distance, the
+  signed `dx`/`dy` offsets and a bearing in degrees; three points treat the
+  middle point as the vertex and report the angle between the legs in degrees,
+  both leg lengths and the span between the first and third points. A repeated
+  vertex is refused with `session/argument-invalid`.
+- A layer can be frozen: frozen layers are skipped by the SVG and PDF output and
+  refuse every write with `drawing/layer-frozen`. A layer can also be marked
+  non-plottable, which omits it from plots while the drawing keeps its geometry.
+  Both flags round-trip through the DXF LAYER table as code 70 flag 1 and code
+  290, and a drawing with a non-plottable layer is written as `AC1015`.
+- `ucs` converts between world coordinates and a user coordinate system defined
+  by an origin and an X-axis angle. `--points` reports each conversion without a
+  history step. `--ids` applies the same rotation and translation to entities in
+  one history step, respecting locked and frozen layers. Named UCS entries, a
+  rotating view and a per-viewport UCS are not modelled.
 - `stats` groups the same length and area by layer, adds per-layer entity counts
   and drawing-wide totals, so an audit can tell which layer owns the geometry.

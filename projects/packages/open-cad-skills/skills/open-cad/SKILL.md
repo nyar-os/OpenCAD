@@ -12,9 +12,10 @@ drawings, add lines, circles, arcs, ellipses, polylines, text, hatches, linear,
 radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline, fillet or chamfer two lines and
-measure a drawing or selected entities, move, update and
+measure a drawing, selected entities, the distance between two points or the
+angle at three points, move, update and
 delete entities, undo and redo,
-add, rename, merge, hide and lock layers, list, add, update and remove
+add, rename, merge, hide, lock, freeze and mark layers as non-plottable, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
 table), list, add, update and remove line types (which round-trip through the
@@ -22,7 +23,8 @@ DXF `LTYPE` table) and assign a layer line type and lineweight, find and replace
 groups, select entities with a
 rectangular window or crossing query, compute endpoint, midpoint, centre and
 line-intersection snap points near a probe point, read and write title-block properties
-(title, author, company, project, description and keywords), save
+(title, author, company, project, description and keywords), convert points and
+entities between world and user coordinates, save
 atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
@@ -75,6 +77,8 @@ open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
 open-cad measure plan.ocad --ids entity-1,entity-2
+open-cad measure-points plan.ocad --points "0,0 3,4"
+open-cad measure-points plan.ocad --points "0,10 0,0 5,0"
 open-cad stats plan.ocad
 
 open-cad undo plan.ocad
@@ -85,6 +89,8 @@ open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
+open-cad layer freeze plan.ocad --name Structure --frozen on
+open-cad layer plot plan.ocad --name Structure --plottable off
 open-cad layer set plan.ocad --name Structure --linetype DASHED --lineweight 0.5
 
 open-cad linetype list plan.ocad
@@ -120,6 +126,9 @@ open-cad properties set plan.ocad --title "Harbour plan" --author "Design team" 
 
 open-cad units convert plan.ocad --to inch
 
+open-cad ucs plan.ocad --origin 10,0 --rotation 90 --direction to-world --points "0,0 10,0"
+open-cad ucs plan.ocad --origin 0,0 --rotation 30 --direction to-ucs --ids entity-1,entity-2
+
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
 open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
@@ -141,7 +150,8 @@ BREP (`MANIFOLD_SOLID_BREP`); open profiles are skipped with
 
 `entity move` takes either `--dx/--dy` or `--to x,y`, never both. A locked layer
 refuses add, move, update, transform, copy, array, explode, offset and delete
-with `drawing/layer-locked`.
+with `drawing/layer-locked`; a frozen layer refuses the same writes with
+`drawing/layer-frozen`.
 
 `transform` needs exactly one selection (`--ids a,b`, `--layer id` or `--all`)
 and exactly one operation (`--translate dx,dy`, `--rotate degrees --center x,y`,
@@ -175,15 +185,32 @@ ellipses. `measure --ids a,b` applies the same rules per entity, reports
 `length`, `area` and `closed` for each one plus totals, and refuses an unknown id
 with `object/not-found`; a closed polyline reports its perimeter as `length`.
 `stats` applies the same rules per layer and adds per-layer entity
-counts plus drawing-wide totals. The `empty-layer` inspection check is opt-in:
+counts plus drawing-wide totals. `measure-points --points "x,y x,y"` reports the
+distance, signed `dx`/`dy` and a degree bearing; with three points the middle one
+is the angle vertex and the response reports the angle between the legs plus both
+leg lengths and the span. A repeated vertex is refused with
+`session/argument-invalid`. The `empty-layer` inspection check is opt-in:
 `inspect --checks empty-layer` warns about each layer with no entities, and a
 default inspection run does not include it.
+
+Layer `frozen` and `plottable` flags are part of every layer update. Frozen layers
+are skipped by SVG and PDF output and refuse writes with
+`drawing/layer-frozen`; non-plottable layers are omitted from plots. The DXF
+`LAYER` table writes freeze as code 70 flag 1 and plot as code 290 (using
+`AC1015`), and both flags are read back on import.
+
+`ucs` converts between world coordinates and a user coordinate system given by
+`--origin x,y` and `--rotation` degrees. `--direction to-world` maps UCS values
+into world coordinates; `to-ucs` maps world values into the UCS. `--points`
+converts values without a history step, while `--ids` applies the same rotation
+and translation to entities in one history step and refuses locked or frozen
+layers. Named UCS entries and a rotated view are not modelled.
 
 `text find` is a read-only query over `TEXT` entities and `text replace` is one
 history step. Both match ASCII case-insensitively unless `--match-case` is
 passed, accept `--layer` to narrow the scope, and never touch dimension labels
-or attributes. A replacement on a locked layer refuses the whole edit with
-`drawing/layer-locked`.
+or attributes. A replacement on a locked or frozen layer refuses the whole edit
+with `drawing/layer-locked` or `drawing/layer-frozen`.
 
 Entity groups are named membership lists stored in the `.ocad` document; the
 DXF `GROUP` table is not read or written. `group create` needs `--name` and
@@ -228,7 +255,8 @@ start a new document.
 - Layers are unique by name. Renaming a layer also rewrites every entity
   reference in the same mutation. `layer merge --from A --to B` moves every
   entity of `A` onto `B`, removes the empty `A` and is one history step. Locked
-  layers refuse writes; hidden layers are skipped by the exporters.
+  and frozen layers refuse writes; hidden and frozen layers are skipped by the
+  exporters, and non-plottable layers are skipped by the plot outputs.
 - Dimension styles are unique by name and a drawing always keeps at least one.
   Each style stores the overall scale, arrowhead size, text height, extension
   line length, origin offset and decimal places; those variables are read from
@@ -254,7 +282,7 @@ start a new document.
 - `select --box x1,y1,x2,y2` is a read-only query: `window` (the default) keeps
   entities fully inside the rectangle, `--crossing` also keeps entities that
   cross or touch it, and `--layer` narrows the result. Curves are tested against
-  sampled outlines; hidden and locked layers stay selectable.
+  sampled outlines; hidden, frozen and locked layers stay selectable.
 - `snap --near x,y` is a read-only query over `endpoint`, `midpoint`, `center`
   and `intersection` candidates. `--modes` narrows the kinds, `--tolerance`
   keeps only candidates within that distance of `--near`, and `--layer`/`--ids`
@@ -296,7 +324,7 @@ identical entities, polylines with fewer than two points or that are open,
 repeated polyline vertices (zero-length segment), non-finite coordinates,
 dimensions with identical endpoints or an empty label, radial dimensions with a
 non-positive radius, ordinate dimensions measuring zero distance, empty text,
-duplicate layer names, and geometry on a hidden or locked layer. `passed` is false only
+duplicate layer names, and geometry on a hidden, frozen or locked layer. `passed` is false only
 when an error-level finding exists.
 
 `constraints` and `references` are not implemented. Requesting them fails with
@@ -309,8 +337,8 @@ when an error-level finding exists.
    `partial` because only a declared subset imports.
 2. Confirm the unit convention, the layer needed and the source file before
    editing. Create the layer with `layer add` or adding an entity to an unknown
-   layer fails with `object/not-found`. A locked layer fails writes with
-   `drawing/layer-locked`.
+   layer fails with `object/not-found`. A locked or frozen layer fails writes
+   with `drawing/layer-locked` or `drawing/layer-frozen`.
 3. If a required route is unsupported, stop and report it. Never degrade
    silently or swap in an unrelated tool.
 
