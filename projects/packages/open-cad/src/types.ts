@@ -23,13 +23,22 @@ export type Point = readonly [number, number];
 export type SupportLevel = 'supported' | 'partial' | 'unsupported';
 
 /** Inspection rules `OpenCAD.inspect()` may run. */
-export type InspectCheck = 'units' | 'layers' | 'geometry' | 'polylines' | 'constraints' | 'dimensions' | 'references';
+export type InspectCheck =
+    | 'units'
+    | 'layers'
+    | 'geometry'
+    | 'polylines'
+    | 'constraints'
+    | 'dimensions'
+    | 'references'
+    | 'duplicate-entity'
+    | 'zero-length';
 
 /** Entity kinds in the capability matrix. */
 export type EntityKindName = 'line' | 'circle' | 'arc' | 'ellipse' | 'point' | 'polyline' | 'text' | 'dimension';
 
 /** Edit operations in the capability matrix. */
-export type OperationName = 'transform' | 'copy' | 'measure' | 'constraints' | 'kernel3d';
+export type OperationName = 'transform' | 'copy' | 'array' | 'explode' | 'measure' | 'constraints' | 'kernel3d';
 
 /** Static render targets. */
 export type RenderFormat = 'svg' | 'png' | 'pdf';
@@ -302,6 +311,60 @@ export interface CopyRequest {
 export interface CopyResult {
     readonly revision: number;
     readonly drawing: Drawing;
+    readonly created: readonly EntityId[];
+    readonly count: number;
+}
+
+/** Grid or polar placement of an `array()`. */
+export type ArrayPlacement =
+    | {
+          readonly mode: 'rectangular';
+          /** Rows including the source row, 1-10000. */
+          readonly rows: number;
+          /** Columns including the source column, 1-10000. */
+          readonly columns: number;
+          /** Vertical distance between adjacent rows. */
+          readonly rowSpacing: number;
+          /** Horizontal distance between adjacent columns. */
+          readonly columnSpacing: number;
+      }
+    | {
+          readonly mode: 'polar';
+          readonly center: Point;
+          /** Items including the source, 2-10000. */
+          readonly count: number;
+          /** Degrees; copies sit counter-clockwise at `totalAngle * step / count`. */
+          readonly totalAngle: number;
+      };
+
+/**
+ * Arguments of `array()`.
+ *
+ * The source stays at its own position, so `rows * columns - 1` rectangular
+ * copies or `count - 1` polar copies are created, each with a fresh id.
+ */
+export interface ArrayRequest {
+    readonly ids: readonly EntityId[];
+    readonly placement: ArrayPlacement;
+}
+
+/** Result of `array()`. */
+export interface ArrayResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly EntityId[];
+    readonly count: number;
+}
+
+/**
+ * Result of `explode()`.
+ *
+ * The source polyline is replaced, at its list position, by one line per edge.
+ */
+export interface ExplodeResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: EntityId;
     readonly created: readonly EntityId[];
     readonly count: number;
 }

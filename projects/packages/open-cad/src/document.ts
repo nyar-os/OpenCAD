@@ -22,12 +22,15 @@ import type {
     AddLineRequest,
     AddPolylineRequest,
     AddTextRequest,
+    ArrayRequest,
+    ArrayResult,
     CopyRequest,
     CopyResult,
     Drawing,
     Entity,
     EntityDeletion,
     EntityList,
+    ExplodeResult,
     ExportOptions,
     ExportReport,
     HistoryMode,
@@ -323,6 +326,20 @@ export class DrawingDocument {
     /** Duplicates entities with a cumulative offset. */
     copy(request: CopyRequest): CopyResult {
         return this.edit((handle) => service.copy(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Duplicates entities into a rectangular or polar array. */
+    array(request: ArrayRequest): ArrayResult {
+        return this.edit((handle) => service.array(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Replaces one polyline with independent line entities. */
+    explode(entityId: string): ExplodeResult {
+        return this.edit((handle) => service.explode(handle, entityId), (result) => {
             this.state = result.drawing;
         });
     }

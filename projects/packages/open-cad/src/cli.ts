@@ -21,11 +21,14 @@ import { runGui } from './gui.js';
 import { OpenCAD } from './open-cad.js';
 import type { DrawingDocument } from './document.js';
 import type {
+    ArrayPlacement,
+    ArrayResult,
     CopyResult,
     Drawing,
     Entity,
     EntityChange,
     EntityDeletion,
+    ExplodeResult,
     ExportFormat,
     HistoryResult,
     ImportLoss,
@@ -226,6 +229,14 @@ function describeTransform(result: TransformResult): string {
 
 function describeCopy(result: CopyResult): string {
     return `copied ${result.count} entities revision=${result.revision} created=${result.created.join(',')}`;
+}
+
+function describeArray(result: ArrayResult): string {
+    return `arrayed ${result.count} entities revision=${result.revision} created=${result.created.join(',')}`;
+}
+
+function describeExplode(result: ExplodeResult): string {
+    return `exploded ${result.entity} into ${result.count} lines revision=${result.revision} created=${result.created.join(',')}`;
 }
 
 function describeMeasure(result: MeasureResult): string {
@@ -871,6 +882,101 @@ cli
                 }),
             );
             ctx.emitResult(result, describeCopy(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('array', 'cli.cmd.array')
+    .option('--ids <list>', 'cli.opt.ids')
+    .option('--rows <count>', 'cli.opt.rows')
+    .option('--columns <count>', 'cli.opt.columns')
+    .option('--row-spacing <number>', 'cli.opt.row-spacing')
+    .option('--column-spacing <number>', 'cli.opt.column-spacing')
+    .option('--center <x,y>', 'cli.opt.center')
+    .option('--count <count>', 'cli.opt.count')
+    .option('--angle <degrees>', 'cli.opt.total-angle')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const ids = idList(options, 'ids');
+        if (ids === undefined) {
+            ctx.fail('open-cad.cli.ids-required', { message: '`--ids entity-1,entity-2` is required' });
+            return 2;
+        }
+        const rows = number(options, 'rows');
+        const columns = number(options, 'columns');
+        const rowSpacing = number(options, 'row-spacing');
+        const columnSpacing = number(options, 'column-spacing');
+        const center = point(options, 'center');
+        const count = number(options, 'count');
+        const totalAngle = number(options, 'angle');
+        const rectangular = rows !== undefined || columns !== undefined || rowSpacing !== undefined || columnSpacing !== undefined;
+        const polar = center !== undefined || count !== undefined || totalAngle !== undefined;
+        if (rectangular === polar) {
+            ctx.fail('open-cad.cli.array-required', {
+                message: 'choose exactly one array mode: `--rows/--columns` or `--center/--count/--angle`',
+            });
+            return 2;
+        }
+        let placement: ArrayPlacement;
+        if (rectangular) {
+            if (rows === undefined || columns === undefined) {
+                ctx.fail('open-cad.cli.array-required', {
+                    message: '`--rows <count>` and `--columns <count>` are required for a rectangular array',
+                });
+                return 2;
+            }
+            placement = {
+                mode: 'rectangular',
+                rows,
+                columns,
+                rowSpacing: rowSpacing ?? 0,
+                columnSpacing: columnSpacing ?? 0,
+            };
+        }
+        else {
+            if (center === undefined || count === undefined || totalAngle === undefined) {
+                ctx.fail('open-cad.cli.array-required', {
+                    message: '`--center x,y`, `--count <count>` and `--angle <degrees>` are required for a polar array',
+                });
+                return 2;
+            }
+            placement = { mode: 'polar', center, count, totalAngle };
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.array({ ids, placement }));
+            ctx.emitResult(result, describeArray(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('explode', 'cli.cmd.explode')
+    .option('--id <entity>', 'cli.opt.id')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        if (id === undefined) {
+            ctx.fail('open-cad.cli.id-required', { message: '`--id <entity>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.explode(id));
+            ctx.emitResult(result, describeExplode(result));
             return 0;
         } finally {
             opened.close();

@@ -9,10 +9,12 @@ description: Create, revise, inspect and deliver technical drawings with OpenCAD
 
 Working document core. The installed CLI and SDK can create and open `.ocad`
 drawings, add lines, circles, arcs, ellipses, polylines, text and dimensions,
-transform (translate/rotate/scale/mirror), copy and measure, move, update and
-delete entities, undo and redo, add, rename, hide and lock layers, save
-atomically, inspect units, layers, geometry, polylines and dimensions, import
-the declared ASCII DXF subset, and export SVG, ASCII DXF, PDF, STL or STEP.
+transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
+explode a polyline and measure, move, update and delete entities, undo and redo,
+add, rename, hide and lock layers, save atomically, inspect units, layers,
+geometry, polylines, dimensions, duplicate entities and zero-length geometry,
+import the declared ASCII DXF subset, and export SVG, ASCII DXF, PDF, STL or
+STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
 reader and STL import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
@@ -47,6 +49,9 @@ open-cad transform plan.ocad --layer 0 --translate 10,5
 open-cad transform plan.ocad --all --scale 2 --center 0,0
 open-cad transform plan.ocad --all --mirror x --mirror-at 0
 open-cad copy plan.ocad --ids entity-1 --dx 10 --dy 0 --count 3
+open-cad array plan.ocad --ids entity-1 --rows 2 --columns 3 --row-spacing 10 --column-spacing 10
+open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
+open-cad explode plan.ocad --id entity-2
 open-cad measure plan.ocad
 
 open-cad undo plan.ocad
@@ -57,7 +62,7 @@ open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
 
-open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions
+open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length
 open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
 open-cad export plan.ocad --format pdf --out plan.pdf
@@ -75,7 +80,7 @@ BREP (`MANIFOLD_SOLID_BREP`); open profiles are skipped with
 `step/open-profile`.
 
 `entity move` takes either `--dx/--dy` or `--to x,y`, never both. A locked layer
-refuses add, move, update, transform, copy and delete with
+refuses add, move, update, transform, copy, array, explode and delete with
 `drawing/layer-locked`.
 
 `transform` needs exactly one selection (`--ids a,b`, `--layer id` or `--all`)
@@ -83,9 +88,16 @@ and exactly one operation (`--translate dx,dy`, `--rotate degrees --center x,y`,
 `--scale factor --center x,y`, or `--mirror x|y --mirror-at <number>`). Mirror
 `x` reflects across `y = at` and mirror `y` across `x = at`. `copy` takes
 `--ids`, `--dx`, `--dy` and `--count` (1-10000) and returns the fresh ids.
-`measure` reports bounds, width, height, entity count, path length and enclosed
-area: ellipse length is sampled at five-degree steps and area only covers closed
-polylines, full circles and full ellipses.
+`array` takes `--ids` and exactly one placement: either `--rows/--columns` with
+optional `--row-spacing/--column-spacing`, or
+`--center x,y --count --angle degrees`. The source stays at its own position, so
+a rectangular grid creates `rows * columns - 1` copies and a polar array
+`count - 1` copies; both return the fresh ids. `explode` takes `--id` of one
+polyline and replaces it, at the same list position, with one line per edge
+(closed polylines gain the closing edge). `measure` reports bounds, width,
+height, entity count, path length and enclosed area: ellipse length is sampled at
+five-degree steps and area only covers closed polylines, full circles and full
+ellipses.
 
 `undo` and `redo` use the `<file>.history.json` sidecar that every mutating
 command maintains (up to 32 prior documents, atomic writes), so they work across
@@ -124,9 +136,12 @@ start a new document.
 
 ## Inspection
 
-The implemented checks are `units`, `layers`, `geometry`, `polylines` and
-`dimensions`. `units` only warns when a dimension label carries an explicit
-unit word or inch symbol that conflicts with the document unit.
+The implemented checks are `units`, `layers`, `geometry`, `polylines`,
+`dimensions`, `duplicate-entity` and `zero-length`. `units` only warns when a
+dimension label carries an explicit unit word or inch symbol that conflicts with
+the document unit. `duplicate-entity` reports entities whose layer and geometry
+are identical; `zero-length` reports lines whose ends coincide and polylines
+whose whole length collapses to one point.
 Findings carry a code, severity, revision, layer id, object id, recoverability
 and message. A drawing without error-level findings passes; a locked-layer
 finding is a warning.

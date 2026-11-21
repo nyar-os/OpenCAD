@@ -11,8 +11,9 @@ Status
 
 Working document core. A `.ocad` project can be created, opened, edited, saved
 and reopened; lines, circles, arcs, ellipses, polylines, text and linear
-dimensions are real entities; transform (translate/rotate/scale/mirror), copy
-and measure are supported; each handle keeps a 32-snapshot undo/redo history;
+dimensions are real entities; transform (translate/rotate/scale/mirror), copy,
+rectangular/polar array, polyline explode and measure are supported; each handle
+keeps a 32-snapshot undo/redo history;
 layers can be added, renamed, hidden and locked; inspection reports per-object
 findings;
 SVG, ASCII DXF, vector PDF, ASCII STL and STEP export work, and a declared ASCII
@@ -47,6 +48,9 @@ open-cad transform plan.ocad --ids entity-1,entity-2 --rotate 45 --center 0,0
 open-cad transform plan.ocad --layer 0 --translate 10,5
 open-cad transform plan.ocad --all --mirror x --mirror-at 0
 open-cad copy plan.ocad --ids entity-1 --dx 10 --dy 0 --count 3
+open-cad array plan.ocad --ids entity-1 --rows 2 --columns 3 --row-spacing 10 --column-spacing 10
+open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
+open-cad explode plan.ocad --id entity-2
 open-cad measure plan.ocad
 open-cad undo plan.ocad
 open-cad redo plan.ocad
@@ -54,7 +58,7 @@ open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
 open-cad entity list plan.ocad
-open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions
+open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length
 open-cad export plan.ocad --format svg --out plan.svg
 open-cad export plan.ocad --format dxf --out plan.dxf
 open-cad export plan.ocad --format pdf --out plan.pdf
@@ -112,10 +116,14 @@ What this build does NOT do
   because only export is implemented, STL import and DWG as unsupported, and the
   unimplemented routes as `unsupported`. Its `entities` matrix lists line,
   circle, arc, ellipse, point, polyline, text and dimension as supported; its
-  `operations` matrix lists transform, copy and measure as supported while
-  constraint solving and a 3D kernel stay unsupported. Document checks:
-  `units`, `layers`, `geometry`, `polylines` and `dimensions` run;
-  `constraints` and `references` stay unsupported. `units` is conservative: it
+  `operations` matrix lists transform, copy, array, explode and measure as
+  supported while constraint solving and a 3D kernel stay unsupported. A
+  rectangular `array` of `rows * columns` cells creates that many minus one
+  copies (the source stays in place); a polar array of `count` items does the
+  same. `explode` replaces one polyline with independent line entities. Document
+  checks: `units`, `layers`, `geometry`, `polylines`, `dimensions`,
+  `duplicate-entity` and `zero-length` run; `constraints` and `references` stay
+  unsupported. `units` is conservative: it
   warns only when a dimension's explicit label carries a unit word or inch
   symbol that conflicts with the document unit.
 - `measure` sums line segments, polyline edges and analytic arc lengths; ellipse

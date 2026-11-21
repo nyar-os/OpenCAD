@@ -44,6 +44,9 @@ pub const INSPECT_CHECKS: &[&str] =
 /// Static render targets.
 pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
 
+/// Array placements [`array`] accepts.
+pub const ARRAY_MODES: &[&str] = &["rectangular", "polar"];
+
 /// Exchange formats [`export`] knows about.
 pub const EXPORT_TARGETS: &[&str] = &["dxf", "step", "stl", "svg", "pdf"];
 
@@ -95,7 +98,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// unsupported. STEP is partial overall because only its export direction is
 /// implemented: `exportTargets.step` is supported and there is no STEP reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
-/// operations; constraint solving and a 3D kernel stay unsupported.
+/// operations (transform, copy, rectangular/polar array, polyline explode and
+/// measure); constraint solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -137,8 +141,8 @@ pub fn capabilities() -> Value {
                 _ => "unsupported",
             },
         ),
-        "operations": map(&["transform", "copy", "measure", "constraints", "kernel3d"], |name| match name {
-            "transform" | "copy" | "measure" => "supported",
+        "operations": map(&["transform", "copy", "array", "explode", "measure", "constraints", "kernel3d"], |name| match name {
+            "transform" | "copy" | "array" | "explode" | "measure" => "supported",
             _ => "unsupported",
         }),
     })
@@ -250,10 +254,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Runs the requested checks and reports every finding.
 ///
-/// `units`, `layers`, `geometry`, `polylines`, `dimensions`, `duplicate-entity`
-/// and `zero-length` run; `constraints` and `references` are not implemented and
-/// requesting them fails with `capability/not-implemented` rather than reporting
-/// a false pass.
+/// `units`, `layers`, `geometry` and `dimensions` run; `constraints` and
+/// `references` are not implemented and request them fails with
+/// `capability/not-implemented` rather than reporting a false pass.
 pub fn inspect(handle: u64, checks: Option<Vec<String>>) -> Result<Value, ServiceError> {
     let requested = match checks {
         Some(names) if !names.is_empty() => names,
@@ -1060,6 +1063,206 @@ pub fn copy(handle: u64, request: CopyRequest) -> Result<Value, ServiceError> {
     })
 }
 
+/// Placement of an [`array`] operation.
+#[derive(Debug, Clone, Copy)]
+pub enum ArrayMode {
+    /// Copies on a rectangular grid. The source stays at row 0, column 0.
+    Rectangular {
+        /// Number of rows, including the source row.
+        rows: u32,
+        /// Number of columns, including the source column.
+        columns: u32,
+        /// Vertical distance between adjacent rows.
+        row_spacing: f64,
+        /// Horizontal distance between adjacent columns.
+        column_spacing: f64,
+    },
+    /// Copies rotated around one centre. The source stays at angle 0.
+    Polar {
+        /// Rotation centre `[x, y]`.
+        center: [f64; 2],
+        /// Number of items, including the source.
+        count: u32,
+        /// Total angle in degrees; copies are placed counter-clockwise at
+        /// `total_angle * step / count`, so a full turn closes evenly.
+        total_angle: f64,
+    },
+}
+
+/// Arguments of [`array`].
+#[derive(Debug, Clone)]
+pub struct ArrayRequest {
+    /// Source entity ids; repeated ids are arrayed once.
+    pub ids: Vec<String>,
+    /// Grid or polar placement.
+    pub mode: ArrayMode,
+}
+
+/// Name of an entity kind used in user-facing messages.
+fn kind_name(kind: &EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Line { .. } => "line",
+        EntityKind::Circle { .. } => "circle",
+        EntityKind::Arc { .. } => "arc",
+        EntityKind::Ellipse { .. } => "ellipse",
+        EntityKind::Point { .. } => "point",
+        EntityKind::Polyline { .. } => "polyline",
+        EntityKind::Text { .. } => "text",
+        EntityKind::Dimension { .. } => "dimension",
+    }
+}
+
+fn validate_array(mode: &ArrayMode) -> Result<u64, ServiceError> {
+    match *mode {
+        ArrayMode::Rectangular { rows, columns, row_spacing, column_spacing } => {
+            if rows == 0 || columns == 0 {
+                return Err(argument("`rows` and `columns` must be at least 1"));
+            }
+            let positions = u64::from(rows) * u64::from(columns);
+            if !(2..=10_000).contains(&positions) {
+                return Err(argument("`rows * columns` must be between 2 and 10000"));
+            }
+            if !row_spacing.is_finite() || !column_spacing.is_finite() {
+                return Err(argument("`row_spacing`/`column_spacing` must be finite"));
+            }
+            Ok(positions - 1)
+        }
+        ArrayMode::Polar { center, count, total_angle } => {
+            if !(2..=10_000).contains(&count) {
+                return Err(argument("`count` must be between 2 and 10000"));
+            }
+            if !finite_point(center) {
+                return Err(argument("`center` must contain finite coordinates"));
+            }
+            if !total_angle.is_finite() || total_angle.abs() <= f64::EPSILON {
+                return Err(argument("`total_angle` must be a non-zero finite number"));
+            }
+            Ok(u64::from(count) - 1)
+        }
+    }
+}
+
+/// Duplicates entities into a rectangular or polar array.
+///
+/// The source entity is not copied onto its own position: a rectangular array
+/// with `rows * columns` cells creates `rows * columns - 1` copies, and a polar
+/// array with `count` items creates `count - 1` copies. Ids are assigned in a
+/// deterministic order (source id order, then row-major or increasing angle).
+/// Locked source layers refuse with `drawing/layer-locked`. The response
+/// carries `{ revision, drawing, created, count }`.
+pub fn array(handle: u64, request: ArrayRequest) -> Result<Value, ServiceError> {
+    if request.ids.is_empty() {
+        return Err(argument("`ids` is empty"));
+    }
+    validate_array(&request.mode)?;
+    let created = store::edit(handle, |drawing| {
+        let mut indices = Vec::with_capacity(request.ids.len());
+        for id in &request.ids {
+            indices.push(entity_index(drawing, id)?);
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        for &index in &indices {
+            if let Some(error) = locked_layer(drawing, &drawing.entities[index].layer) {
+                return Err(error);
+            }
+        }
+        let mut created = Vec::new();
+        for &index in &indices {
+            let source = drawing.entities[index].clone();
+            match request.mode {
+                ArrayMode::Rectangular { rows, columns, row_spacing, column_spacing } => {
+                    for row in 0..rows {
+                        for column in 0..columns {
+                            if row == 0 && column == 0 {
+                                continue;
+                            }
+                            let offset = [column_spacing * f64::from(column), row_spacing * f64::from(row)];
+                            let id = drawing.take_entity_id();
+                            let mut entity = Entity { id: id.clone(), layer: source.layer.clone(), kind: source.kind.clone() };
+                            entity.translate(offset);
+                            drawing.entities.push(entity);
+                            created.push(id);
+                        }
+                    }
+                }
+                ArrayMode::Polar { center, count, total_angle } => {
+                    for step in 1..count {
+                        let angle = total_angle * f64::from(step) / f64::from(count);
+                        let id = drawing.take_entity_id();
+                        let mut entity = Entity { id: id.clone(), layer: source.layer.clone(), kind: source.kind.clone() };
+                        apply_transform(&mut entity, TransformOp::Rotate { angle, cx: center[0], cy: center[1] });
+                        drawing.entities.push(entity);
+                        created.push(id);
+                    }
+                }
+            }
+        }
+        drawing.revision += 1;
+        Ok(created)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": created,
+            "count": created.len(),
+        })
+    })
+}
+
+/// Splits one polyline into independent line entities.
+///
+/// The source polyline is removed and replaced, at the same list position, by
+/// one line per edge in vertex order; a closed polyline also gets its closing
+/// edge when the last vertex differs from the first. Each line receives a fresh
+/// deterministic id. A non-polyline reports `object/unsupported`; a locked
+/// layer reports `drawing/layer-locked`; fewer than two distinct vertices
+/// reports `session/argument-invalid`. The response carries `{ revision,
+/// drawing, entity, created, count }`.
+pub fn explode(handle: u64, entity: &str) -> Result<Value, ServiceError> {
+    let created = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        let source = drawing.entities[index].clone();
+        if let Some(error) = locked_layer(drawing, &source.layer) {
+            return Err(error);
+        }
+        let EntityKind::Polyline { points, closed } = &source.kind
+        else {
+            return Err(ServiceError::new("object/unsupported", format!("entity `{entity}` is a {}, not a polyline", kind_name(&source.kind))));
+        };
+        let mut segments = points.windows(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
+        if *closed
+            && let (Some(first), Some(last)) = (points.first(), points.last())
+            && first != last
+        {
+            segments.push((*last, *first));
+        }
+        if segments.is_empty() {
+            return Err(argument(format!("polyline `{entity}` needs at least 2 vertices to explode")));
+        }
+        let mut lines = Vec::with_capacity(segments.len());
+        let mut created = Vec::with_capacity(segments.len());
+        for (from, to) in segments {
+            let id = drawing.take_entity_id();
+            created.push(id.clone());
+            lines.push(Entity { id, layer: source.layer.clone(), kind: EntityKind::Line { from, to } });
+        }
+        drawing.entities.splice(index..=index, lines);
+        drawing.revision += 1;
+        Ok(created)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+            "created": created,
+            "count": created.len(),
+        })
+    })
+}
+
 fn drawing_extents(drawing: &Drawing) -> ([f64; 2], [f64; 2], bool) {
     let mut extents: Option<Rect> = None;
     for entity in &drawing.entities {
@@ -1420,6 +1623,12 @@ mod tests {
         }
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
+        }
+        for operation in ["transform", "copy", "array", "explode", "measure"] {
+            assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
+        }
+        for operation in ["constraints", "kernel3d"] {
+            assert_eq!(matrix["operations"][operation], json!("unsupported"), "operation `{operation}`");
         }
         assert_eq!(matrix["renderers"]["svg"], json!("supported"));
         for renderer in ["png", "pdf"] {
@@ -2697,6 +2906,113 @@ mod tests {
         let codes =
             report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
         assert!(codes.contains(&"geometry/zero-length-line"), "got {codes:?}");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn array_fills_a_rectangular_grid_in_row_major_order() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+        let result = array(
+            handle,
+            ArrayRequest {
+                ids: vec!["entity-1".to_string()],
+                mode: ArrayMode::Rectangular { rows: 2, columns: 2, row_spacing: 5.0, column_spacing: 10.0 },
+            },
+        )
+        .expect("array");
+        assert_eq!(result["created"], json!(["entity-2", "entity-3", "entity-4"]));
+        assert_eq!(result["count"], json!(3));
+        assert_eq!(result["drawing"]["entities"], json!(4));
+        assert_eq!(result["revision"], json!(3));
+        let drawing = drawing_of(handle);
+        assert!(matches!(drawing.entities[1].kind, EntityKind::Line { from: [10.0, 0.0], to: [11.0, 0.0] }));
+        assert!(matches!(drawing.entities[2].kind, EntityKind::Line { from: [0.0, 5.0], to: [1.0, 5.0] }));
+        assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from: [10.0, 5.0], to: [11.0, 5.0] }));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn array_places_polar_copies_counter_clockwise() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [20.0, 0.0]).expect("line");
+        let result = array(
+            handle,
+            ArrayRequest { ids: vec!["entity-1".to_string()], mode: ArrayMode::Polar { center: [0.0, 0.0], count: 4, total_angle: 360.0 } },
+        )
+        .expect("array");
+        assert_eq!(result["created"], json!(["entity-2", "entity-3", "entity-4"]));
+        assert_eq!(result["count"], json!(3));
+        let drawing = drawing_of(handle);
+        let starts = drawing
+            .entities
+            .iter()
+            .map(|entity| match entity.kind {
+                EntityKind::Line { from, .. } => from,
+                _ => panic!("every array item is a line"),
+            })
+            .collect::<Vec<_>>();
+        assert!((starts[1][0]).abs() < 1e-9 && (starts[1][1] - 10.0).abs() < 1e-9, "{:?}", starts[1]);
+        assert!((starts[2][0] + 10.0).abs() < 1e-9 && starts[2][1].abs() < 1e-9, "{:?}", starts[2]);
+        assert!(starts[3][0].abs() < 1e-9 && (starts[3][1] + 10.0).abs() < 1e-9, "{:?}", starts[3]);
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn array_and_explode_validate_their_arguments() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+        let rectangular = |rows, columns, row_spacing, column_spacing| ArrayRequest {
+            ids: vec!["entity-1".to_string()],
+            mode: ArrayMode::Rectangular { rows, columns, row_spacing, column_spacing },
+        };
+        assert_eq!(
+            array(handle, ArrayRequest { ids: Vec::new(), mode: ArrayMode::Polar { center: [0.0, 0.0], count: 2, total_angle: 90.0 } })
+                .expect_err("empty ids")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(array(handle, rectangular(1, 1, 1.0, 1.0)).expect_err("one position").code, "session/argument-invalid");
+        assert_eq!(array(handle, rectangular(2, 2, f64::NAN, 1.0)).expect_err("nan spacing").code, "session/argument-invalid");
+        let polar = |count, total_angle| ArrayRequest {
+            ids: vec!["entity-1".to_string()],
+            mode: ArrayMode::Polar { center: [0.0, 0.0], count, total_angle },
+        };
+        assert_eq!(array(handle, polar(1, 90.0)).expect_err("one item").code, "session/argument-invalid");
+        assert_eq!(array(handle, polar(2, 0.0)).expect_err("zero angle").code, "session/argument-invalid");
+        assert_eq!(
+            array(handle, ArrayRequest { ids: vec!["entity-9".to_string()], mode: polar(2, 90.0).mode }).expect_err("unknown id").code,
+            "object/not-found"
+        );
+        assert_eq!(explode(handle, "entity-9").expect_err("unknown id").code, "object/not-found");
+        assert_eq!(explode(handle, "entity-1").expect_err("line is not a polyline").code, "object/unsupported");
+        add_polyline(handle, DEFAULT_LAYER, vec![[1.0, 1.0]], false).expect("one-point polyline");
+        assert_eq!(explode(handle, "entity-2").expect_err("degenerate polyline").code, "session/argument-invalid");
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(array(handle, rectangular(2, 2, 1.0, 1.0)).expect_err("locked array").code, "drawing/layer-locked");
+        assert_eq!(explode(handle, "entity-2").expect_err("locked explode").code, "drawing/layer-locked");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn explode_replaces_a_closed_polyline_with_its_edges() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("square");
+        add_line(handle, DEFAULT_LAYER, [50.0, 50.0], [60.0, 60.0]).expect("marker");
+        let result = explode(handle, "entity-1").expect("explode");
+        assert_eq!(result["created"], json!(["entity-3", "entity-4", "entity-5", "entity-6"]));
+        assert_eq!(result["count"], json!(4));
+        assert_eq!(result["entity"], json!("entity-1"));
+        assert_eq!(result["drawing"]["entities"], json!(5));
+        assert_eq!(result["revision"], json!(4));
+        let drawing = drawing_of(handle);
+        assert!(matches!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] }));
+        assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from: [0.0, 10.0], to: [0.0, 0.0] }));
+        assert!(matches!(drawing.entities[4].kind, EntityKind::Line { from: [50.0, 50.0], to: [60.0, 60.0] }));
         close(handle).expect("close");
     }
 

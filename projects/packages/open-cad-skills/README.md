@@ -7,10 +7,11 @@ runtime library and contains no DWG, DXF, STEP, IGES or mesh code.
 
 Executable document routes. `skills/open-cad/SKILL.md` lists the commands that
 work today: create/open `.ocad` drawings, add, move, update and delete entities,
-undo/redo, add and edit layers, inspect the document, import the declared ASCII
-DXF subset, and export SVG, DXF or PDF. The skill states the limits of the
-build: no viewport renderer, no DWG/STEP importer, no full DXF reader, no
-constraint solver and no STEP/STL writer.
+transform, copy, array, explode and measure, undo/redo, add and edit layers,
+inspect the document, import the declared ASCII DXF subset, and export SVG, DXF,
+PDF, STL or STEP. The skill states the limits of the build: no viewport
+renderer, no DWG/STEP importer, no full DXF reader, no STL reader and no
+constraint solver.
 
 ## Layout
 

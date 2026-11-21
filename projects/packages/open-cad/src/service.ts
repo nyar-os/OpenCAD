@@ -18,12 +18,15 @@ import type {
     AddLineRequest,
     AddPolylineRequest,
     AddTextRequest,
+    ArrayRequest,
+    ArrayResult,
     CopyRequest,
     CopyResult,
     Drawing,
     EntityChange,
     EntityDeletion,
     EntityList,
+    ExplodeResult,
     ExportFormat,
     ExportReport,
     HistoryResult,
@@ -292,6 +295,34 @@ export function copy(handle: number, request: CopyRequest): CopyResult {
             JSON.stringify({ ids: request.ids, dx: request.dx, dy: request.dy, count: request.count }),
         ),
     );
+}
+
+/** Duplicates entities into a rectangular or polar array. */
+export function array(handle: number, request: ArrayRequest): ArrayResult {
+    const placement = request.placement;
+    const payload =
+        placement.mode === 'rectangular'
+            ? {
+                  ids: request.ids,
+                  mode: 'rectangular',
+                  rows: placement.rows,
+                  columns: placement.columns,
+                  row_spacing: placement.rowSpacing,
+                  column_spacing: placement.columnSpacing,
+              }
+            : {
+                  ids: request.ids,
+                  mode: 'polar',
+                  center: placement.center,
+                  count: placement.count,
+                  total_angle: placement.totalAngle,
+              };
+    return decode<ArrayResult>(() => binding('drawing.array').drawing_array(handle, JSON.stringify(payload)));
+}
+
+/** Replaces one polyline with independent line entities. */
+export function explode(handle: number, entityId: string): ExplodeResult {
+    return decode<ExplodeResult>(() => binding('drawing.explode').drawing_explode(handle, entityId));
 }
 
 /** Measures bounds, path length and enclosed area. */

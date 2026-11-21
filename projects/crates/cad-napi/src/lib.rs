@@ -26,7 +26,9 @@ use std::{
     time::Instant,
 };
 
-use open_cad_drawing::{CopyRequest, CreateRequest, MirrorAxis, ServiceError, TransformOp, TransformRequest, TransformTarget};
+use open_cad_drawing::{
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, MirrorAxis, ServiceError, TransformOp, TransformRequest, TransformTarget,
+};
 use serde_json::{Value, json};
 use wae::{
     CallContext, Error, JsValue, Result, function, optional_string_prop, register_module,
@@ -290,6 +292,24 @@ fn drawing_copy(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Duplicates entities into a rectangular or polar array.
+#[function]
+fn drawing_array(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_array(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Splits one polyline into independent line entities.
+#[function]
+fn drawing_explode(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let entity = text(&ctx, 1)?;
+    let result = open_cad_drawing::explode(handle, &entity).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Measures the bounds, path length and enclosed area of an open drawing.
 #[function]
 fn drawing_measure(ctx: CallContext) -> Result<JsValue> {
@@ -360,6 +380,12 @@ fn request_point(request: &Value, key: &str) -> std::result::Result<[f64; 2], St
 
 fn request_number(request: &Value, key: &str) -> std::result::Result<f64, String> {
     request.get(key).and_then(Value::as_f64).ok_or_else(|| format!("session/argument-invalid: `{key}` must be a number"))
+}
+
+fn request_u32(request: &Value, key: &str) -> std::result::Result<u32, String> {
+    let value =
+        request.get(key).and_then(Value::as_u64).ok_or_else(|| format!("session/argument-invalid: `{key}` must be a positive integer"))?;
+    u32::try_from(value).map_err(|_| format!("session/argument-invalid: `{key}` is too large"))
 }
 
 fn request_string(request: &Value, key: &str) -> std::result::Result<String, String> {
@@ -568,6 +594,32 @@ fn call_copy(handle: u64, request: &Value) -> std::result::Result<Value, String>
         },
     )
     .map_err(service_failure)
+}
+
+fn call_array(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let ids = request
+        .get("ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "session/argument-invalid: `ids` must be an array".to_string())?
+        .iter()
+        .map(|id| id.as_str().map(str::to_string).ok_or_else(|| "session/argument-invalid: every id must be a string".to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mode = match request.get("mode").and_then(Value::as_str) {
+        Some("rectangular") => ArrayMode::Rectangular {
+            rows: request_u32(request, "rows")?,
+            columns: request_u32(request, "columns")?,
+            row_spacing: request_number(request, "row_spacing")?,
+            column_spacing: request_number(request, "column_spacing")?,
+        },
+        Some("polar") => ArrayMode::Polar {
+            center: request_point(request, "center")?,
+            count: request_u32(request, "count")?,
+            total_angle: request_number(request, "total_angle")?,
+        },
+        Some(other) => return Err(format!("session/argument-invalid: unknown array mode `{other}`")),
+        None => return Err("session/argument-invalid: `mode` must be `rectangular` or `polar`".to_string()),
+    };
+    open_cad_drawing::array(handle, ArrayRequest { ids, mode }).map_err(service_failure)
 }
 
 fn call_import_dxf(request: &Value) -> std::result::Result<Value, String> {
@@ -953,6 +1005,33 @@ impl IpcHandler for StudioIpcHandler {
                     Err(message) => failure(id, "copyError", message),
                 }
             }
+            "drawing.array" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "arrayError", "an array request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                match call_array(handle, &request) {
+                    Ok(result) => reply(id, "arrayResult", result),
+                    Err(message) => failure(id, "arrayError", message),
+                }
+            }
+            "drawing.explode" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "explodeError", "an explode request needs a drawing handle".to_string());
+                };
+                let entity = value
+                    .get("entity")
+                    .or_else(|| value.get("request").and_then(|request| request.get("entity")))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                match open_cad_drawing::explode(handle, &entity) {
+                    Ok(result) => reply(id, "explodeResult", result),
+                    Err(error) => failure(id, "explodeError", format!("{}: {}", error.code, error.message)),
+                }
+            }
             "drawing.measure" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -1249,6 +1328,8 @@ register_module![
     drawing_update_entity,
     drawing_transform,
     drawing_copy,
+    drawing_array,
+    drawing_explode,
     drawing_measure,
     drawing_import_dxf,
     open_gui,
