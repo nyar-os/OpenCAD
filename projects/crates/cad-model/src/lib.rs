@@ -183,6 +183,7 @@ pub fn capabilities() -> Value {
                 "chamfer",
                 "measure",
                 "measure-entity",
+                "measure-points",
                 "stats",
                 "dimension-style",
                 "text-style",
@@ -196,8 +197,9 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity" | "stats"
-                | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap" | "linetype" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity"
+                | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap"
+                | "linetype" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -2238,6 +2240,67 @@ pub fn measure_entities(handle: u64, ids: &[String]) -> Result<Value, ServiceErr
     })?
 }
 
+/// Measures the distance between two points or the angle at three points.
+///
+/// Two points report `kind: "distance"` with `distance`, the signed `dx`/`dy`
+/// offsets and the `bearing` in degrees counter-clockwise from the positive X
+/// axis. Three points treat the second point as the vertex and report
+/// `kind: "angle"` with the angle between the two legs in degrees, the leg
+/// lengths `first`/`second` and the `span` between the first and third points.
+/// The query never changes the drawing and the response carries
+/// `{ revision, units, ... }`.
+pub fn measure_points(handle: u64, points: &[[f64; 2]]) -> Result<Value, ServiceError> {
+    if points.len() != 2 && points.len() != 3 {
+        return Err(argument("pass exactly 2 points for a distance or 3 points for an angle"));
+    }
+    if !points.iter().all(|point| finite_point(*point)) {
+        return Err(argument("`points` must contain finite coordinates"));
+    }
+    store::read(handle, |session| -> Result<Value, ServiceError> {
+        let revision = session.drawing.revision;
+        let units = session.drawing.units.as_str();
+        if points.len() == 2 {
+            let (from, to) = (points[0], points[1]);
+            let dx = to[0] - from[0];
+            let dy = to[1] - from[1];
+            return Ok(json!({
+                "revision": revision,
+                "units": units,
+                "kind": "distance",
+                "points": 2,
+                "from": from,
+                "to": to,
+                "distance": point_distance(from, to),
+                "dx": dx,
+                "dy": dy,
+                "bearing": normalize_angle(dy.atan2(dx).to_degrees()),
+            }));
+        }
+        let (first, vertex, third) = (points[0], points[1], points[2]);
+        let leg_first = point_distance(first, vertex);
+        let leg_second = point_distance(vertex, third);
+        if leg_first < 1e-9 || leg_second < 1e-9 {
+            return Err(argument("the angle needs two distinct legs from the vertex"));
+        }
+        let ux = first[0] - vertex[0];
+        let uy = first[1] - vertex[1];
+        let vx = third[0] - vertex[0];
+        let vy = third[1] - vertex[1];
+        let angle = (ux * vy - uy * vx).atan2(ux * vx + uy * vy).abs().to_degrees();
+        Ok(json!({
+            "revision": revision,
+            "units": units,
+            "kind": "angle",
+            "points": 3,
+            "vertex": vertex,
+            "angle": angle,
+            "first": leg_first,
+            "second": leg_second,
+            "span": point_distance(first, third),
+        }))
+    })?
+}
+
 /// Summarises entity count, path length and enclosed area per layer.
 ///
 /// Length and area use the same rules as [`measure`]: analytic lines, arcs and
@@ -3849,6 +3912,7 @@ mod tests {
             "fillet",
             "chamfer",
             "measure",
+            "measure-points",
             "stats",
             "dimension-style",
             "text-style",
@@ -5710,6 +5774,33 @@ mod tests {
 
         assert_eq!(measure_entities(handle, &[]).expect_err("empty ids").code, "session/argument-invalid");
         assert_eq!(measure_entities(handle, &["entity-9".to_string()]).expect_err("unknown id").code, "object/not-found");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn measure_points_reports_distance_and_angle() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+
+        let distance = measure_points(handle, &[[0.0, 0.0], [3.0, 4.0]]).expect("distance");
+        assert_eq!(distance["kind"], json!("distance"));
+        assert_eq!(distance["points"], json!(2));
+        assert_eq!(distance["distance"], json!(5.0));
+        assert_eq!(distance["dx"], json!(3.0));
+        assert_eq!(distance["dy"], json!(4.0));
+        assert_eq!(distance["bearing"], json!(53.13010235415598));
+
+        let angle = measure_points(handle, &[[0.0, 10.0], [0.0, 0.0], [5.0, 0.0]]).expect("angle");
+        assert_eq!(angle["kind"], json!("angle"));
+        assert_eq!(angle["points"], json!(3));
+        assert_eq!(angle["vertex"], json!([0.0, 0.0]));
+        assert_eq!(angle["angle"], json!(90.0));
+        assert_eq!(angle["first"], json!(10.0));
+        assert_eq!(angle["second"], json!(5.0));
+        assert_eq!(angle["span"], json!(11.180339887498949));
+
+        assert_eq!(measure_points(handle, &[[0.0, 0.0]]).expect_err("one point").code, "session/argument-invalid");
+        assert_eq!(measure_points(handle, &[[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]]).expect_err("degenerate").code, "session/argument-invalid");
         close(handle).expect("close");
     }
 

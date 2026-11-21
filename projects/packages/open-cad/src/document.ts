@@ -63,6 +63,8 @@ import type {
     OffsetRequest,
     OffsetResult,
     MeasureResult,
+    Point,
+    PointMeasurement,
     MergeLayerRequest,
     MoveEntityRequest,
     ReplaceTextRequest,
@@ -646,6 +648,12 @@ export class DrawingDocument {
     measureEntities(ids: readonly EntityId[]): EntityMeasureResult {
         this.assertOpen();
         return service.measureEntities(this.handle, ids);
+    }
+
+    /** Measures the distance between two points or the angle at three points. */
+    measurePoints(points: readonly Point[]): PointMeasurement {
+        this.assertOpen();
+        return service.measurePoints(this.handle, points);
     }
 
     /** Summarises entity count, path length and enclosed area per layer. */

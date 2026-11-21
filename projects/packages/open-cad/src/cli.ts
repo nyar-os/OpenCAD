@@ -49,6 +49,7 @@ import type {
     OffsetResult,
     OpenCADCapabilities,
     Point,
+    PointMeasurement,
     SaveReport,
     SelectionResult,
     SnapMode,
@@ -315,6 +316,17 @@ function describeEntityMeasure(result: EntityMeasureResult): string {
         `measured ${result.totals.entities} entities revision=${result.revision} units=${result.units}`,
         ...entries,
         `  total: length=${result.totals.length} area=${result.totals.area}`,
+    ].join('\n');
+}
+
+function describePointMeasure(result: PointMeasurement): string {
+    if (result.kind === 'distance') {
+        return `distance ${result.distance} dx=${result.dx} dy=${result.dy} bearing=${result.bearing} units=${result.units} revision=${result.revision}`;
+    }
+    return [
+        `angle ${result.angle} units=${result.units} revision=${result.revision}`,
+        `  vertex: ${result.vertex[0]},${result.vertex[1]}`,
+        `  legs: first=${result.first} second=${result.second} span=${result.span}`,
     ].join('\n');
 }
 
@@ -1381,6 +1393,32 @@ cli
                 const result = await guard(ctx, () => opened.measureEntities(ids));
                 ctx.emitResult(result, describeEntityMeasure(result));
             }
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('measure-points', 'cli.cmd.measure-points')
+    .option('--points <list>', 'cli.opt.points-list')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const coordinates = points(options, 'points');
+        if (coordinates === undefined || (coordinates.length !== 2 && coordinates.length !== 3)) {
+            ctx.fail('open-cad.cli.measure-points-required', {
+                message: '`--points "x,y x,y ..."` with exactly 2 or 3 points is required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.measurePoints(coordinates));
+            ctx.emitResult(result, describePointMeasure(result));
             return 0;
         } finally {
             opened.close();

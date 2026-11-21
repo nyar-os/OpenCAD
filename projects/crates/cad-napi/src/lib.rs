@@ -691,6 +691,16 @@ fn drawing_measure_entities(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Measures the distance between two points or the angle at three points.
+#[function]
+fn drawing_measure_points(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let points: Vec<[f64; 2]> = serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::measure_points(handle, &points).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Imports the declared ASCII DXF subset into a new drawing.
 #[function]
 fn drawing_import_dxf(ctx: CallContext) -> Result<JsValue> {
@@ -2033,6 +2043,7 @@ register_module![
     drawing_chamfer,
     drawing_measure,
     drawing_measure_entities,
+    drawing_measure_points,
     drawing_stats,
     drawing_import_dxf,
     open_gui,

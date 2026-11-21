@@ -670,6 +670,33 @@ test('drawing properties carry the title block', { skip: withAddon }, async () =
     }
 });
 
+test('measurePoints reports a distance or an angle', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Point measurement' });
+        const distance = document.measurePoints([[0, 0], [3, 4]]);
+        assert.equal(distance.kind, 'distance');
+        if (distance.kind === 'distance') {
+            assert.equal(distance.distance, 5);
+            assert.deepEqual([distance.dx, distance.dy], [3, 4]);
+        }
+        const angle = document.measurePoints([[0, 10], [0, 0], [5, 0]]);
+        assert.equal(angle.kind, 'angle');
+        if (angle.kind === 'angle') {
+            assert.equal(angle.angle, 90);
+            assert.equal(angle.first, 10);
+            assert.equal(angle.second, 5);
+        }
+        assert.throws(
+            () => document.measurePoints([[0, 0]]),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

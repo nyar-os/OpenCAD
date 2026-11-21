@@ -861,6 +861,41 @@ export interface EntityMeasureResult {
     };
 }
 
+/** Result of `measurePoints()` with two points: the distance between them. */
+export interface PointDistance {
+    readonly revision: number;
+    readonly units: 'mm' | 'inch';
+    readonly kind: 'distance';
+    readonly points: 2;
+    readonly from: Point;
+    readonly to: Point;
+    readonly distance: number;
+    readonly dx: number;
+    readonly dy: number;
+    /** Direction in degrees counter-clockwise from the positive X axis. */
+    readonly bearing: number;
+}
+
+/** Result of `measurePoints()` with three points: the angle at the middle vertex. */
+export interface PointAngle {
+    readonly revision: number;
+    readonly units: 'mm' | 'inch';
+    readonly kind: 'angle';
+    readonly points: 3;
+    readonly vertex: Point;
+    /** Angle between the two legs in degrees, 0-180. */
+    readonly angle: number;
+    /** Length of the first leg, from the first point to the vertex. */
+    readonly first: number;
+    /** Length of the second leg, from the vertex to the third point. */
+    readonly second: number;
+    /** Distance between the first and third points. */
+    readonly span: number;
+}
+
+/** Result of `measurePoints()`: a distance for two points or an angle for three. */
+export type PointMeasurement = PointDistance | PointAngle;
+
 /** One layer's share of a drawing's statistics. */
 export interface LayerStats {
     readonly id: LayerId;

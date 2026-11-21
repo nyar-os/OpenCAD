@@ -67,6 +67,8 @@ import type {
     OffsetRequest,
     OffsetResult,
     OpenCADCapabilities,
+    Point,
+    PointMeasurement,
     ReplaceTextRequest,
     SaveReport,
     SelectionRequest,
@@ -712,6 +714,11 @@ export function measureEntities(handle: number, ids: readonly string[]): EntityM
     return decode<EntityMeasureResult>(() =>
         binding('drawing.measureEntities').drawing_measure_entities(handle, JSON.stringify(ids)),
     );
+}
+
+/** Measures the distance between two points or the angle at three points. */
+export function measurePoints(handle: number, points: readonly Point[]): PointMeasurement {
+    return decode<PointMeasurement>(() => binding('drawing.measurePoints').drawing_measure_points(handle, JSON.stringify(points)));
 }
 
 /** Summarises entity count, path length and enclosed area per layer. */
