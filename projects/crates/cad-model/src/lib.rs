@@ -764,6 +764,7 @@ pub fn delete_entity(handle: u64, entity: &str) -> Result<Value, ServiceError> {
             return Err(error);
         }
         drawing.entities.remove(index);
+        drawing.forget_draw_order(entity);
         detach_entity_from_groups(drawing, entity);
         drawing.revision += 1;
         Ok(())
@@ -1680,6 +1681,9 @@ pub fn explode(handle: u64, entity: &str) -> Result<Value, ServiceError> {
             lines.push(Entity { id, layer: source.layer.clone(), kind: EntityKind::Line { from, to } });
         }
         drawing.entities.splice(index..=index, lines);
+        if let Some(position) = drawing.draw_order.iter().position(|id| id == entity) {
+            drawing.draw_order.splice(position..=position, created.clone());
+        }
         detach_entity_from_groups(drawing, entity);
         drawing.revision += 1;
         Ok(created)
@@ -3476,6 +3480,84 @@ pub fn list_entities(handle: u64) -> Result<Value, ServiceError> {
         json!({
             "revision": session.drawing.revision,
             "entities": session.drawing.entities,
+        })
+    })
+}
+
+/// Where [`reorder_entity`] moves one entity in the paint order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawOrderAction {
+    /// Paint the entity after every other one.
+    ToFront,
+    /// Paint the entity before every other one.
+    ToBack,
+    /// Paint the entity one step later.
+    Forward,
+    /// Paint the entity one step earlier.
+    Backward,
+}
+
+impl DrawOrderAction {
+    /// Stable lowercase name used in JSON and the CLI.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ToFront => "to-front",
+            Self::ToBack => "to-back",
+            Self::Forward => "forward",
+            Self::Backward => "backward",
+        }
+    }
+
+    /// Parses an action name.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "to-front" | "top" | "front" => Some(Self::ToFront),
+            "to-back" | "bottom" | "back" => Some(Self::ToBack),
+            "forward" | "up" | "raise" => Some(Self::Forward),
+            "backward" | "down" | "lower" => Some(Self::Backward),
+            _ => None,
+        }
+    }
+}
+
+/// Moves one entity within the paint order.
+///
+/// The paint order runs back to front, so the last entity is drawn on top.
+/// `to-front` and `to-back` move the entity to the end or the start of the
+/// order, while `forward` and `backward` move it one step towards the end or
+/// the start. An unknown id reports `object/not-found`. The response carries
+/// `{ revision, drawing, entity, action, order }`, where `order` is the full
+/// entity id sequence from back to front.
+pub fn reorder_entity(handle: u64, entity: &str, action: DrawOrderAction) -> Result<Value, ServiceError> {
+    let order = store::edit(handle, |drawing| {
+        entity_index(drawing, entity)?;
+        let mut order = drawing.ordered_entity_ids();
+        let position = order
+            .iter()
+            .position(|id| id == entity)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("entity `{entity}` does not exist")))?;
+        let target = match action {
+            DrawOrderAction::ToFront => order.len().saturating_sub(1),
+            DrawOrderAction::ToBack => 0,
+            DrawOrderAction::Forward => (position + 1).min(order.len().saturating_sub(1)),
+            DrawOrderAction::Backward => position.saturating_sub(1),
+        };
+        if target != position {
+            let id = order.remove(position);
+            order.insert(target, id);
+        }
+        drawing.draw_order = order.clone();
+        drawing.revision += 1;
+        Ok(order)
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity);
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+            "action": action.as_str(),
+            "order": order,
         })
     })
 }
@@ -6631,6 +6713,55 @@ mod tests {
         assert_eq!(issues[0]["code"], json!("layers/empty"));
         assert_eq!(issues[0]["layerId"], json!(DIMENSION_LAYER));
         assert_eq!(issues[0]["recoverable"], json!(true));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn reorder_entity_changes_paint_order() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
+        add_line(handle, DEFAULT_LAYER, [2.0, 0.0], [12.0, 0.0]).expect("second line");
+        add_line(handle, DEFAULT_LAYER, [4.0, 0.0], [14.0, 0.0]).expect("third line");
+
+        let moved = reorder_entity(handle, "entity-1", DrawOrderAction::ToFront).expect("to front");
+        assert_eq!(moved["order"], json!(["entity-2", "entity-3", "entity-1"]));
+        assert_eq!(drawing_of(handle).ordered_entity_ids(), vec!["entity-2", "entity-3", "entity-1"]);
+
+        let moved = reorder_entity(handle, "entity-3", DrawOrderAction::ToBack).expect("to back");
+        assert_eq!(moved["order"], json!(["entity-3", "entity-2", "entity-1"]));
+        let moved = reorder_entity(handle, "entity-3", DrawOrderAction::Forward).expect("forward");
+        assert_eq!(moved["order"], json!(["entity-2", "entity-3", "entity-1"]));
+        let moved = reorder_entity(handle, "entity-3", DrawOrderAction::Backward).expect("backward");
+        assert_eq!(moved["order"], json!(["entity-3", "entity-2", "entity-1"]));
+
+        let svg = exchange::svg(&drawing_of(handle));
+        let first = svg.find("<line").expect("first line element");
+        let second = first + 1 + svg[first + 1..].find("<line").expect("second line element");
+        let start_x = |index: usize| {
+            svg[index..]
+                .split("x1=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .and_then(|value| value.parse::<f64>().ok())
+                .expect("line start x")
+        };
+        assert!(start_x(first) > start_x(second), "the front entity is painted last: {svg}");
+
+        delete_entity(handle, "entity-3").expect("delete");
+        assert_eq!(drawing_of(handle).ordered_entity_ids(), vec!["entity-2", "entity-1"]);
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn reorder_entity_rejects_an_unknown_entity() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+        assert_eq!(reorder_entity(handle, "entity-404", DrawOrderAction::ToFront).expect_err("unknown entity").code, "object/not-found");
+        assert!(DrawOrderAction::parse("sideways").is_none());
+        assert_eq!(DrawOrderAction::parse(" Forward "), Some(DrawOrderAction::Forward));
         close(handle).expect("close");
     }
 }

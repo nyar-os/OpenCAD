@@ -761,6 +761,10 @@ pub struct Drawing {
     /// Descriptive title-block properties.
     #[serde(default)]
     pub properties: DrawingProperties,
+    /// Entity ids in explicit paint order, back to front. When empty, the layer
+    /// order followed by the entity list order is used.
+    #[serde(default)]
+    pub draw_order: Vec<String>,
     /// Flat entity list.
     pub entities: Vec<Entity>,
     /// Next numeric suffix used for a new entity identifier.
@@ -781,6 +785,7 @@ impl Drawing {
             groups: Vec::new(),
             linetypes: default_linetypes(),
             properties: DrawingProperties::default(),
+            draw_order: Vec::new(),
             entities: Vec::new(),
             next_entity: 1,
         }
@@ -794,6 +799,51 @@ impl Drawing {
     /// Looks up a layer by id for editing.
     pub fn layer_mut(&mut self, id: &str) -> Option<&mut Layer> {
         self.layers.iter_mut().find(|layer| layer.id == id)
+    }
+
+    /// Entities in paint order, back to front.
+    ///
+    /// An explicit [`Drawing::draw_order`] paints the listed entities first, in
+    /// the order given, and then any remaining entities in layer order followed
+    /// by insertion order. An empty draw order keeps the historical layer-first
+    /// order.
+    pub fn ordered_entities(&self) -> Vec<&Entity> {
+        let mut ordered = Vec::with_capacity(self.entities.len());
+        let mut seen = std::collections::HashSet::new();
+        if self.draw_order.is_empty() {
+            for layer in &self.layers {
+                for entity in self.entities.iter().filter(|entity| entity.layer == layer.id) {
+                    if seen.insert(entity.id.as_str()) {
+                        ordered.push(entity);
+                    }
+                }
+            }
+        }
+        else {
+            for id in &self.draw_order {
+                if let Some(entity) = self.entities.iter().find(|entity| &entity.id == id)
+                    && seen.insert(entity.id.as_str())
+                {
+                    ordered.push(entity);
+                }
+            }
+        }
+        for entity in &self.entities {
+            if seen.insert(entity.id.as_str()) {
+                ordered.push(entity);
+            }
+        }
+        ordered
+    }
+
+    /// Entity ids in paint order, back to front.
+    pub fn ordered_entity_ids(&self) -> Vec<String> {
+        self.ordered_entities().into_iter().map(|entity| entity.id.clone()).collect()
+    }
+
+    /// Drops one id from the explicit paint order.
+    pub fn forget_draw_order(&mut self, id: &str) {
+        self.draw_order.retain(|existing| existing != id);
     }
 
     /// JSON summary used by `create`, `open` and the editing calls.
@@ -908,6 +958,15 @@ impl Drawing {
                 return Err(format!("entity `{}` references missing layer `{}`", entity.id, entity.layer));
             }
             entity.validate()?;
+        }
+        let mut order_ids = std::collections::HashSet::new();
+        for id in &self.draw_order {
+            if !entity_ids.contains(id.as_str()) {
+                return Err(format!("draw order references missing entity `{id}`"));
+            }
+            if !order_ids.insert(id.as_str()) {
+                return Err(format!("draw order lists entity `{id}` twice"));
+            }
         }
         let mut group_ids = std::collections::HashSet::new();
         for group in &self.groups {

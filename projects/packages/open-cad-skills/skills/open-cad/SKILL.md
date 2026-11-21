@@ -24,7 +24,8 @@ groups, select entities with a
 rectangular window or crossing query, compute endpoint, midpoint, centre and
 line-intersection snap points near a probe point, read and write title-block properties
 (title, author, company, project, description and keywords), convert points and
-entities between world and user coordinates, save
+entities between world and user coordinates, move entities in the paint order
+(`to-front`, `to-back`, `forward`, `backward`), save
 atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
@@ -279,6 +280,12 @@ start a new document.
   Grouping is metadata: it never changes geometry, layers or entity revisions.
   A group may become empty after removals; deleting or exploding a member drops
   that id from every group.
+- Draw order is the explicit paint sequence stored beside the entities. An empty
+  sequence keeps the layer-first order. `reorderEntity()` with `to-front`,
+  `to-back`, `forward` or `backward` rewrites the sequence, and SVG, PDF and
+  DXF output paint entities in that order. Deleting an entity drops its id, and
+  exploding a polyline replaces its id with the generated line ids at the same
+  position.
 - `select --box x1,y1,x2,y2` is a read-only query: `window` (the default) keeps
   entities fully inside the rectangle, `--crossing` also keeps entities that
   cross or touch it, and `--layer` narrows the result. Curves are tested against

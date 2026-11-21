@@ -684,6 +684,18 @@ export interface EntityList {
     readonly entities: readonly Entity[];
 }
 
+/** Where `reorderEntity()` moves one entity in the paint order. */
+export type DrawOrderAction = 'to-front' | 'to-back' | 'forward' | 'backward';
+
+/** Result of `reorderEntity()`. `order` runs from back to front. */
+export interface DrawOrderResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly action: DrawOrderAction;
+    readonly order: readonly EntityId[];
+}
+
 /** Axis-aligned rectangular extent in drawing units. */
 export interface Bounds {
     readonly minX: number;

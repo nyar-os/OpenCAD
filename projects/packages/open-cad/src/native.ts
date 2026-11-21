@@ -34,6 +34,7 @@ export interface NativeBinding {
     drawing_add_hatch(handle: number, requestJson: string): string;
     drawing_delete_entity(handle: number, entityId: string): string;
     drawing_list_entities(handle: number): string;
+    drawing_reorder_entity(handle: number, entityId: string, action: string): string;
     drawing_undo(handle: number): string;
     drawing_redo(handle: number): string;
     drawing_properties(handle: number): string;

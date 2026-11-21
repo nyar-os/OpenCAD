@@ -27,8 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, MirrorAxis, OrdinateAxis, ServiceError, TransformOp, TransformRequest,
-    TransformTarget, UcsDirection, UcsRequest,
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, MirrorAxis, OrdinateAxis, ServiceError, TransformOp,
+    TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -247,6 +247,19 @@ fn drawing_delete_entity(ctx: CallContext) -> Result<JsValue> {
 fn drawing_list_entities(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let result = call_list_entities(handle).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Moves one entity within the paint order.
+#[function]
+fn drawing_reorder_entity(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let entity = text(&ctx, 1)?;
+    let raw = text(&ctx, 2)?;
+    let action = DrawOrderAction::parse(&raw).ok_or_else(|| {
+        Error::new(format!("session/argument-invalid: `{raw}` is not a draw-order action; use `to-front`, `to-back`, `forward` or `backward`"))
+    })?;
+    let result = open_cad_drawing::reorder_entity(handle, &entity, action).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2032,6 +2045,7 @@ register_module![
     drawing_add_hatch,
     drawing_delete_entity,
     drawing_list_entities,
+    drawing_reorder_entity,
     drawing_undo,
     drawing_redo,
     drawing_properties,

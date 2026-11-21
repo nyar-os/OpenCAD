@@ -37,6 +37,8 @@ import type {
     Drawing,
     DrawingPropertiesChange,
     DrawingPropertiesResult,
+    DrawOrderAction,
+    DrawOrderResult,
     EntityChange,
     EntityDeletion,
     EntityGroup,
@@ -334,6 +336,13 @@ export function deleteEntity(handle: number, entityId: string): EntityDeletion {
 /** Lists every entity of one open drawing. */
 export function listEntities(handle: number): EntityList {
     return decode<EntityList>(() => binding('drawing.listEntities').drawing_list_entities(handle));
+}
+
+/** Moves one entity within the paint order. */
+export function reorderEntity(handle: number, entityId: string, action: DrawOrderAction): DrawOrderResult {
+    return decode<DrawOrderResult>(() =>
+        binding('drawing.reorderEntity').drawing_reorder_entity(handle, entityId, action),
+    );
 }
 
 /** Reads the title and descriptive properties of one open drawing. */

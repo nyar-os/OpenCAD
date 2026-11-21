@@ -38,6 +38,8 @@ import type {
     DimensionStyleDeletion,
     Drawing,
     DrawingProperties,
+    DrawOrderAction,
+    DrawOrderResult,
     Entity,
     EntityDeletion,
     EntityGroup,
@@ -289,6 +291,13 @@ export class DrawingDocument {
         this.assertOpen();
         const result: EntityList = service.listEntities(this.handle);
         return result.entities;
+    }
+
+    /** Moves one entity within the paint order, back to front. */
+    reorderEntity(entityId: EntityId, action: DrawOrderAction): DrawOrderResult {
+        return this.edit((handle) => service.reorderEntity(handle, entityId, action), (result) => {
+            this.state = result.drawing;
+        });
     }
 
     /** Adds a line and returns the created entity. */

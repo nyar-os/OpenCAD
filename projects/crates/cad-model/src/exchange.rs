@@ -188,18 +188,18 @@ struct Projection<'a> {
 
 fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>) -> FlatDrawing {
     let mut flat = FlatDrawing::new(size);
-    for layer in &drawing.layers {
-        if !layer.visible || layer.frozen || !layer.plottable {
+    for entity in drawing.ordered_entities() {
+        let Some(layer) = drawing.layer(&entity.layer)
+        else {
+            continue;
+        };
+        if !layer.visible || layer.frozen || !layer.plottable || !entity.is_finite() {
             continue;
         }
         let color = color_of(&layer.color);
         let stroke_style = Style::stroke(color, projection.stroke);
         let text_style = Style::fill(color);
-        for entity in drawing.entities.iter().filter(|entity| entity.layer == layer.id) {
-            if entity.is_finite() {
-                push_entity(&mut flat, entity, color, &stroke_style, &text_style, projection);
-            }
-        }
+        push_entity(&mut flat, entity, color, &stroke_style, &text_style, projection);
     }
     flat
 }
@@ -513,7 +513,7 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
 
     dxf_pair(&mut out, 0, "SECTION");
     dxf_pair(&mut out, 2, "ENTITIES");
-    for entity in &drawing.entities {
+    for entity in drawing.ordered_entities() {
         match &entity.kind {
             EntityKind::Line { from, to } => dxf_line(&mut out, &entity.layer, *from, *to),
             EntityKind::Circle { center, radius } => {
