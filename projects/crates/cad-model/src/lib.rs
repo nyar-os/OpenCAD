@@ -193,13 +193,14 @@ pub fn capabilities() -> Value {
                 "properties",
                 "snap",
                 "linetype",
+                "ucs",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity"
                 | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap"
-                | "linetype" => "supported",
+                | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -2154,6 +2155,130 @@ fn entity_length_area(kind: &EntityKind) -> (f64, f64) {
     }
 }
 
+/// Direction of a [`ucs`] conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UcsDirection {
+    /// Convert user-coordinate values into world coordinates.
+    ToWorld,
+    /// Convert world coordinates into user-coordinate values.
+    ToUcs,
+}
+
+/// Arguments of [`ucs`].
+#[derive(Debug, Clone)]
+pub struct UcsRequest {
+    /// UCS origin in world coordinates.
+    pub origin: [f64; 2],
+    /// Angle of the UCS X axis from the world X axis, in degrees.
+    pub rotation: f64,
+    /// Conversion direction.
+    pub direction: UcsDirection,
+    /// Points to convert without touching the drawing.
+    pub points: Vec<[f64; 2]>,
+    /// Entities whose geometry is converted in place.
+    pub ids: Vec<String>,
+}
+
+fn ucs_point(point: [f64; 2], origin: [f64; 2], rotation: f64, direction: UcsDirection) -> [f64; 2] {
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    match direction {
+        UcsDirection::ToWorld => [origin[0] + point[0] * cos - point[1] * sin, origin[1] + point[0] * sin + point[1] * cos],
+        UcsDirection::ToUcs => {
+            let dx = point[0] - origin[0];
+            let dy = point[1] - origin[1];
+            [dx * cos + dy * sin, -dx * sin + dy * cos]
+        }
+    }
+}
+
+fn apply_ucs_transform(entity: &mut Entity, origin: [f64; 2], rotation: f64, direction: UcsDirection) {
+    match direction {
+        UcsDirection::ToWorld => {
+            apply_transform(entity, TransformOp::Rotate { angle: rotation, cx: 0.0, cy: 0.0 });
+            entity.translate(origin);
+        }
+        UcsDirection::ToUcs => {
+            entity.translate([-origin[0], -origin[1]]);
+            apply_transform(entity, TransformOp::Rotate { angle: -rotation, cx: 0.0, cy: 0.0 });
+        }
+    }
+}
+
+/// Converts points and entities between world and user coordinates.
+///
+/// A UCS is an origin plus the angle of its X axis from the world X axis.
+/// `direction: ToWorld` maps UCS values into the world system, and `ToUcs`
+/// maps world values into the UCS. `points` are converted without touching the
+/// drawing. `ids` rotate and translate the selected entities in place in one
+/// history step, and a locked or frozen layer refuses with
+/// `drawing/layer-locked` or `drawing/layer-frozen`. The response carries
+/// `{ revision, direction, origin, rotation, points, entities }`, plus `drawing`
+/// when the call mutated the document.
+pub fn ucs(handle: u64, request: UcsRequest) -> Result<Value, ServiceError> {
+    if !request.origin.iter().all(|value| value.is_finite()) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    if !request.rotation.is_finite() {
+        return Err(argument("`rotation` must be a finite number of degrees"));
+    }
+    if request.points.is_empty() && request.ids.is_empty() {
+        return Err(argument("pass `points`, `ids` or both"));
+    }
+    if !request.points.iter().all(|point| finite_point(*point)) {
+        return Err(argument("`points` must contain finite coordinates"));
+    }
+    let direction = match request.direction {
+        UcsDirection::ToWorld => "to-world",
+        UcsDirection::ToUcs => "to-ucs",
+    };
+    let converted = request
+        .points
+        .iter()
+        .map(|point| json!({ "from": point, "to": ucs_point(*point, request.origin, request.rotation, request.direction) }))
+        .collect::<Vec<_>>();
+    if request.ids.is_empty() {
+        return store::read(handle, |session| {
+            json!({
+                "revision": session.drawing.revision,
+                "direction": direction,
+                "origin": request.origin,
+                "rotation": request.rotation,
+                "points": converted.clone(),
+                "entities": [],
+            })
+        });
+    }
+    let applied = store::edit(handle, |drawing| {
+        let mut seen = std::collections::HashSet::new();
+        let mut applied = Vec::new();
+        for id in &request.ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            let index = entity_index(drawing, id)?;
+            let layer = drawing.entities[index].layer.clone();
+            if let Some(error) = locked_layer(drawing, &layer) {
+                return Err(error);
+            }
+            apply_ucs_transform(&mut drawing.entities[index], request.origin, request.rotation, request.direction);
+            applied.push(id.clone());
+        }
+        drawing.revision += 1;
+        Ok(applied)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "direction": direction,
+            "origin": request.origin,
+            "rotation": request.rotation,
+            "points": converted,
+            "entities": applied,
+        })
+    })
+}
+
 /// Measures the drawing extent, path length and enclosed area.
 ///
 /// The exact bounding box comes from every entity's own extent computation.
@@ -3931,6 +4056,7 @@ mod tests {
             "dimension-style",
             "text-style",
             "select",
+            "ucs",
         ] {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
@@ -4292,6 +4418,68 @@ mod tests {
         let layer = &summary(handle).expect("summary")["layers"][2];
         assert_eq!(layer["frozen"], json!(false));
         assert_eq!(layer["plottable"], json!(true));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn ucs_converts_points_and_rotates_entities() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+        let points = ucs(
+            handle,
+            UcsRequest { origin: [10.0, 0.0], rotation: 90.0, direction: UcsDirection::ToUcs, points: vec![[10.0, 10.0]], ids: Vec::new() },
+        )
+        .expect("point conversion");
+        assert_eq!(points["direction"], json!("to-ucs"));
+        let converted = &points["points"][0]["to"];
+        assert!((converted[0].as_f64().expect("x") - 10.0).abs() < 1e-9);
+        assert!(converted[1].as_f64().expect("y").abs() < 1e-9);
+
+        let mutated = ucs(
+            handle,
+            UcsRequest {
+                origin: [10.0, 0.0],
+                rotation: 90.0,
+                direction: UcsDirection::ToWorld,
+                points: Vec::new(),
+                ids: vec!["entity-1".to_string(), "entity-1".to_string()],
+            },
+        )
+        .expect("entity conversion");
+        assert_eq!(mutated["entities"], json!(["entity-1"]));
+        assert_eq!(mutated["revision"], json!(3));
+        let drawing = drawing_of(handle);
+        let EntityKind::Line { from, to } = drawing.entities[0].kind
+        else {
+            panic!("expected a line");
+        };
+        assert!((from[0] - 10.0).abs() < 1e-9 && from[1].abs() < 1e-9, "{from:?}");
+        assert!((to[0] - 10.0).abs() < 1e-9 && (to[1] - 10.0).abs() < 1e-9, "{to:?}");
+
+        assert_eq!(
+            ucs(handle, UcsRequest { origin: [0.0, 0.0], rotation: 0.0, direction: UcsDirection::ToWorld, points: vec![], ids: vec![] })
+                .expect_err("empty request")
+                .code,
+            "session/argument-invalid"
+        );
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(
+            ucs(
+                handle,
+                UcsRequest {
+                    origin: [0.0, 0.0],
+                    rotation: 0.0,
+                    direction: UcsDirection::ToWorld,
+                    points: vec![],
+                    ids: vec!["entity-1".to_string()],
+                }
+            )
+            .expect_err("locked")
+            .code,
+            "drawing/layer-locked"
+        );
         close(handle).expect("close");
     }
 

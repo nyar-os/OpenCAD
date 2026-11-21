@@ -717,6 +717,33 @@ test('measurePoints reports a distance or an angle', { skip: withAddon }, async 
     }
 });
 
+test('ucs converts points and rotates entities', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'UCS' });
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const converted = document.ucs({ origin: [10, 0], rotation: 90, direction: 'to-ucs', points: [[10, 10]] });
+        assert.equal(converted.direction, 'to-ucs');
+        assert.ok(Math.abs((converted.points[0]?.to[0] ?? 0) - 10) < 1e-9);
+        assert.ok(Math.abs(converted.points[0]?.to[1] ?? 1) < 1e-9);
+
+        const moved = document.ucs({ origin: [10, 0], rotation: 90, direction: 'to-world', ids: [line.id] });
+        assert.deepEqual(moved.entities, [line.id]);
+        const updated = document.listEntities()[0];
+        if (updated?.kind.type === 'line') {
+            assert.ok(Math.abs(updated.kind.from[0] - 10) < 1e-9);
+            assert.ok(Math.abs(updated.kind.to[1] - 10) < 1e-9);
+        }
+        assert.throws(
+            () => document.ucs({}),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

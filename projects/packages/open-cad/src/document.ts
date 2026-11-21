@@ -80,6 +80,8 @@ import type {
     TextReplaceResult,
     TransformRequest,
     TransformResult,
+    UcsRequest,
+    UcsResult,
     UnitsConversion,
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
@@ -654,6 +656,19 @@ export class DrawingDocument {
     measurePoints(points: readonly Point[]): PointMeasurement {
         this.assertOpen();
         return service.measurePoints(this.handle, points);
+    }
+
+    /** Converts points and entities between world and user coordinates. */
+    ucs(request: UcsRequest = {}): UcsResult {
+        this.assertOpen();
+        if ((request.ids?.length ?? 0) === 0) {
+            return service.ucs(this.handle, request);
+        }
+        return this.edit((handle) => service.ucs(handle, request), (result) => {
+            if (result.drawing !== undefined) {
+                this.state = result.drawing;
+            }
+        });
     }
 
     /** Summarises entity count, path length and enclosed area per layer. */

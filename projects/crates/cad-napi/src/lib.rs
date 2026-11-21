@@ -27,7 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, MirrorAxis, OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget,
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, MirrorAxis, OrdinateAxis, ServiceError, TransformOp, TransformRequest,
+    TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -701,6 +702,30 @@ fn drawing_measure_points(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Converts points and entities between world and user coordinates.
+#[function]
+fn drawing_ucs(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let origin = request_point(&request, "origin").map_err(Error::new)?;
+    let rotation = request.get("rotation").and_then(Value::as_f64).unwrap_or(0.0);
+    let direction = match request.get("direction").and_then(Value::as_str) {
+        Some("to-ucs") => UcsDirection::ToUcs,
+        Some("to-world") | None => UcsDirection::ToWorld,
+        Some(other) => return Err(Error::new(format!("session/argument-invalid: `{other}` is not a UCS direction"))),
+    };
+    let points = request.get("points").map(points_from_value).transpose().map_err(Error::new)?.unwrap_or_default();
+    let ids = request
+        .get("ids")
+        .map(|value| {
+            serde_json::from_value::<Vec<String>>(value.clone()).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let result = open_cad_drawing::ucs(handle, UcsRequest { origin, rotation, direction, points, ids }).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Imports the declared ASCII DXF subset into a new drawing.
 #[function]
 fn drawing_import_dxf(ctx: CallContext) -> Result<JsValue> {
@@ -771,11 +796,8 @@ fn request_string(request: &Value, key: &str) -> std::result::Result<String, Str
     request.get(key).and_then(Value::as_str).map(str::to_string).ok_or_else(|| format!("session/argument-invalid: `{key}` must be a string"))
 }
 
-fn request_points(request: &Value) -> std::result::Result<Vec<[f64; 2]>, String> {
-    let points = request
-        .get("points")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "session/argument-invalid: `points` must be an array of [x, y]".to_string())?;
+fn points_from_value(value: &Value) -> std::result::Result<Vec<[f64; 2]>, String> {
+    let points = value.as_array().ok_or_else(|| "session/argument-invalid: `points` must be an array of [x, y]".to_string())?;
     points
         .iter()
         .map(|point| {
@@ -786,6 +808,11 @@ fn request_points(request: &Value) -> std::result::Result<Vec<[f64; 2]>, String>
             Ok([x, y])
         })
         .collect()
+}
+
+fn request_points(request: &Value) -> std::result::Result<Vec<[f64; 2]>, String> {
+    let points = request.get("points").ok_or_else(|| "session/argument-invalid: `points` must be an array of [x, y]".to_string())?;
+    points_from_value(points)
 }
 
 fn call_add_line(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -2046,6 +2073,7 @@ register_module![
     drawing_measure,
     drawing_measure_entities,
     drawing_measure_points,
+    drawing_ucs,
     drawing_stats,
     drawing_import_dxf,
     open_gui,

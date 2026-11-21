@@ -82,6 +82,8 @@ import type {
     TextReplaceResult,
     TransformRequest,
     TransformResult,
+    UcsRequest,
+    UcsResult,
     UnitsConversion,
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
@@ -721,6 +723,22 @@ export function measureEntities(handle: number, ids: readonly string[]): EntityM
 /** Measures the distance between two points or the angle at three points. */
 export function measurePoints(handle: number, points: readonly Point[]): PointMeasurement {
     return decode<PointMeasurement>(() => binding('drawing.measurePoints').drawing_measure_points(handle, JSON.stringify(points)));
+}
+
+/** Converts points and entities between world and user coordinates. */
+export function ucs(handle: number, request: UcsRequest): UcsResult {
+    return decode<UcsResult>(() =>
+        binding('drawing.ucs').drawing_ucs(
+            handle,
+            JSON.stringify({
+                origin: request.origin ?? [0, 0],
+                rotation: request.rotation ?? 0,
+                direction: request.direction ?? 'to-world',
+                points: request.points ?? [],
+                ids: request.ids ?? [],
+            }),
+        ),
+    );
 }
 
 /** Summarises entity count, path length and enclosed area per layer. */

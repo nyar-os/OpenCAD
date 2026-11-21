@@ -61,6 +61,7 @@ import type {
     TransformOperation,
     TransformResult,
     TransformTarget,
+    UcsResult,
     UnitsConversion,
 } from './types.js';
 
@@ -431,6 +432,17 @@ function describeSnap(result: SnapResult): string {
             `  ${entry.kind} ${entry.point[0]},${entry.point[1]}${entry.distance === undefined ? '' : ` distance=${entry.distance}`} entities=${entry.entities.join(',')}`,
     );
     return [`snap ${result.count} candidates modes=${result.modes.join(',')} revision=${result.revision}`, ...lines].join('\n');
+}
+
+function describeUcs(result: UcsResult): string {
+    const lines = [
+        `ucs ${result.direction} origin=${result.origin[0]},${result.origin[1]} rotation=${result.rotation} revision=${result.revision}`,
+        ...result.points.map((point) => `  ${point.from[0]},${point.from[1]} -> ${point.to[0]},${point.to[1]}`),
+    ];
+    if (result.entities.length > 0) {
+        lines.push(`  entities: ${result.entities.join(',')}`);
+    }
+    return lines.join('\n');
 }
 
 function describeUnits(result: UnitsConversion): string {
@@ -1502,6 +1514,45 @@ cli
                 }),
             );
             ctx.emitResult(result, describeSnap(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('ucs', 'cli.cmd.ucs')
+    .option('--origin <x,y>', 'cli.opt.ucs-origin')
+    .option('--rotation <degrees>', 'cli.opt.ucs-rotation')
+    .option('--direction <direction>', 'cli.opt.ucs-direction', { enum: ['to-world', 'to-ucs'] })
+    .option('--points <list>', 'cli.opt.points-list')
+    .option('--ids <list>', 'cli.opt.ids')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const coordinates = points(options, 'points');
+        const ids = idList(options, 'ids');
+        if (coordinates === undefined && ids === undefined) {
+            ctx.fail('open-cad.cli.ucs-required', { message: '`--points "x,y ..."`, `--ids`, or both are required' });
+            return 2;
+        }
+        const origin: Point = point(options, 'origin') ?? [0, 0];
+        const direction = (text(options, 'direction') as 'to-world' | 'to-ucs' | undefined) ?? 'to-world';
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.ucs({
+                    origin,
+                    rotation: number(options, 'rotation') ?? 0,
+                    direction,
+                    points: coordinates,
+                    ids,
+                }),
+            );
+            ctx.emitResult(result, describeUcs(result));
             return 0;
         } finally {
             opened.close();

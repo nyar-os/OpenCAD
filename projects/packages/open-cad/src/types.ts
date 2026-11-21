@@ -1084,6 +1084,40 @@ export interface UnitsConversion {
     readonly converted: boolean;
 }
 
+/** Direction of a `ucs()` conversion. */
+export type UcsDirection = 'to-world' | 'to-ucs';
+
+/** One point converted by `ucs()`. */
+export interface UcsPoint {
+    readonly from: Point;
+    readonly to: Point;
+}
+
+/** Arguments of `ucs()`. */
+export interface UcsRequest {
+    /** UCS origin in world coordinates; defaults to `[0, 0]`. */
+    readonly origin?: Point;
+    /** Angle of the UCS X axis from the world X axis, in degrees; defaults to `0`. */
+    readonly rotation?: number;
+    /** Conversion direction; defaults to `to-world`. */
+    readonly direction?: UcsDirection;
+    /** Points converted without touching the drawing. */
+    readonly points?: readonly Point[];
+    /** Entities rotated and translated in place in one history step. */
+    readonly ids?: readonly EntityId[];
+}
+
+/** Result of `ucs()`. `drawing` is present only when entities changed. */
+export interface UcsResult {
+    readonly revision: number;
+    readonly direction: UcsDirection;
+    readonly origin: Point;
+    readonly rotation: number;
+    readonly points: readonly UcsPoint[];
+    readonly entities: readonly EntityId[];
+    readonly drawing?: Drawing;
+}
+
 /** Arguments of `OpenCAD.importDxf()`. */
 export interface ImportDxfRequest {
     /** Path of the ASCII DXF file. */
