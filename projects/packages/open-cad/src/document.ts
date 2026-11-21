@@ -33,6 +33,7 @@ import type {
     Drawing,
     Entity,
     EntityDeletion,
+    EntityId,
     EntityList,
     DrawingStats,
     ExplodeResult,
@@ -381,6 +382,16 @@ export class DrawingDocument {
         return this.edit((handle) => service.offset(handle, request), (result) => {
             this.state = result.drawing;
         });
+    }
+
+    /** Fillets two lines, trimming both, and returns the new arc. */
+    fillet(first: EntityId, second: EntityId, radius: number): Entity {
+        return this.adopt(this.edit((handle) => service.fillet(handle, first, second, radius)));
+    }
+
+    /** Chamfers two lines, trimming both, and returns the new bevel line. */
+    chamfer(first: EntityId, second: EntityId, distanceA: number, distanceB: number): Entity {
+        return this.adopt(this.edit((handle) => service.chamfer(handle, first, second, distanceA, distanceB)));
     }
 
     /** Measures bounds, path length and enclosed area. */

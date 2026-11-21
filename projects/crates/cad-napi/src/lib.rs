@@ -368,6 +368,38 @@ fn drawing_offset(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Fillets two lines with a tangent arc and trims both lines.
+#[function]
+fn drawing_fillet(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let (first, second) = corner_pair(&request).map_err(Error::new)?;
+    let radius = request_number(&request, "radius").map_err(Error::new)?;
+    let result = open_cad_drawing::fillet(handle, &first, &second, radius).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Chamfers two lines with a bevel and trims both lines.
+#[function]
+fn drawing_chamfer(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let (first, second) = corner_pair(&request).map_err(Error::new)?;
+    let distance_a = request_number(&request, "distanceA").map_err(Error::new)?;
+    let distance_b = request_number(&request, "distanceB").map_err(Error::new)?;
+    let result = open_cad_drawing::chamfer(handle, &first, &second, distance_a, distance_b).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+fn corner_pair(request: &Value) -> std::result::Result<(String, String), String> {
+    let first = request.get("first").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let second = request.get("second").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    if first.is_empty() || second.is_empty() {
+        return Err("session/argument-invalid: `first` and `second` entity ids are required".to_string());
+    }
+    Ok((first, second))
+}
+
 /// Summarises entity count, path length and enclosed area per layer.
 #[function]
 fn drawing_stats(ctx: CallContext) -> Result<JsValue> {
@@ -1214,6 +1246,48 @@ impl IpcHandler for StudioIpcHandler {
                     Err(error) => failure(id, "offsetError", service_failure(error)),
                 }
             }
+            "drawing.fillet" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "filletError", "a fillet request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                let Some((first, second)) = corner_pair(&request).ok()
+                else {
+                    return failure(id, "filletError", "a fillet request needs `first` and `second` entity ids".to_string());
+                };
+                let Some(radius) = request.get("radius").and_then(Value::as_f64)
+                else {
+                    return failure(id, "filletError", "a fillet request needs a numeric `radius`".to_string());
+                };
+                match open_cad_drawing::fillet(handle, &first, &second, radius) {
+                    Ok(result) => reply(id, "filletResult", result),
+                    Err(error) => failure(id, "filletError", service_failure(error)),
+                }
+            }
+            "drawing.chamfer" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "chamferError", "a chamfer request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                let Some((first, second)) = corner_pair(&request).ok()
+                else {
+                    return failure(id, "chamferError", "a chamfer request needs `first` and `second` entity ids".to_string());
+                };
+                let Some(distance_a) = request.get("distanceA").and_then(Value::as_f64)
+                else {
+                    return failure(id, "chamferError", "a chamfer request needs a numeric `distanceA`".to_string());
+                };
+                let Some(distance_b) = request.get("distanceB").and_then(Value::as_f64)
+                else {
+                    return failure(id, "chamferError", "a chamfer request needs a numeric `distanceB`".to_string());
+                };
+                match open_cad_drawing::chamfer(handle, &first, &second, distance_a, distance_b) {
+                    Ok(result) => reply(id, "chamferResult", result),
+                    Err(error) => failure(id, "chamferError", service_failure(error)),
+                }
+            }
             "drawing.stats" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -1528,6 +1602,8 @@ register_module![
     drawing_array,
     drawing_explode,
     drawing_offset,
+    drawing_fillet,
+    drawing_chamfer,
     drawing_measure,
     drawing_stats,
     drawing_import_dxf,

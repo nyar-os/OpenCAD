@@ -1158,6 +1158,70 @@ cli
     });
 
 cli
+    .command('fillet', 'cli.cmd.fillet')
+    .option('--first <entity>', 'cli.opt.first')
+    .option('--second <entity>', 'cli.opt.second')
+    .option('--radius <number>', 'cli.opt.radius')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const first = text(options, 'first');
+        const second = text(options, 'second');
+        const radius = number(options, 'radius');
+        if (first === undefined || second === undefined || radius === undefined) {
+            ctx.fail('open-cad.cli.corner-required', {
+                message: '`--first <entity>`, `--second <entity>` and `--radius <number>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.fillet(first, second, radius));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('chamfer', 'cli.cmd.chamfer')
+    .option('--first <entity>', 'cli.opt.first')
+    .option('--second <entity>', 'cli.opt.second')
+    .option('--distance-a <number>', 'cli.opt.distance-a')
+    .option('--distance-b <number>', 'cli.opt.distance-b')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const first = text(options, 'first');
+        const second = text(options, 'second');
+        const distanceA = number(options, 'distance-a');
+        const distanceB = number(options, 'distance-b') ?? distanceA;
+        if (first === undefined || second === undefined || distanceA === undefined || distanceB === undefined) {
+            ctx.fail('open-cad.cli.corner-required', {
+                message: '`--first <entity>`, `--second <entity>` and `--distance-a <number>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.chamfer(first, second, distanceA, distanceB));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
     .command('measure', 'cli.cmd.measure')
     .option('--sheet <sheet>', 'cli.opt.sheet')
     .actionCtx(async (options, _args, ctx) => {

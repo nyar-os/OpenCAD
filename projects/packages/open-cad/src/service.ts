@@ -26,6 +26,7 @@ import type {
     CopyRequest,
     CopyResult,
     ConvertUnitsRequest,
+    CornerResult,
     Drawing,
     EntityChange,
     EntityDeletion,
@@ -267,6 +268,23 @@ export function addHatch(handle: number, request: AddHatchRequest): EntityChange
                 points: request.points,
                 pattern: request.pattern,
             }),
+        ),
+    );
+}
+
+/** Adds a fillet arc between two lines and trims both lines. */
+export function fillet(handle: number, first: string, second: string, radius: number): CornerResult {
+    return decode<CornerResult>(() =>
+        binding('drawing.fillet').drawing_fillet(handle, JSON.stringify({ first, second, radius })),
+    );
+}
+
+/** Adds a chamfer line between two lines and trims both lines. */
+export function chamfer(handle: number, first: string, second: string, distanceA: number, distanceB: number): CornerResult {
+    return decode<CornerResult>(() =>
+        binding('drawing.chamfer').drawing_chamfer(
+            handle,
+            JSON.stringify({ first, second, distanceA, distanceB }),
         ),
     );
 }

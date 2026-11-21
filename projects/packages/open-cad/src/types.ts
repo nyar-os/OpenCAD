@@ -474,6 +474,14 @@ export interface OffsetResult {
     readonly source: EntityId;
 }
 
+/** Result of `fillet()` or `chamfer()`. Both source lines are trimmed. */
+export interface CornerResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly sources: readonly EntityId[];
+}
+
 /**
  * Result of `measure()`.
  *

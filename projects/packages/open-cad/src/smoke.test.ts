@@ -387,6 +387,36 @@ test('offset copies circle and polyline geometry as new entities', { skip: withA
     }
 });
 
+test('fillet and chamfer trim two lines and append the corner entity', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Corners' });
+        const horizontal = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const vertical = document.addLine({ layer: '0', from: [10, 0], to: [10, 10] });
+        const arc = document.fillet(horizontal.id, vertical.id, 2);
+        assert.equal(arc.kind.type, 'arc');
+        assert.deepEqual(document.listEntities().find((entity) => entity.id === horizontal.id)?.kind, {
+            type: 'line',
+            from: [0, 0],
+            to: [8, 0],
+        });
+
+        const document2 = await cad.create({ title: 'Chamfers' });
+        const a = document2.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const b = document2.addLine({ layer: '0', from: [10, 0], to: [10, 10] });
+        const bevel = document2.chamfer(a.id, b.id, 3, 4);
+        assert.equal(bevel.kind.type, 'line');
+        if (bevel.kind.type === 'line') {
+            assert.deepEqual(bevel.kind.from, [7, 0]);
+            assert.deepEqual(bevel.kind.to, [10, 4]);
+        }
+        document.close();
+        document2.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

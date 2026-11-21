@@ -11,7 +11,8 @@ Working document core. The installed CLI and SDK can create and open `.ocad`
 drawings, add lines, circles, arcs, ellipses, polylines, text, hatches, linear,
 radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
-explode a polyline, offset a circle/arc/polyline and measure, move, update and
+explode a polyline, offset a circle/arc/polyline, fillet or chamfer two lines and
+measure, move, update and
 delete entities, undo and redo,
 add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
@@ -61,6 +62,8 @@ open-cad array plan.ocad --ids entity-1 --rows 2 --columns 3 --row-spacing 10 --
 open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
 open-cad offset plan.ocad --id entity-2 --distance 2
+open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
+open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
 open-cad stats plan.ocad
 
@@ -115,7 +118,15 @@ without moving the source. A positive distance grows a radius or offsets an
 open polyline to the left of its travel direction; a negative distance shrinks
 or offsets right. Closed polylines miter every vertex. Text, point, ellipse and
 dimension entities are refused with `object/unsupported`, and a non-positive
-resulting radius with `session/argument-invalid`. `measure` reports bounds, width,
+resulting radius with `session/argument-invalid`. `fillet` takes `--first`,
+`--second` and `--radius`; `chamfer` takes `--first`, `--second`,
+`--distance-a` and optional `--distance-b` (which defaults to the first
+distance). Both require two different line entities, use the closest endpoint
+pair as the corner, trim both lines towards their far endpoints and append the
+new arc or bevel line on the first line's layer. A radius or distance that
+does not fit on both segments, parallel or collinear lines, and zero-length
+lines are refused with `session/argument-invalid`; other entity types with
+`object/unsupported`. `measure` reports bounds, width,
 height, entity count, path length and enclosed area: ellipse length is sampled at
 five-degree steps and area only covers closed polylines, full circles and full
 ellipses. `stats` applies the same rules per layer and adds per-layer entity

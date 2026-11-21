@@ -172,9 +172,9 @@ pub fn capabilities() -> Value {
             },
         ),
         "operations": map(
-            &["transform", "copy", "array", "explode", "offset", "measure", "stats", "constraints", "kernel3d"],
+            &["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats", "constraints", "kernel3d"],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "measure" | "stats" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -1466,6 +1466,248 @@ pub fn offset(handle: u64, entity_id: &str, distance: f64) -> Result<Value, Serv
     })
 }
 
+/// One line corner shared by `fillet` and `chamfer`.
+struct LineCorner {
+    /// Intersection of the two infinite lines.
+    point: [f64; 2],
+    /// Unit direction from `point` towards each kept endpoint.
+    direction: [[f64; 2]; 2],
+    /// Distance from `point` to the discarded endpoint, measured along the kept direction.
+    near: [f64; 2],
+    /// Distance from `point` to the kept endpoint.
+    far: [f64; 2],
+    /// Whether the discarded endpoint is the `to` endpoint of each line.
+    near_is_to: [bool; 2],
+    /// Angle between the two kept directions, in radians.
+    angle: f64,
+}
+
+fn line_endpoints(kind: &EntityKind) -> Option<([f64; 2], [f64; 2])> {
+    match kind {
+        EntityKind::Line { from, to } => Some((*from, *to)),
+        _ => None,
+    }
+}
+
+fn line_intersection(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<[f64; 2]> {
+    let first = [b[0] - a[0], b[1] - a[1]];
+    let second = [d[0] - c[0], d[1] - c[1]];
+    let denominator = first[0] * second[1] - first[1] * second[0];
+    if denominator.abs() < 1e-12 {
+        return None;
+    }
+    let offset = [c[0] - a[0], c[1] - a[1]];
+    let parameter = (offset[0] * second[1] - offset[1] * second[0]) / denominator;
+    Some([a[0] + first[0] * parameter, a[1] + first[1] * parameter])
+}
+
+fn distance(from: [f64; 2], to: [f64; 2]) -> f64 {
+    (to[0] - from[0]).hypot(to[1] - from[1])
+}
+
+fn unit_direction(from: [f64; 2], to: [f64; 2]) -> Option<[f64; 2]> {
+    let length = distance(from, to);
+    if length < 1e-12 { None } else { Some([(to[0] - from[0]) / length, (to[1] - from[1]) / length]) }
+}
+
+/// Picks the corner where the two closest endpoints meet and measures both lines
+/// from that intersection towards the endpoints they keep.
+fn line_corner(first: &EntityKind, second: &EntityKind) -> Result<LineCorner, ServiceError> {
+    let (first_from, first_to) = line_endpoints(first).ok_or_else(|| argument("both fillet/chamfer references must be lines"))?;
+    let (second_from, second_to) = line_endpoints(second).ok_or_else(|| argument("both fillet/chamfer references must be lines"))?;
+    let first_points = [first_from, first_to];
+    let second_points = [second_from, second_to];
+    let mut chosen = (0usize, 0usize, f64::INFINITY);
+    for (first_index, first_point) in first_points.iter().enumerate() {
+        for (second_index, second_point) in second_points.iter().enumerate() {
+            let gap = distance(*first_point, *second_point);
+            if gap < chosen.2 {
+                chosen = (first_index, second_index, gap);
+            }
+        }
+    }
+    let point = line_intersection(first_from, first_to, second_from, second_to)
+        .ok_or_else(|| argument("the two lines are parallel and have no fillet corner"))?;
+    let keep = [first_points[1 - chosen.0], second_points[1 - chosen.1]];
+    let near = [first_points[chosen.0], second_points[chosen.1]];
+    let direction = [
+        unit_direction(point, keep[0]).ok_or_else(|| argument("a zero-length line has no fillet corner"))?,
+        unit_direction(point, keep[1]).ok_or_else(|| argument("a zero-length line has no fillet corner"))?,
+    ];
+    let dot = (direction[0][0] * direction[1][0] + direction[0][1] * direction[1][1]).clamp(-1.0, 1.0);
+    let angle = dot.acos();
+    if !(1e-9..std::f64::consts::PI - 1e-9).contains(&angle) {
+        return Err(argument("the two lines are collinear and have no fillet corner"));
+    }
+    let measure = |index: usize| {
+        let toward = direction[index];
+        let near_distance = (near[index][0] - point[0]) * toward[0] + (near[index][1] - point[1]) * toward[1];
+        (near_distance, distance(point, keep[index]))
+    };
+    let (near_first, far_first) = measure(0);
+    let (near_second, far_second) = measure(1);
+    Ok(LineCorner {
+        point,
+        direction,
+        near: [near_first, near_second],
+        far: [far_first, far_second],
+        near_is_to: [chosen.0 == 1, chosen.1 == 1],
+        angle,
+    })
+}
+
+fn trim_line(kind: &mut EntityKind, near_is_to: bool, point: [f64; 2]) -> Result<(), ServiceError> {
+    match kind {
+        EntityKind::Line { from, to } => {
+            if near_is_to {
+                *to = point;
+            }
+            else {
+                *from = point;
+            }
+            Ok(())
+        }
+        _ => Err(argument("both fillet/chamfer references must be lines")),
+    }
+}
+
+/// Adds a fillet arc between two lines and trims both lines to the tangent points.
+///
+/// The corner is the pair of closest endpoints. Both lines must reach the
+/// tangent points, so a radius that would land outside either segment reports
+/// `session/argument-invalid`; parallel, collinear and zero-length lines also
+/// report it. The arc is added on the first line's layer and the response
+/// carries `{ revision, drawing, entity, sources }`.
+pub fn fillet(handle: u64, first_id: &str, second_id: &str, radius: f64) -> Result<Value, ServiceError> {
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(argument("`radius` must be a positive finite number"));
+    }
+    if first_id == second_id {
+        return Err(argument("a fillet needs two different lines"));
+    }
+    let created = store::edit(handle, |drawing| {
+        let first_index = entity_index(drawing, first_id)?;
+        let second_index = entity_index(drawing, second_id)?;
+        for (id, index) in [(first_id, first_index), (second_id, second_index)] {
+            let kind = &drawing.entities[index].kind;
+            if line_endpoints(kind).is_none() {
+                return Err(ServiceError::new("object/unsupported", format!("entity `{id}` is a {} and cannot be filleted", kind_name(kind))));
+            }
+        }
+        let corner = line_corner(&drawing.entities[first_index].kind, &drawing.entities[second_index].kind)?;
+        for index in [first_index, second_index] {
+            if let Some(error) = locked_layer(drawing, &drawing.entities[index].layer) {
+                return Err(error);
+            }
+        }
+        let half = corner.angle / 2.0;
+        let tangent = radius / half.tan();
+        for index in 0..2 {
+            let low = corner.near[index].max(0.0);
+            if tangent < low - 1e-9 || tangent > corner.far[index] + 1e-9 {
+                return Err(argument(format!(
+                    "a radius of {radius} does not fit between the corner and the kept endpoint of `{}`",
+                    if index == 0 { first_id } else { second_id }
+                )));
+            }
+        }
+        let bisector = [corner.direction[0][0] + corner.direction[1][0], corner.direction[0][1] + corner.direction[1][1]];
+        let bisector = unit_direction([0.0, 0.0], bisector).ok_or_else(|| argument("the two lines point in opposite directions"))?;
+        let center_distance = radius / half.sin();
+        let center = [corner.point[0] + bisector[0] * center_distance, corner.point[1] + bisector[1] * center_distance];
+        let tangent_points = [
+            [corner.point[0] + corner.direction[0][0] * tangent, corner.point[1] + corner.direction[0][1] * tangent],
+            [corner.point[0] + corner.direction[1][0] * tangent, corner.point[1] + corner.direction[1][1] * tangent],
+        ];
+        trim_line(&mut drawing.entities[first_index].kind, corner.near_is_to[0], tangent_points[0])?;
+        trim_line(&mut drawing.entities[second_index].kind, corner.near_is_to[1], tangent_points[1])?;
+
+        let start = (tangent_points[0][1] - center[1]).atan2(tangent_points[0][0] - center[0]).to_degrees();
+        let end = (tangent_points[1][1] - center[1]).atan2(tangent_points[1][0] - center[0]).to_degrees();
+        let (start_angle, end_angle) = if (end - start).rem_euclid(360.0) <= 180.0 { (start, end) } else { (end, start) };
+        let id = drawing.take_entity_id();
+        let entity =
+            Entity { id, layer: drawing.entities[first_index].layer.clone(), kind: EntityKind::Arc { center, radius, start_angle, end_angle } };
+        drawing.entities.push(entity.clone());
+        drawing.revision += 1;
+        Ok(entity)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": created,
+            "sources": [first_id, second_id],
+        })
+    })
+}
+
+/// Adds a chamfer line between two lines and trims both lines to the chamfer points.
+///
+/// `distance_a` is measured from the corner along the first line and
+/// `distance_b` along the second. The same corner, fit and parallel rules as
+/// `fillet` apply. The chamfer line is added on the first line's layer and the
+/// response carries `{ revision, drawing, entity, sources }`.
+pub fn chamfer(handle: u64, first_id: &str, second_id: &str, distance_a: f64, distance_b: f64) -> Result<Value, ServiceError> {
+    for value in [distance_a, distance_b] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(argument("chamfer distances must be positive finite numbers"));
+        }
+    }
+    if first_id == second_id {
+        return Err(argument("a chamfer needs two different lines"));
+    }
+    let created = store::edit(handle, |drawing| {
+        let first_index = entity_index(drawing, first_id)?;
+        let second_index = entity_index(drawing, second_id)?;
+        for (id, index) in [(first_id, first_index), (second_id, second_index)] {
+            let kind = &drawing.entities[index].kind;
+            if line_endpoints(kind).is_none() {
+                return Err(ServiceError::new("object/unsupported", format!("entity `{id}` is a {} and cannot be chamfered", kind_name(kind))));
+            }
+        }
+        let corner = line_corner(&drawing.entities[first_index].kind, &drawing.entities[second_index].kind)?;
+        for index in [first_index, second_index] {
+            if let Some(error) = locked_layer(drawing, &drawing.entities[index].layer) {
+                return Err(error);
+            }
+        }
+        let distances = [distance_a, distance_b];
+        let mut trimmed = [[0.0, 0.0]; 2];
+        for index in 0..2 {
+            let low = corner.near[index].max(0.0);
+            if distances[index] < low - 1e-9 || distances[index] > corner.far[index] + 1e-9 {
+                return Err(argument(format!(
+                    "a chamfer distance of {} does not fit between the corner and the kept endpoint of `{}`",
+                    distances[index],
+                    if index == 0 { first_id } else { second_id }
+                )));
+            }
+            trimmed[index] = [
+                corner.point[0] + corner.direction[index][0] * distances[index],
+                corner.point[1] + corner.direction[index][1] * distances[index],
+            ];
+        }
+        trim_line(&mut drawing.entities[first_index].kind, corner.near_is_to[0], trimmed[0])?;
+        trim_line(&mut drawing.entities[second_index].kind, corner.near_is_to[1], trimmed[1])?;
+
+        let id = drawing.take_entity_id();
+        let entity =
+            Entity { id, layer: drawing.entities[first_index].layer.clone(), kind: EntityKind::Line { from: trimmed[0], to: trimmed[1] } };
+        drawing.entities.push(entity.clone());
+        drawing.revision += 1;
+        Ok(entity)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": created,
+            "sources": [first_id, second_id],
+        })
+    })
+}
+
 fn segment_normal(from: [f64; 2], to: [f64; 2]) -> Option<[f64; 2]> {
     let dx = to[0] - from[0];
     let dy = to[1] - from[1];
@@ -2050,7 +2292,7 @@ mod tests {
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
         }
-        for operation in ["transform", "copy", "array", "explode", "offset", "measure", "stats"] {
+        for operation in ["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats"] {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
         for operation in ["constraints", "kernel3d"] {
@@ -3891,6 +4133,91 @@ mod tests {
         add_circle(handle, "Structure", [0.0, 0.0], 4.0).expect("circle");
         update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
         assert_eq!(offset(handle, "entity-1", 1.0).expect_err("locked").code, "drawing/layer-locked");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn fillet_trims_two_lines_and_adds_a_tangent_arc() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
+        add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [10.0, 10.0]).expect("second line");
+        let result = fillet(handle, "entity-1", "entity-2", 2.0).expect("fillet");
+        assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+        assert_eq!(result["entity"]["kind"]["radius"], json!(2.0));
+        let center = result["entity"]["kind"]["center"].as_array().expect("center");
+        assert!((center[0].as_f64().expect("x") - 8.0).abs() < 1e-9);
+        assert!((center[1].as_f64().expect("y") - 2.0).abs() < 1e-9);
+        assert!((result["entity"]["kind"]["start_angle"].as_f64().expect("start") + 90.0).abs() < 1e-9);
+        assert!(result["entity"]["kind"]["end_angle"].as_f64().expect("end").abs() < 1e-9);
+        assert_eq!(result["sources"], json!(["entity-1", "entity-2"]));
+        assert_eq!(result["revision"], json!(4));
+
+        let drawing = drawing_of(handle);
+        let EntityKind::Line { from, to } = drawing.entities[0].kind
+        else {
+            panic!("expected a trimmed line");
+        };
+        assert_eq!((from, to), ([0.0, 0.0], [8.0, 0.0]));
+        let EntityKind::Line { from, to } = drawing.entities[1].kind
+        else {
+            panic!("expected a trimmed line");
+        };
+        assert!((from[0] - 10.0).abs() < 1e-9 && (from[1] - 2.0).abs() < 1e-9, "trimmed from {from:?}");
+        assert_eq!(to, [10.0, 10.0]);
+
+        add_line(handle, DEFAULT_LAYER, [0.0, 5.0], [10.0, 5.0]).expect("parallel first");
+        add_line(handle, DEFAULT_LAYER, [0.0, 8.0], [10.0, 8.0]).expect("parallel second");
+        assert_eq!(fillet(handle, "entity-4", "entity-5", 1.0).expect_err("parallel").code, "session/argument-invalid");
+        assert_eq!(fillet(handle, "entity-1", "entity-2", 11.0).expect_err("radius too large").code, "session/argument-invalid");
+        assert_eq!(fillet(handle, "entity-1", "entity-1", 1.0).expect_err("same line").code, "session/argument-invalid");
+        add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 3.0).expect("circle");
+        assert_eq!(fillet(handle, "entity-1", "entity-6", 1.0).expect_err("circle").code, "object/unsupported");
+        assert_eq!(fillet(handle, "entity-1", "entity-404", 1.0).expect_err("missing").code, "object/not-found");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn chamfer_trims_two_lines_and_adds_the_bevel() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
+        add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [10.0, 10.0]).expect("second line");
+        let result = chamfer(handle, "entity-1", "entity-2", 3.0, 4.0).expect("chamfer");
+        assert_eq!(result["entity"]["kind"]["type"], json!("line"));
+        assert_eq!(result["entity"]["kind"]["from"], json!([7.0, 0.0]));
+        assert_eq!(result["entity"]["kind"]["to"], json!([10.0, 4.0]));
+        assert_eq!(result["sources"], json!(["entity-1", "entity-2"]));
+
+        let drawing = drawing_of(handle);
+        let EntityKind::Line { from, to } = drawing.entities[0].kind
+        else {
+            panic!("expected a trimmed line");
+        };
+        assert_eq!((from, to), ([0.0, 0.0], [7.0, 0.0]));
+        let EntityKind::Line { from, to } = drawing.entities[1].kind
+        else {
+            panic!("expected a trimmed line");
+        };
+        assert_eq!((from, to), ([10.0, 4.0], [10.0, 10.0]));
+
+        assert_eq!(chamfer(handle, "entity-1", "entity-2", 8.0, 1.0).expect_err("distance too large").code, "session/argument-invalid");
+        assert_eq!(chamfer(handle, "entity-1", "entity-2", 0.0, 1.0).expect_err("zero distance").code, "session/argument-invalid");
+        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+        assert_eq!(chamfer(handle, "entity-1", "entity-4", 1.0, 1.0).expect_err("text").code, "object/unsupported");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn fillet_and_chamfer_refuse_a_locked_layer() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+        add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("first line");
+        add_line(handle, "Structure", [10.0, 0.0], [10.0, 10.0]).expect("second line");
+        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(fillet(handle, "entity-1", "entity-2", 1.0).expect_err("locked fillet").code, "drawing/layer-locked");
+        assert_eq!(chamfer(handle, "entity-1", "entity-2", 1.0, 1.0).expect_err("locked chamfer").code, "drawing/layer-locked");
         close(handle).expect("close");
     }
 
