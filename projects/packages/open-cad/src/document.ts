@@ -17,6 +17,7 @@ import type {
     AddArcRequest,
     AddCircleRequest,
     AddDimensionRequest,
+    AddDimensionStyleRequest,
     AddEllipseRequest,
     AddHatchRequest,
     AddLayerRequest,
@@ -30,6 +31,8 @@ import type {
     CopyRequest,
     CopyResult,
     ConvertUnitsRequest,
+    DimensionStyle,
+    DimensionStyleDeletion,
     Drawing,
     Entity,
     EntityDeletion,
@@ -56,6 +59,7 @@ import type {
     TransformRequest,
     TransformResult,
     UnitsConversion,
+    UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
 } from './types.js';
@@ -130,6 +134,11 @@ export class DrawingDocument {
     /** Layers in paint order. */
     get layers(): readonly LayerSummary[] {
         return this.state.layers;
+    }
+
+    /** Named dimension styles of this document. */
+    get dimStyles(): readonly DimensionStyle[] {
+        return this.state.dimStyles;
     }
 
     /** Number of entities. */
@@ -335,6 +344,45 @@ export class DrawingDocument {
     /** Moves every entity of one layer onto another and removes the empty source. */
     mergeLayer(request: MergeLayerRequest): LayerMerge {
         return this.edit((handle) => service.mergeLayer(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Lists the dimension styles of this document. */
+    listDimStyles(): readonly DimensionStyle[] {
+        this.assertOpen();
+        return service.listDimStyles(this.handle).dimStyles;
+    }
+
+    /** Adds one dimension style and returns it. */
+    addDimStyle(request: AddDimensionStyleRequest): DimensionStyle {
+        let style: DimensionStyle | undefined;
+        this.edit(
+            (handle) => service.addDimStyle(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                style = result.style;
+            },
+        );
+        return style as DimensionStyle;
+    }
+
+    /** Updates one dimension style and returns it. */
+    updateDimStyle(request: UpdateDimensionStyleRequest): DimensionStyle {
+        let style: DimensionStyle | undefined;
+        this.edit(
+            (handle) => service.updateDimStyle(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                style = result.style;
+            },
+        );
+        return style as DimensionStyle;
+    }
+
+    /** Removes one dimension style. */
+    deleteDimStyle(styleId: string): DimensionStyleDeletion {
+        return this.edit((handle) => service.deleteDimStyle(handle, styleId), (result) => {
             this.state = result.drawing;
         });
     }

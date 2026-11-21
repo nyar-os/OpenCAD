@@ -287,6 +287,36 @@ test('layer merge moves references and removes the source layer', { skip: withAd
     }
 });
 
+test('dimension styles are read and written through the document', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Styles' });
+        assert.equal(document.dimStyles.length, 1);
+        assert.equal(document.dimStyles[0]?.name, 'standard');
+
+        const added = document.addDimStyle({ name: 'ARCH', scale: 2.5, textHeight: 3.5, precision: 0 });
+        assert.equal(added.id, 'ARCH');
+        assert.equal(added.scale, 2.5);
+        assert.equal(added.arrowSize, 2.5);
+        assert.equal(added.precision, 0);
+
+        const updated = document.updateDimStyle({ styleId: 'ARCH', name: 'ARCH-1', arrowSize: 4 });
+        assert.equal(updated.id, 'ARCH-1');
+        assert.equal(updated.arrowSize, 4);
+        assert.equal(document.dimStyles.length, 2);
+
+        const deleted = document.deleteDimStyle('ARCH-1');
+        assert.equal(deleted.deleted, 'ARCH-1');
+        assert.equal(document.dimStyles.length, 1);
+        assert.throws(
+            () => document.deleteDimStyle('standard'),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/style-last',
+        );
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('unit conversion scales lengths and round trips', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

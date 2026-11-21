@@ -42,6 +42,11 @@
             "layer-visible": "Set a layer's visibility and save the file in place",
             "layer-lock": "Set a layer's lock state and save the file in place",
             "layer-merge": "Move every entity of one layer onto another and remove the empty source layer",
+            "dimstyle": "Read and edit the dimension styles of an existing drawing file",
+            "dimstyle-list": "List the dimension styles of a drawing file",
+            "dimstyle-add": "Add a dimension style and save the file in place",
+            "dimstyle-update": "Update a dimension style, optionally renaming it, and save the file",
+            "dimstyle-delete": "Delete a dimension style and save the file in place",
             "units": "Convert the lengths of an existing drawing file between millimetres and inches",
             "units-convert": "Scale every length and change the declared unit, then save the file in place",
             "gui": "Open the OpenCAD Studio window"
@@ -107,6 +112,13 @@
             "locked": "Layer lock state: on or off",
             "layer-from": "Source layer whose entities move; the layer is removed after the merge",
             "layer-to": "Target layer that receives the entities",
+            "style-name": "Dimension style name, which also acts as the style id",
+            "scale": "Overall scale applied to the dimension style's lengths",
+            "arrow-size": "Arrowhead size in drawing units",
+            "text-height": "Dimension text height in drawing units",
+            "extension": "Extension line length beyond the dimension line",
+            "origin-offset": "Gap between a measured point and its extension line",
+            "precision": "Decimal places in a measured label, 0-8",
             "to-unit": "Unit to convert to: mm or inch"
         }
     }

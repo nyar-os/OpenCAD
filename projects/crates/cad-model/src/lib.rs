@@ -29,9 +29,9 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units, arc_point, arc_sweep,
-    default_hatch_pattern, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label,
-    radial_target, sample_arc, sample_ellipse,
+    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units, arc_point,
+    arc_sweep, default_dimension_styles, default_hatch_pattern, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points,
+    ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -172,9 +172,24 @@ pub fn capabilities() -> Value {
             },
         ),
         "operations": map(
-            &["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats", "constraints", "kernel3d"],
+            &[
+                "transform",
+                "copy",
+                "array",
+                "explode",
+                "offset",
+                "fillet",
+                "chamfer",
+                "measure",
+                "stats",
+                "dimension-style",
+                "constraints",
+                "kernel3d",
+            ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" | "dimension-style" => {
+                    "supported"
+                }
                 _ => "unsupported",
             },
         ),
@@ -2149,6 +2164,196 @@ pub fn merge_layer(handle: u64, from: &str, to: &str) -> Result<Value, ServiceEr
     })
 }
 
+/// Fields used to create one dimension style. Omitted values keep the
+/// `standard` defaults.
+#[derive(Debug, Clone, Default)]
+pub struct DimensionStyleRequest {
+    /// Style name; it also becomes the style id.
+    pub name: String,
+    /// Overall scale applied to the style's lengths.
+    pub scale: Option<f64>,
+    /// Arrowhead size in drawing units.
+    pub arrow_size: Option<f64>,
+    /// Dimension text height in drawing units.
+    pub text_height: Option<f64>,
+    /// Extension line length beyond the dimension line.
+    pub extension: Option<f64>,
+    /// Gap between a measured point and its extension line.
+    pub origin_offset: Option<f64>,
+    /// Decimal places in a measured label, `0..=8`.
+    pub precision: Option<u32>,
+}
+
+/// Fields an update to one dimension style may change.
+#[derive(Debug, Clone, Default)]
+pub struct DimensionStyleUpdate {
+    /// New style name; also becomes the style id.
+    pub name: Option<String>,
+    /// New overall scale.
+    pub scale: Option<f64>,
+    /// New arrowhead size.
+    pub arrow_size: Option<f64>,
+    /// New text height.
+    pub text_height: Option<f64>,
+    /// New extension line length.
+    pub extension: Option<f64>,
+    /// New origin offset.
+    pub origin_offset: Option<f64>,
+    /// New decimal places, `0..=8`.
+    pub precision: Option<u32>,
+}
+
+/// Lists the dimension styles of one drawing.
+pub fn list_dim_styles(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "dimStyles": session.drawing.dim_styles,
+        })
+    })
+}
+
+/// Adds one dimension style and returns `{ revision, drawing, style }`.
+///
+/// Names are unique case-insensitively; a duplicate reports
+/// `drawing/style-exists`. A `.ocad` document always keeps at least one style.
+pub fn add_dim_style(handle: u64, request: DimensionStyleRequest) -> Result<Value, ServiceError> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err(argument("a dimension style needs a non-empty name"));
+    }
+    let style = DimensionStyle {
+        id: name.clone(),
+        name,
+        scale: request.scale.unwrap_or(1.0),
+        arrow_size: request.arrow_size.unwrap_or(2.5),
+        text_height: request.text_height.unwrap_or(2.5),
+        extension: request.extension.unwrap_or(1.25),
+        origin_offset: request.origin_offset.unwrap_or(0.625),
+        precision: request.precision.unwrap_or(2),
+    };
+    style.validate().map_err(argument)?;
+    let id = style.id.clone();
+    store::edit(handle, |drawing| {
+        if drawing.dim_styles.iter().any(|existing| existing.id.eq_ignore_ascii_case(&style.id)) {
+            return Err(ServiceError::new("drawing/style-exists", format!("a dimension style named `{}` already exists", style.name)));
+        }
+        drawing.dim_styles.push(style);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    read_dim_style(handle, &id)
+}
+
+/// Updates one dimension style and returns `{ revision, drawing, style }`.
+pub fn update_dim_style(handle: u64, id: &str, update: DimensionStyleUpdate) -> Result<Value, ServiceError> {
+    if update.name.is_none()
+        && update.scale.is_none()
+        && update.arrow_size.is_none()
+        && update.text_height.is_none()
+        && update.extension.is_none()
+        && update.origin_offset.is_none()
+        && update.precision.is_none()
+    {
+        return Err(argument("pass at least one dimension style field to update"));
+    }
+    let new_name = match &update.name {
+        Some(name) => {
+            let trimmed = name.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(argument("a dimension style needs a non-empty name"));
+            }
+            Some(trimmed)
+        }
+        None => None,
+    };
+    let target = id.to_string();
+    let next_id = new_name.clone().unwrap_or_else(|| target.clone());
+    store::edit(handle, |drawing| {
+        let index = drawing
+            .dim_styles
+            .iter()
+            .position(|style| style.id == target)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("dimension style `{target}` does not exist")))?;
+        if let Some(name) = &new_name
+            && drawing.dim_styles.iter().enumerate().any(|(other, style)| other != index && style.id.eq_ignore_ascii_case(name))
+        {
+            return Err(ServiceError::new("drawing/style-exists", format!("a dimension style named `{name}` already exists")));
+        }
+        let Some(style) = drawing.dim_styles.get_mut(index)
+        else {
+            return Err(ServiceError::new("object/not-found", format!("dimension style `{target}` does not exist")));
+        };
+        if let Some(name) = new_name {
+            style.id = name.clone();
+            style.name = name;
+        }
+        if let Some(scale) = update.scale {
+            style.scale = scale;
+        }
+        if let Some(arrow_size) = update.arrow_size {
+            style.arrow_size = arrow_size;
+        }
+        if let Some(text_height) = update.text_height {
+            style.text_height = text_height;
+        }
+        if let Some(extension) = update.extension {
+            style.extension = extension;
+        }
+        if let Some(origin_offset) = update.origin_offset {
+            style.origin_offset = origin_offset;
+        }
+        if let Some(precision) = update.precision {
+            style.precision = precision;
+        }
+        style.validate().map_err(argument)?;
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    read_dim_style(handle, &next_id)
+}
+
+/// Removes one dimension style and returns `{ revision, drawing, deleted }`.
+///
+/// Removing the last remaining style refuses with `drawing/style-last`, so a
+/// document always keeps one style.
+pub fn delete_dim_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::edit(handle, |drawing| {
+        let index = drawing
+            .dim_styles
+            .iter()
+            .position(|style| style.id == id)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("dimension style `{id}` does not exist")))?;
+        if drawing.dim_styles.len() <= 1 {
+            return Err(ServiceError::new(
+                "drawing/style-last",
+                format!("dimension style `{id}` is the last style; a drawing must keep at least one style"),
+            ));
+        }
+        drawing.dim_styles.remove(index);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "deleted": id,
+        })
+    })
+}
+
+fn read_dim_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let style = session.drawing.dim_styles.iter().find(|style| style.id == id);
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "style": style,
+        })
+    })
+}
+
 /// Converts a drawing between millimetres and inches.
 ///
 /// Every coordinate, radius, ellipse axis, text height and dimension offset is
@@ -2292,7 +2497,7 @@ mod tests {
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
         }
-        for operation in ["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats"] {
+        for operation in ["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats", "dimension-style"] {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
         for operation in ["constraints", "kernel3d"] {
@@ -2626,6 +2831,87 @@ mod tests {
         assert!(codes.contains(&"layers/hidden"), "{codes:?}");
         assert!(codes.contains(&"layers/locked"), "{codes:?}");
 
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn dimension_styles_are_listed_added_updated_and_deleted() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        assert_eq!(created["drawing"]["dimStyles"][0]["name"], json!("standard"));
+        assert_eq!(list_dim_styles(handle).expect("list")["dimStyles"].as_array().map(Vec::len), Some(1));
+
+        let added = add_dim_style(
+            handle,
+            DimensionStyleRequest {
+                name: "ARCH".to_string(),
+                scale: Some(2.0),
+                text_height: Some(3.5),
+                precision: Some(0),
+                ..DimensionStyleRequest::default()
+            },
+        )
+        .expect("add");
+        assert_eq!(added["style"]["id"], json!("ARCH"));
+        assert_eq!(added["style"]["scale"], json!(2.0));
+        assert_eq!(added["style"]["arrowSize"], json!(2.5));
+        assert_eq!(added["style"]["originOffset"], json!(0.625));
+        assert_eq!(added["style"]["precision"], json!(0));
+
+        let duplicate = add_dim_style(handle, DimensionStyleRequest { name: "arch".to_string(), ..DimensionStyleRequest::default() })
+            .expect_err("duplicate style");
+        assert_eq!(duplicate.code, "drawing/style-exists");
+
+        let updated = update_dim_style(
+            handle,
+            "ARCH",
+            DimensionStyleUpdate { name: Some("ARCH-1".to_string()), scale: Some(3.0), ..DimensionStyleUpdate::default() },
+        )
+        .expect("update");
+        assert_eq!(updated["style"]["id"], json!("ARCH-1"));
+        assert_eq!(updated["style"]["scale"], json!(3.0));
+        assert_eq!(updated["drawing"]["dimStyles"].as_array().map(Vec::len), Some(2));
+
+        let invalid = update_dim_style(handle, "ARCH-1", DimensionStyleUpdate { precision: Some(9), ..DimensionStyleUpdate::default() })
+            .expect_err("precision");
+        assert_eq!(invalid.code, "session/argument-invalid");
+
+        let deleted = delete_dim_style(handle, "ARCH-1").expect("delete");
+        assert_eq!(deleted["deleted"], json!("ARCH-1"));
+        assert_eq!(delete_dim_style(handle, "ARCH-1").expect_err("missing").code, "object/not-found");
+        assert_eq!(delete_dim_style(handle, "standard").expect_err("last").code, "drawing/style-last");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn dxf_round_trip_keeps_dimension_styles() {
+        let dir = TempDir::new("dimstyle-dxf");
+        let path = dir.path.join("plan.dxf");
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_dim_style(
+            handle,
+            DimensionStyleRequest {
+                name: "ARCH".to_string(),
+                scale: Some(2.0),
+                arrow_size: Some(3.0),
+                precision: Some(1),
+                ..DimensionStyleRequest::default()
+            },
+        )
+        .expect("add style");
+        add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, None).expect("dimension");
+        export(handle, "dxf", &path).expect("export dxf");
+        let dxf = fs::read_to_string(&path).expect("read dxf");
+        assert!(dxf.contains("DIMSTYLE"));
+        assert!(dxf.contains("ARCH"));
+
+        let imported = import_dxf(&path, Some("Imported".to_string())).expect("import dxf");
+        let styles = imported["drawing"]["dimStyles"].as_array().expect("dimStyles");
+        let arch = styles.iter().find(|style| style["name"] == json!("ARCH")).expect("imported ARCH style");
+        assert_eq!(arch["scale"], json!(2.0));
+        assert_eq!(arch["arrowSize"], json!(3.0));
+        assert_eq!(arch["precision"], json!(1));
         close(handle).expect("close");
     }
 

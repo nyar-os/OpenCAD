@@ -15,7 +15,10 @@ dimensions, radial/diameter dimensions, ordinate dimensions and hatches are real
 entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode, offset, fillet, chamfer and measure are supported; each handle
 keeps a 32-snapshot undo/redo history;
-layers can be added, renamed, merged, hidden and locked; a drawing converts
+layers can be added, renamed, merged, hidden and locked; a drawing keeps named
+dimension styles (scale, arrowhead size, text height, extension length, origin
+offset and label precision) that can be listed, added, updated and removed and
+round-trip through the DXF `DIMSTYLE` table; a drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL, Wavefront OBJ and STEP export work, and
@@ -69,6 +72,10 @@ open-cad layer add plan.ocad --name Walls --color "#a4262c"
 open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer lock plan.ocad --name Structure --locked on
+open-cad dimstyle list plan.ocad
+open-cad dimstyle add plan.ocad --name ARCH --scale 2.5 --arrow-size 3 --text-height 3.5 --precision 2
+open-cad dimstyle update plan.ocad --name ARCH --to ARCH-1 --scale 3
+open-cad dimstyle delete plan.ocad --name ARCH-1
 open-cad units convert plan.ocad --to inch
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
@@ -98,7 +105,7 @@ What this build does NOT do
 ---------------------------
 
 - No DWG or STEP import, and no full DXF reader. `import` accepts the declared
-  ASCII subset only: `$INSUNITS`, the LAYER table, BLOCKS/INSERT expansion, the
+  ASCII subset only: `$INSUNITS`, the LAYER and DIMSTYLE tables, BLOCKS/INSERT expansion, the
   ATTRIB values that follow an INSERT, and LINE, CIRCLE, ARC, ELLIPSE, POINT,
   TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND (a 3D polyline is
   projected onto the XY plane), SPLINE (read as a polyline through its fit
@@ -151,6 +158,10 @@ What this build does NOT do
 - No interactive viewport, selection or snapping.
 - No constraint solver or associative dimensions; `constraints` and `references`
   checks are reported as unsupported.
+- Dimension styles keep only the modelled `DIMSTYLE` variables: overall scale,
+  arrowhead size, text height, extension line length, origin offset and decimal
+  places. Other variables are ignored on import and are not written, and
+  dimension entities do not bind a named style yet.
 - No bare layer deletion. `layer merge --from A --to B` moves every entity of
   `A` onto `B` and removes the now-empty `A` in one history step. A locked
   source or target layer refuses the merge.
@@ -161,8 +172,8 @@ What this build does NOT do
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
-  chamfer, measure and stats as supported while constraint solving and a 3D
-  kernel stay unsupported. A
+  chamfer, measure, stats and dimension-style as supported while constraint
+  solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.

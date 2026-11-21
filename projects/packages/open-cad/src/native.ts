@@ -38,6 +38,10 @@ export interface NativeBinding {
     drawing_redo(handle: number): string;
     drawing_add_layer(handle: number, requestJson: string): string;
     drawing_update_layer(handle: number, requestJson: string): string;
+    drawing_list_dim_styles(handle: number): string;
+    drawing_add_dim_style(handle: number, requestJson: string): string;
+    drawing_update_dim_style(handle: number, requestJson: string): string;
+    drawing_delete_dim_style(handle: number, styleId: string): string;
     drawing_merge_layer(handle: number, from: string, to: string): string;
     drawing_convert_units(handle: number, unit: string): string;
     drawing_move_entity(handle: number, requestJson: string): string;

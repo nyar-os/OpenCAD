@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::{
     ServiceError,
-    schema::{Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units},
+    schema::{DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units},
 };
 
 /// Maximum INSERT nesting the reader expands before it stops.
@@ -200,6 +200,29 @@ fn parse_layer(block: &[Pair]) -> Option<(String, Option<i64>)> {
         return None;
     }
     Some((name, integer(block, 62)))
+}
+
+/// Reads one `DIMSTYLE` table entry, keeping only the modelled variables.
+///
+/// Missing or invalid variables fall back to the `standard` defaults, so a
+/// malformed entry cannot make the imported drawing invalid.
+fn parse_dim_style(block: &[Pair]) -> Option<DimensionStyle> {
+    let name = field(block, 2)?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let positive = |value: Option<f64>, fallback: f64| value.filter(|value| value.is_finite() && *value > 0.0).unwrap_or(fallback);
+    let non_negative = |value: Option<f64>, fallback: f64| value.filter(|value| value.is_finite() && *value >= 0.0).unwrap_or(fallback);
+    Some(DimensionStyle {
+        id: name.clone(),
+        name,
+        scale: positive(number(block, 40), 1.0),
+        arrow_size: positive(number(block, 41), 2.5),
+        origin_offset: non_negative(number(block, 42), 0.625),
+        extension: non_negative(number(block, 44), 1.25),
+        text_height: positive(number(block, 140), 2.5),
+        precision: integer(block, 271).map_or(2, |value| value.clamp(0, 8) as u32),
+    })
 }
 
 fn closed_flag(block: &[Pair]) -> bool {
@@ -1085,6 +1108,31 @@ impl Reader {
         }
     }
 
+    /// Reads the DIMSTYLE table entries of the TABLES section.
+    ///
+    /// Only the modelled variables are read; an entry whose name matches a
+    /// style already in the document replaces it, so a drawing never carries
+    /// duplicate style names.
+    fn parse_dim_style_table(&mut self, pairs: &[Pair]) {
+        let mut index = 0;
+        while index < pairs.len() {
+            if pairs[index].code == 0 && pairs[index].value.trim().eq_ignore_ascii_case("DIMSTYLE") {
+                let end = block_end(pairs, index + 1);
+                if let Some(style) = parse_dim_style(&pairs[index + 1..end]) {
+                    if let Some(existing) = self.drawing.dim_styles.iter_mut().find(|existing| existing.id == style.id) {
+                        *existing = style;
+                    }
+                    else {
+                        self.drawing.dim_styles.push(style);
+                    }
+                }
+                index = end;
+                continue;
+            }
+            index += 1;
+        }
+    }
+
     fn finish(mut self) -> (Drawing, Vec<Loss>) {
         let mut losses = std::mem::take(&mut self.losses);
 
@@ -1335,6 +1383,7 @@ pub(crate) fn dxf(text: &str, title: Option<String>) -> Result<(Drawing, Vec<Los
     }
     if let Some(tables) = section_pairs(&pairs, "TABLES") {
         reader.parse_layer_table(tables);
+        reader.parse_dim_style_table(tables);
     }
     reader.parse_entities(&blocks, entities, Xform::scale(scale), None, 0);
     Ok(reader.finish())

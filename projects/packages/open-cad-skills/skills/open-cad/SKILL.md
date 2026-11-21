@@ -14,7 +14,8 @@ transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline, fillet or chamfer two lines and
 measure, move, update and
 delete entities, undo and redo,
-add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
+add, rename, merge, hide and lock layers, list, add, update and remove
+dimension styles (which round-trip through the DXF `DIMSTYLE` table), save atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
 the declared ASCII DXF subset (including SPLINE,
@@ -75,6 +76,11 @@ open-cad layer rename plan.ocad --name Walls --to Structure
 open-cad layer merge plan.ocad --from Walls --to Structure
 open-cad layer visible plan.ocad --name Structure --visible off
 open-cad layer lock plan.ocad --name Structure --locked on
+
+open-cad dimstyle list plan.ocad
+open-cad dimstyle add plan.ocad --name ARCH --scale 2.5 --arrow-size 3 --text-height 3.5 --precision 2
+open-cad dimstyle update plan.ocad --name ARCH --to ARCH-1 --scale 3
+open-cad dimstyle delete plan.ocad --name ARCH-1
 
 open-cad units convert plan.ocad --to inch
 
@@ -172,8 +178,13 @@ start a new document.
   reference in the same mutation. `layer merge --from A --to B` moves every
   entity of `A` onto `B`, removes the empty `A` and is one history step. Locked
   layers refuse writes; hidden layers are skipped by the exporters.
+- Dimension styles are unique by name and a drawing always keeps at least one.
+  Each style stores the overall scale, arrowhead size, text height, extension
+  line length, origin offset and decimal places; those variables are read from
+  and written to the DXF `DIMSTYLE` table. Other DIMSTYLE variables and a
+  per-dimension style reference are not modelled.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
-  `$INSUNITS`, the LAYER table, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
+  `$INSUNITS`, the LAYER and DIMSTYLE tables, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
   POLYLINE/VERTEX/SEQEND (3D polylines are projected onto the XY plane), SPLINE
   (a polyline through the fit points, or the control polygon when there are no

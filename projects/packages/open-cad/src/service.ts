@@ -13,6 +13,7 @@ import type {
     AddArcRequest,
     AddCircleRequest,
     AddDimensionRequest,
+    AddDimensionStyleRequest,
     AddEllipseRequest,
     AddHatchRequest,
     AddLayerRequest,
@@ -27,6 +28,9 @@ import type {
     CopyResult,
     ConvertUnitsRequest,
     CornerResult,
+    DimensionStyleChange,
+    DimensionStyleDeletion,
+    DimensionStyleList,
     Drawing,
     EntityChange,
     EntityDeletion,
@@ -52,6 +56,7 @@ import type {
     TransformRequest,
     TransformResult,
     UnitsConversion,
+    UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
 } from './types.js';
@@ -335,6 +340,53 @@ export function updateLayer(handle: number, request: UpdateLayerRequest): LayerC
 /** Moves every entity of one layer onto another and drops the empty source. */
 export function mergeLayer(handle: number, request: MergeLayerRequest): LayerMerge {
     return decode<LayerMerge>(() => binding('drawing.mergeLayer').drawing_merge_layer(handle, request.from, request.to));
+}
+
+/** Lists the dimension styles of one open drawing. */
+export function listDimStyles(handle: number): DimensionStyleList {
+    return decode<DimensionStyleList>(() => binding('drawing.listDimStyles').drawing_list_dim_styles(handle));
+}
+
+/** Adds one dimension style to an open drawing. */
+export function addDimStyle(handle: number, request: AddDimensionStyleRequest): DimensionStyleChange {
+    return decode<DimensionStyleChange>(() =>
+        binding('drawing.addDimStyle').drawing_add_dim_style(
+            handle,
+            JSON.stringify({
+                name: request.name,
+                scale: request.scale,
+                arrowSize: request.arrowSize,
+                textHeight: request.textHeight,
+                extension: request.extension,
+                originOffset: request.originOffset,
+                precision: request.precision,
+            }),
+        ),
+    );
+}
+
+/** Updates one dimension style of an open drawing. */
+export function updateDimStyle(handle: number, request: UpdateDimensionStyleRequest): DimensionStyleChange {
+    return decode<DimensionStyleChange>(() =>
+        binding('drawing.updateDimStyle').drawing_update_dim_style(
+            handle,
+            JSON.stringify({
+                styleId: request.styleId,
+                name: request.name,
+                scale: request.scale,
+                arrowSize: request.arrowSize,
+                textHeight: request.textHeight,
+                extension: request.extension,
+                originOffset: request.originOffset,
+                precision: request.precision,
+            }),
+        ),
+    );
+}
+
+/** Removes one dimension style from an open drawing. */
+export function deleteDimStyle(handle: number, styleId: string): DimensionStyleDeletion {
+    return decode<DimensionStyleDeletion>(() => binding('drawing.deleteDimStyle').drawing_delete_dim_style(handle, styleId));
 }
 
 /** Converts one open drawing between millimetres and inches. */

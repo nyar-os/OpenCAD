@@ -302,6 +302,41 @@ fn drawing_merge_layer(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Lists the dimension styles of an open drawing.
+#[function]
+fn drawing_list_dim_styles(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::list_dim_styles(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Adds one dimension style to an open drawing.
+#[function]
+fn drawing_add_dim_style(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_dim_style(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Updates one dimension style of an open drawing.
+#[function]
+fn drawing_update_dim_style(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_update_dim_style(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Removes one dimension style from an open drawing.
+#[function]
+fn drawing_delete_dim_style(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let style = text(&ctx, 1)?;
+    let result = open_cad_drawing::delete_dim_style(handle, &style).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity of an open drawing.
 #[function]
 fn drawing_move_entity(ctx: CallContext) -> Result<JsValue> {
@@ -628,6 +663,47 @@ fn call_update_layer(handle: u64, request: &Value) -> std::result::Result<Value,
         locked: request.get("locked").and_then(Value::as_bool),
     };
     open_cad_drawing::update_layer(handle, &layer, update).map_err(service_failure)
+}
+
+fn optional_number(request: &Value, key: &str) -> Option<f64> {
+    request.get(key).and_then(Value::as_f64)
+}
+
+fn optional_precision(request: &Value) -> std::result::Result<Option<u32>, String> {
+    match request.get("precision") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let raw = value.as_u64().ok_or_else(|| "session/argument-invalid: `precision` must be an integer".to_string())?;
+            u32::try_from(raw).map(Some).map_err(|_| "session/argument-invalid: `precision` is too large".to_string())
+        }
+    }
+}
+
+fn call_add_dim_style(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let style = open_cad_drawing::DimensionStyleRequest {
+        name: request_string(request, "name")?,
+        scale: optional_number(request, "scale"),
+        arrow_size: optional_number(request, "arrowSize"),
+        text_height: optional_number(request, "textHeight"),
+        extension: optional_number(request, "extension"),
+        origin_offset: optional_number(request, "originOffset"),
+        precision: optional_precision(request)?,
+    };
+    open_cad_drawing::add_dim_style(handle, style).map_err(service_failure)
+}
+
+fn call_update_dim_style(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let style = request_string(request, "styleId")?;
+    let update = open_cad_drawing::DimensionStyleUpdate {
+        name: request.get("name").and_then(Value::as_str).map(str::to_string),
+        scale: optional_number(request, "scale"),
+        arrow_size: optional_number(request, "arrowSize"),
+        text_height: optional_number(request, "textHeight"),
+        extension: optional_number(request, "extension"),
+        origin_offset: optional_number(request, "originOffset"),
+        precision: optional_precision(request)?,
+    };
+    open_cad_drawing::update_dim_style(handle, &style, update).map_err(service_failure)
 }
 
 fn call_move_entity(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -1593,6 +1669,10 @@ register_module![
     drawing_redo,
     drawing_add_layer,
     drawing_update_layer,
+    drawing_list_dim_styles,
+    drawing_add_dim_style,
+    drawing_update_dim_style,
+    drawing_delete_dim_style,
     drawing_merge_layer,
     drawing_convert_units,
     drawing_move_entity,

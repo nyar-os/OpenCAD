@@ -58,6 +58,7 @@ export type OperationName =
     | 'offset'
     | 'measure'
     | 'stats'
+    | 'dimension-style'
     | 'constraints'
     | 'kernel3d';
 
@@ -145,6 +146,24 @@ export interface LayerSummary {
     readonly entityCount: number;
 }
 
+/** One named dimension style; mirrors a DXF `DIMSTYLE` table entry. */
+export interface DimensionStyle {
+    readonly id: string;
+    readonly name: string;
+    /** Overall scale applied to the style's lengths. */
+    readonly scale: number;
+    /** Arrowhead size in drawing units. */
+    readonly arrowSize: number;
+    /** Dimension text height in drawing units. */
+    readonly textHeight: number;
+    /** Extension line length beyond the dimension line. */
+    readonly extension: number;
+    /** Gap between a measured point and its extension line. */
+    readonly originOffset: number;
+    /** Decimal places in a measured label, 0-8. */
+    readonly precision: number;
+}
+
 /** Summary of one drawing at its committed revision. */
 export interface Drawing {
     readonly id: DrawingId;
@@ -153,11 +172,56 @@ export interface Drawing {
     /** Declared drawing unit, `mm` or `inch`. */
     readonly units: 'mm' | 'inch';
     readonly layers: readonly LayerSummary[];
+    /** Named dimension styles; a drawing always keeps at least one. */
+    readonly dimStyles: readonly DimensionStyle[];
     readonly entities: number;
     /** Whether the handle still has an earlier snapshot to restore. */
     readonly canUndo: boolean;
     /** Whether an undone snapshot can be reapplied. */
     readonly canRedo: boolean;
+}
+
+/** Result of `listDimStyles()`. */
+export interface DimensionStyleList {
+    readonly revision: number;
+    readonly dimStyles: readonly DimensionStyle[];
+}
+
+/** Arguments of `addDimStyle()`. Omitted numbers keep the standard defaults. */
+export interface AddDimensionStyleRequest {
+    readonly name: string;
+    readonly scale?: number;
+    readonly arrowSize?: number;
+    readonly textHeight?: number;
+    readonly extension?: number;
+    readonly originOffset?: number;
+    readonly precision?: number;
+}
+
+/** Arguments of `updateDimStyle()`. */
+export interface UpdateDimensionStyleRequest {
+    readonly styleId: string;
+    readonly name?: string;
+    readonly scale?: number;
+    readonly arrowSize?: number;
+    readonly textHeight?: number;
+    readonly extension?: number;
+    readonly originOffset?: number;
+    readonly precision?: number;
+}
+
+/** Result of adding or updating one dimension style. */
+export interface DimensionStyleChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly style: DimensionStyle;
+}
+
+/** Result of deleting one dimension style. */
+export interface DimensionStyleDeletion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly deleted: string;
 }
 
 /** Geometry of one entity. */

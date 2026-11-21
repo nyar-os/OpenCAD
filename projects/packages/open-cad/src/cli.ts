@@ -24,6 +24,8 @@ import type {
     ArrayPlacement,
     ArrayResult,
     CopyResult,
+    DimensionStyle,
+    DimensionStyleChange,
     Drawing,
     DrawingStats,
     Entity,
@@ -280,6 +282,19 @@ function describeLayer(change: LayerChange): string {
 
 function describeMerge(result: LayerMerge): string {
     return `merged layer ${result.from} into ${result.to} moved=${result.moved} revision=${result.revision} layers=${result.drawing.layers.length}`;
+}
+
+function describeDimStyles(styles: readonly DimensionStyle[]): string {
+    if (styles.length === 0) {
+        return 'no dimension styles';
+    }
+    return styles
+        .map((style) => `${style.name} scale=${style.scale} arrow=${style.arrowSize} text=${style.textHeight} precision=${style.precision}`)
+        .join('\n');
+}
+
+function describeDimStyle(change: DimensionStyleChange): string {
+    return `dimension style ${change.style.name} revision=${change.revision}`;
 }
 
 function describeUnits(result: UnitsConversion): string {
@@ -1387,6 +1402,142 @@ layer
         try {
             const result = await guard(ctx, () => opened.mergeLayer({ from, to }));
             ctx.emitResult(result, describeMerge(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const dimstyle = cli.command('dimstyle', 'cli.cmd.dimstyle');
+
+dimstyle.command('list', 'cli.cmd.dimstyle-list').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+        return 2;
+    }
+    const opened = await guard(ctx, () => app.open({ path: file }));
+    try {
+        const styles = await guard(ctx, () => opened.listDimStyles());
+        ctx.emitResult({ revision: opened.revision, dimStyles: styles }, describeDimStyles(styles));
+        return 0;
+    } finally {
+        opened.close();
+    }
+});
+
+dimstyle
+    .command('add', 'cli.cmd.dimstyle-add')
+    .option('--name <name>', 'cli.opt.style-name')
+    .option('--scale <number>', 'cli.opt.scale')
+    .option('--arrow-size <number>', 'cli.opt.arrow-size')
+    .option('--text-height <number>', 'cli.opt.text-height')
+    .option('--extension <number>', 'cli.opt.extension')
+    .option('--origin-offset <number>', 'cli.opt.origin-offset')
+    .option('--precision <number>', 'cli.opt.precision')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const precision = number(options, 'precision');
+        if (precision !== undefined && (!Number.isInteger(precision) || precision < 0 || precision > 8)) {
+            ctx.fail('open-cad.cli.precision-invalid', { message: '`--precision` must be an integer from 0 to 8' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const style = await guard(ctx, () =>
+                opened.addDimStyle({
+                    name,
+                    scale: number(options, 'scale'),
+                    arrowSize: number(options, 'arrow-size'),
+                    textHeight: number(options, 'text-height'),
+                    extension: number(options, 'extension'),
+                    originOffset: number(options, 'origin-offset'),
+                    precision,
+                }),
+            );
+            const change: DimensionStyleChange = { revision: opened.revision, drawing: opened.summary(), style };
+            ctx.emitResult(change, describeDimStyle(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+dimstyle
+    .command('update', 'cli.cmd.dimstyle-update')
+    .option('--name <name>', 'cli.opt.style-name')
+    .option('--to <name>', 'cli.opt.to-name')
+    .option('--scale <number>', 'cli.opt.scale')
+    .option('--arrow-size <number>', 'cli.opt.arrow-size')
+    .option('--text-height <number>', 'cli.opt.text-height')
+    .option('--extension <number>', 'cli.opt.extension')
+    .option('--origin-offset <number>', 'cli.opt.origin-offset')
+    .option('--precision <number>', 'cli.opt.precision')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const precision = number(options, 'precision');
+        if (precision !== undefined && (!Number.isInteger(precision) || precision < 0 || precision > 8)) {
+            ctx.fail('open-cad.cli.precision-invalid', { message: '`--precision` must be an integer from 0 to 8' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const style = await guard(ctx, () =>
+                opened.updateDimStyle({
+                    styleId: name,
+                    name: text(options, 'to'),
+                    scale: number(options, 'scale'),
+                    arrowSize: number(options, 'arrow-size'),
+                    textHeight: number(options, 'text-height'),
+                    extension: number(options, 'extension'),
+                    originOffset: number(options, 'origin-offset'),
+                    precision,
+                }),
+            );
+            const change: DimensionStyleChange = { revision: opened.revision, drawing: opened.summary(), style };
+            ctx.emitResult(change, describeDimStyle(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+dimstyle
+    .command('delete', 'cli.cmd.dimstyle-delete')
+    .option('--name <name>', 'cli.opt.style-name')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const deletion = await guard(ctx, () => opened.deleteDimStyle(name));
+            ctx.emitResult(deletion, `deleted dimension style ${deletion.deleted} revision=${deletion.revision}`);
             return 0;
         } finally {
             opened.close();

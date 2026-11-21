@@ -86,6 +86,75 @@ impl Layer {
     }
 }
 
+/// One named dimension style, mirroring the DXF `DIMSTYLE` table entry.
+///
+/// Only the variables the document model honours are kept: the overall scale,
+/// arrowhead size, text height, extension line length and origin offset, and
+/// the number of decimal places in a measured label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DimensionStyle {
+    /// Stable style identifier inside the document; equals the name.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Overall scale applied to the style's lengths (DXF `DIMSCALE`).
+    pub scale: f64,
+    /// Arrowhead size in drawing units (DXF `DIMASZ`).
+    pub arrow_size: f64,
+    /// Dimension text height in drawing units (DXF `DIMTXT`).
+    pub text_height: f64,
+    /// Extension line length beyond the dimension line (DXF `DIMEXE`).
+    pub extension: f64,
+    /// Gap between a measured point and its extension line (DXF `DIMEXO`).
+    pub origin_offset: f64,
+    /// Decimal places in a measured label, `0..=8` (DXF `DIMDEC`).
+    pub precision: u32,
+}
+
+impl DimensionStyle {
+    /// Builds the `standard` style every drawing declares by default.
+    pub fn standard() -> Self {
+        Self {
+            id: "standard".to_string(),
+            name: "standard".to_string(),
+            scale: 1.0,
+            arrow_size: 2.5,
+            text_height: 2.5,
+            extension: 1.25,
+            origin_offset: 0.625,
+            precision: 2,
+        }
+    }
+
+    /// Validates the numeric invariants an opened document must keep.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() || self.name.trim().is_empty() {
+            return Err("a dimension style needs a non-empty name".to_string());
+        }
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+        let non_negative = |value: f64| value.is_finite() && value >= 0.0;
+        if !positive(self.scale) {
+            return Err(format!("dimension style `{}` has a non-positive scale", self.name));
+        }
+        if !positive(self.arrow_size) || !positive(self.text_height) {
+            return Err(format!("dimension style `{}` has a non-positive size", self.name));
+        }
+        if !non_negative(self.extension) || !non_negative(self.origin_offset) {
+            return Err(format!("dimension style `{}` has a negative offset", self.name));
+        }
+        if self.precision > 8 {
+            return Err(format!("dimension style `{}` has a precision above 8", self.name));
+        }
+        Ok(())
+    }
+}
+
+/// Dimension styles a document starts with.
+pub fn default_dimension_styles() -> Vec<DimensionStyle> {
+    vec![DimensionStyle::standard()]
+}
+
 /// Geometry carried by one entity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -462,6 +531,9 @@ pub struct Drawing {
     pub units: Units,
     /// Layers in paint order.
     pub layers: Vec<Layer>,
+    /// Named dimension styles; a document always keeps at least one.
+    #[serde(default = "default_dimension_styles")]
+    pub dim_styles: Vec<DimensionStyle>,
     /// Flat entity list.
     pub entities: Vec<Entity>,
     /// Next numeric suffix used for a new entity identifier.
@@ -477,6 +549,7 @@ impl Drawing {
             revision: 1,
             units,
             layers: vec![Layer::default_geometry(), Layer::default_dimension()],
+            dim_styles: default_dimension_styles(),
             entities: Vec::new(),
             next_entity: 1,
         }
@@ -515,6 +588,7 @@ impl Drawing {
             "revision": self.revision,
             "units": self.units.as_str(),
             "layers": layers,
+            "dimStyles": self.dim_styles,
             "entities": self.entities.len(),
         })
     }
@@ -542,6 +616,16 @@ impl Drawing {
             }
             if !layer_ids.insert(layer.id.as_str()) {
                 return Err(format!("duplicate layer id `{}`", layer.id));
+            }
+        }
+        if self.dim_styles.is_empty() {
+            return Err("the drawing has no dimension style".to_string());
+        }
+        let mut style_ids = std::collections::HashSet::new();
+        for style in &self.dim_styles {
+            style.validate()?;
+            if !style_ids.insert(style.id.as_str()) {
+                return Err(format!("duplicate dimension style id `{}`", style.id));
             }
         }
         let mut entity_ids = std::collections::HashSet::new();
