@@ -29,9 +29,9 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units, arc_point,
-    arc_sweep, default_dimension_styles, default_hatch_pattern, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points,
-    ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
+    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, TextStyle, Units,
+    arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern, default_text_styles, ellipse_point, finite_point, normalize_angle,
+    offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -183,13 +183,13 @@ pub fn capabilities() -> Value {
                 "measure",
                 "stats",
                 "dimension-style",
+                "text-style",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" | "dimension-style" => {
-                    "supported"
-                }
+                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" | "dimension-style"
+                | "text-style" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -2354,6 +2354,172 @@ fn read_dim_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
     })
 }
 
+/// Fields used to create one text style. Omitted values keep the `standard`
+/// defaults.
+#[derive(Debug, Clone, Default)]
+pub struct TextStyleRequest {
+    /// Style name; it also becomes the style id.
+    pub name: String,
+    /// Primary font file or family name.
+    pub font: Option<String>,
+    /// Fixed cap height; `0` leaves the height to each text entity.
+    pub height: Option<f64>,
+    /// Horizontal width factor.
+    pub width_factor: Option<f64>,
+    /// Oblique angle in degrees, `-85..=85`.
+    pub oblique: Option<f64>,
+}
+
+/// Fields an update to one text style may change.
+#[derive(Debug, Clone, Default)]
+pub struct TextStyleUpdate {
+    /// New style name; also becomes the style id.
+    pub name: Option<String>,
+    /// New primary font file or family name.
+    pub font: Option<String>,
+    /// New fixed cap height.
+    pub height: Option<f64>,
+    /// New horizontal width factor.
+    pub width_factor: Option<f64>,
+    /// New oblique angle in degrees.
+    pub oblique: Option<f64>,
+}
+
+/// Lists the text styles of one drawing.
+pub fn list_text_styles(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "textStyles": session.drawing.text_styles,
+        })
+    })
+}
+
+/// Adds one text style and returns `{ revision, drawing, style }`.
+///
+/// Names are unique case-insensitively; a duplicate reports
+/// `drawing/style-exists`.
+pub fn add_text_style(handle: u64, request: TextStyleRequest) -> Result<Value, ServiceError> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err(argument("a text style needs a non-empty name"));
+    }
+    let style = TextStyle {
+        id: name.clone(),
+        name,
+        font: request.font.as_deref().map(str::trim).filter(|font| !font.is_empty()).unwrap_or("txt").to_string(),
+        height: request.height.unwrap_or(0.0),
+        width_factor: request.width_factor.unwrap_or(1.0),
+        oblique: request.oblique.unwrap_or(0.0),
+    };
+    style.validate().map_err(argument)?;
+    let id = style.id.clone();
+    store::edit(handle, |drawing| {
+        if drawing.text_styles.iter().any(|existing| existing.id.eq_ignore_ascii_case(&style.id)) {
+            return Err(ServiceError::new("drawing/style-exists", format!("a text style named `{}` already exists", style.name)));
+        }
+        drawing.text_styles.push(style);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    read_text_style(handle, &id)
+}
+
+/// Updates one text style and returns `{ revision, drawing, style }`.
+pub fn update_text_style(handle: u64, id: &str, update: TextStyleUpdate) -> Result<Value, ServiceError> {
+    if update.name.is_none() && update.font.is_none() && update.height.is_none() && update.width_factor.is_none() && update.oblique.is_none() {
+        return Err(argument("pass at least one text style field to update"));
+    }
+    let new_name = match &update.name {
+        Some(name) => {
+            let trimmed = name.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(argument("a text style needs a non-empty name"));
+            }
+            Some(trimmed)
+        }
+        None => None,
+    };
+    let target = id.to_string();
+    let next_id = new_name.clone().unwrap_or_else(|| target.clone());
+    store::edit(handle, |drawing| {
+        let index = drawing
+            .text_styles
+            .iter()
+            .position(|style| style.id == target)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("text style `{target}` does not exist")))?;
+        if let Some(name) = &new_name
+            && drawing.text_styles.iter().enumerate().any(|(other, style)| other != index && style.id.eq_ignore_ascii_case(name))
+        {
+            return Err(ServiceError::new("drawing/style-exists", format!("a text style named `{name}` already exists")));
+        }
+        let Some(style) = drawing.text_styles.get_mut(index)
+        else {
+            return Err(ServiceError::new("object/not-found", format!("text style `{target}` does not exist")));
+        };
+        if let Some(name) = new_name {
+            style.id = name.clone();
+            style.name = name;
+        }
+        if let Some(font) = update.font {
+            style.font = font.trim().to_string();
+        }
+        if let Some(height) = update.height {
+            style.height = height;
+        }
+        if let Some(width_factor) = update.width_factor {
+            style.width_factor = width_factor;
+        }
+        if let Some(oblique) = update.oblique {
+            style.oblique = oblique;
+        }
+        style.validate().map_err(argument)?;
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    read_text_style(handle, &next_id)
+}
+
+/// Removes one text style and returns `{ revision, drawing, deleted }`.
+///
+/// Removing the last remaining style refuses with `drawing/style-last`.
+pub fn delete_text_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::edit(handle, |drawing| {
+        let index = drawing
+            .text_styles
+            .iter()
+            .position(|style| style.id == id)
+            .ok_or_else(|| ServiceError::new("object/not-found", format!("text style `{id}` does not exist")))?;
+        if drawing.text_styles.len() <= 1 {
+            return Err(ServiceError::new(
+                "drawing/style-last",
+                format!("text style `{id}` is the last style; a drawing must keep at least one style"),
+            ));
+        }
+        drawing.text_styles.remove(index);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "deleted": id,
+        })
+    })
+}
+
+fn read_text_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let style = session.drawing.text_styles.iter().find(|style| style.id == id);
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "style": style,
+        })
+    })
+}
+
 /// Converts a drawing between millimetres and inches.
 ///
 /// Every coordinate, radius, ellipse axis, text height and dimension offset is
@@ -2497,7 +2663,9 @@ mod tests {
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
         }
-        for operation in ["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats", "dimension-style"] {
+        for operation in
+            ["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats", "dimension-style", "text-style"]
+        {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
         for operation in ["constraints", "kernel3d"] {
@@ -2912,6 +3080,86 @@ mod tests {
         assert_eq!(arch["scale"], json!(2.0));
         assert_eq!(arch["arrowSize"], json!(3.0));
         assert_eq!(arch["precision"], json!(1));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn text_styles_are_listed_added_updated_and_deleted() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        assert_eq!(created["drawing"]["textStyles"][0]["name"], json!("standard"));
+        assert_eq!(created["drawing"]["textStyles"][0]["font"], json!("txt"));
+        assert_eq!(list_text_styles(handle).expect("list")["textStyles"].as_array().map(Vec::len), Some(1));
+
+        let added = add_text_style(
+            handle,
+            TextStyleRequest {
+                name: "NOTES".to_string(),
+                font: Some("romans.shx".to_string()),
+                height: Some(2.5),
+                width_factor: Some(0.8),
+                oblique: Some(15.0),
+            },
+        )
+        .expect("add");
+        assert_eq!(added["style"]["id"], json!("NOTES"));
+        assert_eq!(added["style"]["font"], json!("romans.shx"));
+        assert_eq!(added["style"]["widthFactor"], json!(0.8));
+        assert_eq!(added["style"]["oblique"], json!(15.0));
+
+        let duplicate =
+            add_text_style(handle, TextStyleRequest { name: "notes".to_string(), ..TextStyleRequest::default() }).expect_err("duplicate");
+        assert_eq!(duplicate.code, "drawing/style-exists");
+
+        let updated = update_text_style(
+            handle,
+            "NOTES",
+            TextStyleUpdate { name: Some("NOTES-1".to_string()), oblique: Some(0.0), ..TextStyleUpdate::default() },
+        )
+        .expect("update");
+        assert_eq!(updated["style"]["id"], json!("NOTES-1"));
+        assert_eq!(updated["style"]["oblique"], json!(0.0));
+
+        let invalid =
+            update_text_style(handle, "NOTES-1", TextStyleUpdate { oblique: Some(120.0), ..TextStyleUpdate::default() }).expect_err("oblique");
+        assert_eq!(invalid.code, "session/argument-invalid");
+
+        let deleted = delete_text_style(handle, "NOTES-1").expect("delete");
+        assert_eq!(deleted["deleted"], json!("NOTES-1"));
+        assert_eq!(delete_text_style(handle, "standard").expect_err("last").code, "drawing/style-last");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn dxf_round_trip_keeps_text_styles() {
+        let dir = TempDir::new("textstyle-dxf");
+        let path = dir.path.join("plan.dxf");
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_text_style(
+            handle,
+            TextStyleRequest {
+                name: "NOTES".to_string(),
+                font: Some("romans.shx".to_string()),
+                height: Some(3.0),
+                width_factor: Some(0.75),
+                oblique: Some(10.0),
+            },
+        )
+        .expect("add style");
+        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "Site").expect("text");
+        export(handle, "dxf", &path).expect("export dxf");
+        let dxf = fs::read_to_string(&path).expect("read dxf");
+        assert!(dxf.contains("STYLE"));
+        assert!(dxf.contains("romans.shx"));
+
+        let imported = import_dxf(&path, Some("Imported".to_string())).expect("import dxf");
+        let styles = imported["drawing"]["textStyles"].as_array().expect("textStyles");
+        let notes = styles.iter().find(|style| style["name"] == json!("NOTES")).expect("imported NOTES style");
+        assert_eq!(notes["font"], json!("romans.shx"));
+        assert_eq!(notes["height"], json!(3.0));
+        assert_eq!(notes["widthFactor"], json!(0.75));
+        assert_eq!(notes["oblique"], json!(10.0));
         close(handle).expect("close");
     }
 

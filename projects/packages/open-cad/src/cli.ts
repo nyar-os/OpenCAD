@@ -45,6 +45,8 @@ import type {
     OpenCADCapabilities,
     Point,
     SaveReport,
+    TextStyle,
+    TextStyleChange,
     TransformOperation,
     TransformResult,
     TransformTarget,
@@ -295,6 +297,19 @@ function describeDimStyles(styles: readonly DimensionStyle[]): string {
 
 function describeDimStyle(change: DimensionStyleChange): string {
     return `dimension style ${change.style.name} revision=${change.revision}`;
+}
+
+function describeTextStyles(styles: readonly TextStyle[]): string {
+    if (styles.length === 0) {
+        return 'no text styles';
+    }
+    return styles
+        .map((style) => `${style.name} font=${style.font} height=${style.height} width=${style.widthFactor} oblique=${style.oblique}`)
+        .join('\n');
+}
+
+function describeTextStyle(change: TextStyleChange): string {
+    return `text style ${change.style.name} revision=${change.revision}`;
 }
 
 function describeUnits(result: UnitsConversion): string {
@@ -1538,6 +1553,124 @@ dimstyle
         try {
             const deletion = await guard(ctx, () => opened.deleteDimStyle(name));
             ctx.emitResult(deletion, `deleted dimension style ${deletion.deleted} revision=${deletion.revision}`);
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const textstyle = cli.command('textstyle', 'cli.cmd.textstyle');
+
+textstyle.command('list', 'cli.cmd.textstyle-list').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+        return 2;
+    }
+    const opened = await guard(ctx, () => app.open({ path: file }));
+    try {
+        const styles = await guard(ctx, () => opened.listTextStyles());
+        ctx.emitResult({ revision: opened.revision, textStyles: styles }, describeTextStyles(styles));
+        return 0;
+    } finally {
+        opened.close();
+    }
+});
+
+textstyle
+    .command('add', 'cli.cmd.textstyle-add')
+    .option('--name <name>', 'cli.opt.text-style-name')
+    .option('--font <name>', 'cli.opt.font')
+    .option('--height <number>', 'cli.opt.fixed-height')
+    .option('--width-factor <number>', 'cli.opt.width-factor')
+    .option('--oblique <degrees>', 'cli.opt.oblique')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const style = await guard(ctx, () =>
+                opened.addTextStyle({
+                    name,
+                    font: text(options, 'font'),
+                    height: number(options, 'height'),
+                    widthFactor: number(options, 'width-factor'),
+                    oblique: number(options, 'oblique'),
+                }),
+            );
+            const change: TextStyleChange = { revision: opened.revision, drawing: opened.summary(), style };
+            ctx.emitResult(change, describeTextStyle(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+textstyle
+    .command('update', 'cli.cmd.textstyle-update')
+    .option('--name <name>', 'cli.opt.text-style-name')
+    .option('--to <name>', 'cli.opt.to-name')
+    .option('--font <name>', 'cli.opt.font')
+    .option('--height <number>', 'cli.opt.fixed-height')
+    .option('--width-factor <number>', 'cli.opt.width-factor')
+    .option('--oblique <degrees>', 'cli.opt.oblique')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const style = await guard(ctx, () =>
+                opened.updateTextStyle({
+                    styleId: name,
+                    name: text(options, 'to'),
+                    font: text(options, 'font'),
+                    height: number(options, 'height'),
+                    widthFactor: number(options, 'width-factor'),
+                    oblique: number(options, 'oblique'),
+                }),
+            );
+            const change: TextStyleChange = { revision: opened.revision, drawing: opened.summary(), style };
+            ctx.emitResult(change, describeTextStyle(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+textstyle
+    .command('delete', 'cli.cmd.textstyle-delete')
+    .option('--name <name>', 'cli.opt.text-style-name')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const deletion = await guard(ctx, () => opened.deleteTextStyle(name));
+            ctx.emitResult(deletion, `deleted text style ${deletion.deleted} revision=${deletion.revision}`);
             return 0;
         } finally {
             opened.close();

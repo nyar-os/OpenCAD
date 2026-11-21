@@ -317,6 +317,35 @@ test('dimension styles are read and written through the document', { skip: withA
     }
 });
 
+test('text styles are read and written through the document', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Styles' });
+        assert.equal(document.textStyles.length, 1);
+        assert.equal(document.textStyles[0]?.font, 'txt');
+
+        const added = document.addTextStyle({ name: 'NOTES', font: 'romans.shx', height: 2.5, widthFactor: 0.8, oblique: 15 });
+        assert.equal(added.id, 'NOTES');
+        assert.equal(added.font, 'romans.shx');
+        assert.equal(added.widthFactor, 0.8);
+
+        const updated = document.updateTextStyle({ styleId: 'NOTES', name: 'NOTES-1', oblique: 0 });
+        assert.equal(updated.id, 'NOTES-1');
+        assert.equal(updated.oblique, 0);
+        assert.equal(document.textStyles.length, 2);
+
+        const deleted = document.deleteTextStyle('NOTES-1');
+        assert.equal(deleted.deleted, 'NOTES-1');
+        assert.equal(document.textStyles.length, 1);
+        assert.throws(
+            () => document.deleteTextStyle('standard'),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/style-last',
+        );
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('unit conversion scales lengths and round trips', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

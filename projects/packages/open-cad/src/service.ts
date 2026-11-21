@@ -22,6 +22,7 @@ import type {
     AddPolylineRequest,
     AddRadialDimensionRequest,
     AddTextRequest,
+    AddTextStyleRequest,
     ArrayRequest,
     ArrayResult,
     CopyRequest,
@@ -53,12 +54,16 @@ import type {
     OffsetResult,
     OpenCADCapabilities,
     SaveReport,
+    TextStyleChange,
+    TextStyleDeletion,
+    TextStyleList,
     TransformRequest,
     TransformResult,
     UnitsConversion,
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdateTextStyleRequest,
 } from './types.js';
 
 /** Result of creating or opening a drawing. */
@@ -387,6 +392,49 @@ export function updateDimStyle(handle: number, request: UpdateDimensionStyleRequ
 /** Removes one dimension style from an open drawing. */
 export function deleteDimStyle(handle: number, styleId: string): DimensionStyleDeletion {
     return decode<DimensionStyleDeletion>(() => binding('drawing.deleteDimStyle').drawing_delete_dim_style(handle, styleId));
+}
+
+/** Lists the text styles of one open drawing. */
+export function listTextStyles(handle: number): TextStyleList {
+    return decode<TextStyleList>(() => binding('drawing.listTextStyles').drawing_list_text_styles(handle));
+}
+
+/** Adds one text style to an open drawing. */
+export function addTextStyle(handle: number, request: AddTextStyleRequest): TextStyleChange {
+    return decode<TextStyleChange>(() =>
+        binding('drawing.addTextStyle').drawing_add_text_style(
+            handle,
+            JSON.stringify({
+                name: request.name,
+                font: request.font,
+                height: request.height,
+                widthFactor: request.widthFactor,
+                oblique: request.oblique,
+            }),
+        ),
+    );
+}
+
+/** Updates one text style of an open drawing. */
+export function updateTextStyle(handle: number, request: UpdateTextStyleRequest): TextStyleChange {
+    return decode<TextStyleChange>(() =>
+        binding('drawing.updateTextStyle').drawing_update_text_style(
+            handle,
+            JSON.stringify({
+                styleId: request.styleId,
+                name: request.name,
+                font: request.font,
+                height: request.height,
+                widthFactor: request.widthFactor,
+                oblique: request.oblique,
+            }),
+        ),
+    );
+}
+
+/** Removes one text style from an open drawing. */
+export function deleteTextStyle(handle: number, styleId: string): TextStyleDeletion {
+    return decode<TextStyleDeletion>(() => binding('drawing.deleteTextStyle').drawing_delete_text_style(handle, styleId));
 }
 
 /** Converts one open drawing between millimetres and inches. */

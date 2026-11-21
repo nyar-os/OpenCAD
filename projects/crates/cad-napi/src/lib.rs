@@ -337,6 +337,41 @@ fn drawing_delete_dim_style(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Lists the text styles of an open drawing.
+#[function]
+fn drawing_list_text_styles(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::list_text_styles(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Adds one text style to an open drawing.
+#[function]
+fn drawing_add_text_style(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_text_style(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Updates one text style of an open drawing.
+#[function]
+fn drawing_update_text_style(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_update_text_style(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Removes one text style from an open drawing.
+#[function]
+fn drawing_delete_text_style(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let style = text(&ctx, 1)?;
+    let result = open_cad_drawing::delete_text_style(handle, &style).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity of an open drawing.
 #[function]
 fn drawing_move_entity(ctx: CallContext) -> Result<JsValue> {
@@ -704,6 +739,29 @@ fn call_update_dim_style(handle: u64, request: &Value) -> std::result::Result<Va
         precision: optional_precision(request)?,
     };
     open_cad_drawing::update_dim_style(handle, &style, update).map_err(service_failure)
+}
+
+fn call_add_text_style(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let style = open_cad_drawing::TextStyleRequest {
+        name: request_string(request, "name")?,
+        font: request.get("font").and_then(Value::as_str).map(str::to_string),
+        height: optional_number(request, "height"),
+        width_factor: optional_number(request, "widthFactor"),
+        oblique: optional_number(request, "oblique"),
+    };
+    open_cad_drawing::add_text_style(handle, style).map_err(service_failure)
+}
+
+fn call_update_text_style(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let style = request_string(request, "styleId")?;
+    let update = open_cad_drawing::TextStyleUpdate {
+        name: request.get("name").and_then(Value::as_str).map(str::to_string),
+        font: request.get("font").and_then(Value::as_str).map(str::to_string),
+        height: optional_number(request, "height"),
+        width_factor: optional_number(request, "widthFactor"),
+        oblique: optional_number(request, "oblique"),
+    };
+    open_cad_drawing::update_text_style(handle, &style, update).map_err(service_failure)
 }
 
 fn call_move_entity(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -1673,6 +1731,10 @@ register_module![
     drawing_add_dim_style,
     drawing_update_dim_style,
     drawing_delete_dim_style,
+    drawing_list_text_styles,
+    drawing_add_text_style,
+    drawing_update_text_style,
+    drawing_delete_text_style,
     drawing_merge_layer,
     drawing_convert_units,
     drawing_move_entity,

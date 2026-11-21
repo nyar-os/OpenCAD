@@ -155,6 +155,59 @@ pub fn default_dimension_styles() -> Vec<DimensionStyle> {
     vec![DimensionStyle::standard()]
 }
 
+/// One named text style, mirroring the DXF `STYLE` table entry.
+///
+/// The style keeps the primary font, a fixed cap height (`0` means each text
+/// entity supplies its own), the width factor and the oblique angle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextStyle {
+    /// Stable style identifier inside the document; equals the name.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Primary font file or family name (DXF code 3).
+    pub font: String,
+    /// Fixed cap height in drawing units; `0` leaves the height to the entity.
+    pub height: f64,
+    /// Horizontal width factor, `1.0` is normal (DXF code 41).
+    pub width_factor: f64,
+    /// Oblique angle in degrees (DXF code 50).
+    pub oblique: f64,
+}
+
+impl TextStyle {
+    /// Builds the `standard` style every drawing declares by default.
+    pub fn standard() -> Self {
+        Self { id: "standard".to_string(), name: "standard".to_string(), font: "txt".to_string(), height: 0.0, width_factor: 1.0, oblique: 0.0 }
+    }
+
+    /// Validates the invariants an opened document must keep.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() || self.name.trim().is_empty() {
+            return Err("a text style needs a non-empty name".to_string());
+        }
+        if self.font.trim().is_empty() {
+            return Err(format!("text style `{}` has an empty font", self.name));
+        }
+        if !self.height.is_finite() || self.height < 0.0 {
+            return Err(format!("text style `{}` has a negative height", self.name));
+        }
+        if !self.width_factor.is_finite() || self.width_factor <= 0.0 {
+            return Err(format!("text style `{}` has a non-positive width factor", self.name));
+        }
+        if !self.oblique.is_finite() || !(-85.0..=85.0).contains(&self.oblique) {
+            return Err(format!("text style `{}` has an oblique angle outside -85..85", self.name));
+        }
+        Ok(())
+    }
+}
+
+/// Text styles a document starts with.
+pub fn default_text_styles() -> Vec<TextStyle> {
+    vec![TextStyle::standard()]
+}
+
 /// Geometry carried by one entity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -534,6 +587,9 @@ pub struct Drawing {
     /// Named dimension styles; a document always keeps at least one.
     #[serde(default = "default_dimension_styles")]
     pub dim_styles: Vec<DimensionStyle>,
+    /// Named text styles; a document always keeps at least one.
+    #[serde(default = "default_text_styles")]
+    pub text_styles: Vec<TextStyle>,
     /// Flat entity list.
     pub entities: Vec<Entity>,
     /// Next numeric suffix used for a new entity identifier.
@@ -550,6 +606,7 @@ impl Drawing {
             units,
             layers: vec![Layer::default_geometry(), Layer::default_dimension()],
             dim_styles: default_dimension_styles(),
+            text_styles: default_text_styles(),
             entities: Vec::new(),
             next_entity: 1,
         }
@@ -589,6 +646,7 @@ impl Drawing {
             "units": self.units.as_str(),
             "layers": layers,
             "dimStyles": self.dim_styles,
+            "textStyles": self.text_styles,
             "entities": self.entities.len(),
         })
     }
@@ -626,6 +684,16 @@ impl Drawing {
             style.validate()?;
             if !style_ids.insert(style.id.as_str()) {
                 return Err(format!("duplicate dimension style id `{}`", style.id));
+            }
+        }
+        if self.text_styles.is_empty() {
+            return Err("the drawing has no text style".to_string());
+        }
+        let mut text_style_ids = std::collections::HashSet::new();
+        for style in &self.text_styles {
+            style.validate()?;
+            if !text_style_ids.insert(style.id.as_str()) {
+                return Err(format!("duplicate text style id `{}`", style.id));
             }
         }
         let mut entity_ids = std::collections::HashSet::new();

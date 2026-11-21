@@ -59,6 +59,7 @@ export type OperationName =
     | 'measure'
     | 'stats'
     | 'dimension-style'
+    | 'text-style'
     | 'constraints'
     | 'kernel3d';
 
@@ -164,6 +165,20 @@ export interface DimensionStyle {
     readonly precision: number;
 }
 
+/** One named text style; mirrors a DXF `STYLE` table entry. */
+export interface TextStyle {
+    readonly id: string;
+    readonly name: string;
+    /** Primary font file or family name. */
+    readonly font: string;
+    /** Fixed cap height; 0 leaves the height to each text entity. */
+    readonly height: number;
+    /** Horizontal width factor; 1 is normal. */
+    readonly widthFactor: number;
+    /** Oblique angle in degrees. */
+    readonly oblique: number;
+}
+
 /** Summary of one drawing at its committed revision. */
 export interface Drawing {
     readonly id: DrawingId;
@@ -174,6 +189,8 @@ export interface Drawing {
     readonly layers: readonly LayerSummary[];
     /** Named dimension styles; a drawing always keeps at least one. */
     readonly dimStyles: readonly DimensionStyle[];
+    /** Named text styles; a drawing always keeps at least one. */
+    readonly textStyles: readonly TextStyle[];
     readonly entities: number;
     /** Whether the handle still has an earlier snapshot to restore. */
     readonly canUndo: boolean;
@@ -219,6 +236,49 @@ export interface DimensionStyleChange {
 
 /** Result of deleting one dimension style. */
 export interface DimensionStyleDeletion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly deleted: string;
+}
+
+/** Result of `listTextStyles()`. */
+export interface TextStyleList {
+    readonly revision: number;
+    readonly textStyles: readonly TextStyle[];
+}
+
+/** Arguments of `addTextStyle()`. Omitted values keep the standard defaults. */
+export interface AddTextStyleRequest {
+    readonly name: string;
+    /** Primary font file or family name; defaults to `txt`. */
+    readonly font?: string;
+    /** Fixed cap height; defaults to 0, which leaves the height to the entity. */
+    readonly height?: number;
+    /** Horizontal width factor; defaults to 1. */
+    readonly widthFactor?: number;
+    /** Oblique angle in degrees, -85 to 85; defaults to 0. */
+    readonly oblique?: number;
+}
+
+/** Arguments of `updateTextStyle()`. */
+export interface UpdateTextStyleRequest {
+    readonly styleId: string;
+    readonly name?: string;
+    readonly font?: string;
+    readonly height?: number;
+    readonly widthFactor?: number;
+    readonly oblique?: number;
+}
+
+/** Result of adding or updating one text style. */
+export interface TextStyleChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly style: TextStyle;
+}
+
+/** Result of deleting one text style. */
+export interface TextStyleDeletion {
     readonly revision: number;
     readonly drawing: Drawing;
     readonly deleted: string;

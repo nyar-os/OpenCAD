@@ -18,7 +18,9 @@ keeps a 32-snapshot undo/redo history;
 layers can be added, renamed, merged, hidden and locked; a drawing keeps named
 dimension styles (scale, arrowhead size, text height, extension length, origin
 offset and label precision) that can be listed, added, updated and removed and
-round-trip through the DXF `DIMSTYLE` table; a drawing converts
+round-trip through the DXF `DIMSTYLE` table; named text styles (font, fixed
+height, width factor and oblique angle) round-trip through the DXF `STYLE`
+table and can be listed, added, updated and removed; a drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL, Wavefront OBJ and STEP export work, and
@@ -76,6 +78,10 @@ open-cad dimstyle list plan.ocad
 open-cad dimstyle add plan.ocad --name ARCH --scale 2.5 --arrow-size 3 --text-height 3.5 --precision 2
 open-cad dimstyle update plan.ocad --name ARCH --to ARCH-1 --scale 3
 open-cad dimstyle delete plan.ocad --name ARCH-1
+open-cad textstyle list plan.ocad
+open-cad textstyle add plan.ocad --name NOTES --font romans.shx --width-factor 0.8 --oblique 10
+open-cad textstyle update plan.ocad --name NOTES --to NOTES-1 --height 3
+open-cad textstyle delete plan.ocad --name NOTES-1
 open-cad units convert plan.ocad --to inch
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
@@ -105,7 +111,7 @@ What this build does NOT do
 ---------------------------
 
 - No DWG or STEP import, and no full DXF reader. `import` accepts the declared
-  ASCII subset only: `$INSUNITS`, the LAYER and DIMSTYLE tables, BLOCKS/INSERT expansion, the
+  ASCII subset only: `$INSUNITS`, the LAYER, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, the
   ATTRIB values that follow an INSERT, and LINE, CIRCLE, ARC, ELLIPSE, POINT,
   TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND (a 3D polyline is
   projected onto the XY plane), SPLINE (read as a polyline through its fit
@@ -162,6 +168,9 @@ What this build does NOT do
   arrowhead size, text height, extension line length, origin offset and decimal
   places. Other variables are ignored on import and are not written, and
   dimension entities do not bind a named style yet.
+- Text styles keep only the primary font, fixed height, width factor and
+  oblique angle. Big-font, generation-flag and per-text style references are
+  not modelled.
 - No bare layer deletion. `layer merge --from A --to B` moves every entity of
   `A` onto `B` and removes the now-empty `A` in one history step. A locked
   source or target layer refuses the merge.
@@ -172,8 +181,8 @@ What this build does NOT do
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
-  chamfer, measure, stats and dimension-style as supported while constraint
-  solving and a 3D kernel stay unsupported. A
+  chamfer, measure, stats, dimension-style and text-style as supported while
+  constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.

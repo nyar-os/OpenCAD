@@ -26,6 +26,7 @@ import type {
     AddPolylineRequest,
     AddRadialDimensionRequest,
     AddTextRequest,
+    AddTextStyleRequest,
     ArrayRequest,
     ArrayResult,
     CopyRequest,
@@ -56,12 +57,15 @@ import type {
     MoveEntityRequest,
     SaveOptions,
     SaveReport,
+    TextStyle,
+    TextStyleDeletion,
     TransformRequest,
     TransformResult,
     UnitsConversion,
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdateTextStyleRequest,
 } from './types.js';
 
 type HistoryModule = typeof import('./history.js');
@@ -139,6 +143,11 @@ export class DrawingDocument {
     /** Named dimension styles of this document. */
     get dimStyles(): readonly DimensionStyle[] {
         return this.state.dimStyles;
+    }
+
+    /** Named text styles of this document. */
+    get textStyles(): readonly TextStyle[] {
+        return this.state.textStyles;
     }
 
     /** Number of entities. */
@@ -383,6 +392,45 @@ export class DrawingDocument {
     /** Removes one dimension style. */
     deleteDimStyle(styleId: string): DimensionStyleDeletion {
         return this.edit((handle) => service.deleteDimStyle(handle, styleId), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Lists the text styles of this document. */
+    listTextStyles(): readonly TextStyle[] {
+        this.assertOpen();
+        return service.listTextStyles(this.handle).textStyles;
+    }
+
+    /** Adds one text style and returns it. */
+    addTextStyle(request: AddTextStyleRequest): TextStyle {
+        let style: TextStyle | undefined;
+        this.edit(
+            (handle) => service.addTextStyle(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                style = result.style;
+            },
+        );
+        return style as TextStyle;
+    }
+
+    /** Updates one text style and returns it. */
+    updateTextStyle(request: UpdateTextStyleRequest): TextStyle {
+        let style: TextStyle | undefined;
+        this.edit(
+            (handle) => service.updateTextStyle(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                style = result.style;
+            },
+        );
+        return style as TextStyle;
+    }
+
+    /** Removes one text style. */
+    deleteTextStyle(styleId: string): TextStyleDeletion {
+        return this.edit((handle) => service.deleteTextStyle(handle, styleId), (result) => {
             this.state = result.drawing;
         });
     }

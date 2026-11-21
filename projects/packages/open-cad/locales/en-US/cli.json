@@ -47,6 +47,11 @@
             "dimstyle-add": "Add a dimension style and save the file in place",
             "dimstyle-update": "Update a dimension style, optionally renaming it, and save the file",
             "dimstyle-delete": "Delete a dimension style and save the file in place",
+            "textstyle": "Read and edit the text styles of an existing drawing file",
+            "textstyle-list": "List the text styles of a drawing file",
+            "textstyle-add": "Add a text style and save the file in place",
+            "textstyle-update": "Update a text style, optionally renaming it, and save the file",
+            "textstyle-delete": "Delete a text style and save the file in place",
             "units": "Convert the lengths of an existing drawing file between millimetres and inches",
             "units-convert": "Scale every length and change the declared unit, then save the file in place",
             "gui": "Open the OpenCAD Studio window"
@@ -119,6 +124,11 @@
             "extension": "Extension line length beyond the dimension line",
             "origin-offset": "Gap between a measured point and its extension line",
             "precision": "Decimal places in a measured label, 0-8",
+            "text-style-name": "Text style name, which also acts as the style id",
+            "font": "Primary font file or family name",
+            "fixed-height": "Fixed text cap height; 0 leaves the height to each text entity",
+            "width-factor": "Horizontal text width factor; 1 is normal",
+            "oblique": "Text oblique angle in degrees, -85 to 85",
             "to-unit": "Unit to convert to: mm or inch"
         }
     }

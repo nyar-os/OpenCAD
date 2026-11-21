@@ -446,6 +446,19 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     }
     dxf_pair(&mut out, 0, "ENDTAB");
     dxf_pair(&mut out, 0, "TABLE");
+    dxf_pair(&mut out, 2, "STYLE");
+    dxf_pair(&mut out, 70, drawing.text_styles.len());
+    for style in &drawing.text_styles {
+        dxf_pair(&mut out, 0, "STYLE");
+        dxf_pair(&mut out, 2, dxf_text(&style.name));
+        dxf_pair(&mut out, 70, 0);
+        dxf_pair(&mut out, 40, num_exact(style.height));
+        dxf_pair(&mut out, 41, num_exact(style.width_factor));
+        dxf_pair(&mut out, 50, num_exact(style.oblique));
+        dxf_pair(&mut out, 3, dxf_text(&style.font));
+    }
+    dxf_pair(&mut out, 0, "ENDTAB");
+    dxf_pair(&mut out, 0, "TABLE");
     dxf_pair(&mut out, 2, "DIMSTYLE");
     dxf_pair(&mut out, 70, drawing.dim_styles.len());
     for (index, style) in drawing.dim_styles.iter().enumerate() {

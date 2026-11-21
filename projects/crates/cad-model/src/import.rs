@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::{
     ServiceError,
-    schema::{DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, Units},
+    schema::{DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, TextStyle, Units},
 };
 
 /// Maximum INSERT nesting the reader expands before it stops.
@@ -222,6 +222,25 @@ fn parse_dim_style(block: &[Pair]) -> Option<DimensionStyle> {
         extension: non_negative(number(block, 44), 1.25),
         text_height: positive(number(block, 140), 2.5),
         precision: integer(block, 271).map_or(2, |value| value.clamp(0, 8) as u32),
+    })
+}
+
+/// Reads one `STYLE` table entry, keeping only the modelled variables.
+fn parse_text_style(block: &[Pair]) -> Option<TextStyle> {
+    let name = field(block, 2)?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let font = field(block, 3).map(str::trim).filter(|font| !font.is_empty()).unwrap_or("txt").to_string();
+    let non_negative = |value: Option<f64>, fallback: f64| value.filter(|value| value.is_finite() && *value >= 0.0).unwrap_or(fallback);
+    let oblique = number(block, 50).filter(|value| value.is_finite() && (-85.0..=85.0).contains(value)).unwrap_or(0.0);
+    Some(TextStyle {
+        id: name.clone(),
+        name,
+        font,
+        height: non_negative(number(block, 40), 0.0),
+        width_factor: number(block, 41).filter(|value| value.is_finite() && *value > 0.0).unwrap_or(1.0),
+        oblique,
     })
 }
 
@@ -1133,6 +1152,31 @@ impl Reader {
         }
     }
 
+    /// Reads the STYLE table entries of the TABLES section.
+    ///
+    /// Only the primary font, fixed height, width factor and oblique angle are
+    /// kept; other text-style variables (generation flags, big font) are not
+    /// modelled.
+    fn parse_text_style_table(&mut self, pairs: &[Pair]) {
+        let mut index = 0;
+        while index < pairs.len() {
+            if pairs[index].code == 0 && pairs[index].value.trim().eq_ignore_ascii_case("STYLE") {
+                let end = block_end(pairs, index + 1);
+                if let Some(style) = parse_text_style(&pairs[index + 1..end]) {
+                    if let Some(existing) = self.drawing.text_styles.iter_mut().find(|existing| existing.id == style.id) {
+                        *existing = style;
+                    }
+                    else {
+                        self.drawing.text_styles.push(style);
+                    }
+                }
+                index = end;
+                continue;
+            }
+            index += 1;
+        }
+    }
+
     fn finish(mut self) -> (Drawing, Vec<Loss>) {
         let mut losses = std::mem::take(&mut self.losses);
 
@@ -1383,6 +1427,7 @@ pub(crate) fn dxf(text: &str, title: Option<String>) -> Result<(Drawing, Vec<Los
     }
     if let Some(tables) = section_pairs(&pairs, "TABLES") {
         reader.parse_layer_table(tables);
+        reader.parse_text_style_table(tables);
         reader.parse_dim_style_table(tables);
     }
     reader.parse_entities(&blocks, entities, Xform::scale(scale), None, 0);
