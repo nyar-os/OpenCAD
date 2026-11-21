@@ -27,8 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, MirrorAxis, OrdinateAxis, ServiceError, TransformOp,
-    TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, LayoutRequest, LayoutUpdate, MirrorAxis, OrdinateAxis, ServiceError,
+    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -260,6 +260,61 @@ fn drawing_reorder_entity(ctx: CallContext) -> Result<JsValue> {
         Error::new(format!("session/argument-invalid: `{raw}` is not a draw-order action; use `to-front`, `to-back`, `forward` or `backward`"))
     })?;
     let result = open_cad_drawing::reorder_entity(handle, &entity, action).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Lists the paper-space layouts of an open drawing.
+#[function]
+fn drawing_list_layouts(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::list_layouts(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Creates one paper-space layout.
+#[function]
+fn drawing_create_layout(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = open_cad_drawing::create_layout(
+        handle,
+        LayoutRequest {
+            name: request_string(&request, "name").map_err(Error::new)?,
+            width: optional_number(&request, "width"),
+            height: optional_number(&request, "height"),
+            scale: optional_number(&request, "scale"),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Updates one paper-space layout.
+#[function]
+fn drawing_update_layout(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let layout_id = text(&ctx, 1)?;
+    let request = parse_request(&text(&ctx, 2)?)?;
+    let result = open_cad_drawing::update_layout(
+        handle,
+        &layout_id,
+        LayoutUpdate {
+            name: request.get("name").and_then(Value::as_str).map(str::to_string),
+            width: optional_number(&request, "width"),
+            height: optional_number(&request, "height"),
+            scale: optional_number(&request, "scale"),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Removes one paper-space layout.
+#[function]
+fn drawing_delete_layout(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let layout_id = text(&ctx, 1)?;
+    let result = open_cad_drawing::delete_layout(handle, &layout_id).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2046,6 +2101,10 @@ register_module![
     drawing_delete_entity,
     drawing_list_entities,
     drawing_reorder_entity,
+    drawing_list_layouts,
+    drawing_create_layout,
+    drawing_update_layout,
+    drawing_delete_layout,
     drawing_undo,
     drawing_redo,
     drawing_properties,

@@ -31,6 +31,7 @@ import type {
     CopyResult,
     CreateGroupRequest,
     CornerResult,
+    CreateLayoutRequest,
     DimensionStyleChange,
     DimensionStyleDeletion,
     DimensionStyleList,
@@ -60,6 +61,9 @@ import type {
     LayerChange,
     LayerMerge,
     DrawingStats,
+    LayoutChange,
+    LayoutDeletion,
+    LayoutList,
     LinetypeChange,
     LinetypeDeletion,
     LinetypeList,
@@ -90,6 +94,7 @@ import type {
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdateLayoutRequest,
     UpdateLinetypeRequest,
     UpdatePropertiesRequest,
     UpdateTextStyleRequest,
@@ -343,6 +348,47 @@ export function reorderEntity(handle: number, entityId: string, action: DrawOrde
     return decode<DrawOrderResult>(() =>
         binding('drawing.reorderEntity').drawing_reorder_entity(handle, entityId, action),
     );
+}
+
+/** Lists the paper-space layouts of one open drawing. */
+export function listLayouts(handle: number): LayoutList {
+    return decode<LayoutList>(() => binding('drawing.listLayouts').drawing_list_layouts(handle));
+}
+
+/** Creates one paper-space layout. */
+export function createLayout(handle: number, request: CreateLayoutRequest): LayoutChange {
+    return decode<LayoutChange>(() =>
+        binding('drawing.createLayout').drawing_create_layout(
+            handle,
+            JSON.stringify({
+                name: request.name,
+                width: request.width,
+                height: request.height,
+                scale: request.scale,
+            }),
+        ),
+    );
+}
+
+/** Updates one paper-space layout. */
+export function updateLayout(handle: number, request: UpdateLayoutRequest): LayoutChange {
+    return decode<LayoutChange>(() =>
+        binding('drawing.updateLayout').drawing_update_layout(
+            handle,
+            request.layoutId,
+            JSON.stringify({
+                name: request.name,
+                width: request.width,
+                height: request.height,
+                scale: request.scale,
+            }),
+        ),
+    );
+}
+
+/** Removes one paper-space layout. */
+export function deleteLayout(handle: number, layoutId: string): LayoutDeletion {
+    return decode<LayoutDeletion>(() => binding('drawing.deleteLayout').drawing_delete_layout(handle, layoutId));
 }
 
 /** Reads the title and descriptive properties of one open drawing. */

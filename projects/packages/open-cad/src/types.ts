@@ -297,6 +297,8 @@ export interface Drawing {
     readonly linetypes: readonly Linetype[];
     /** Number of named entity groups. */
     readonly groups: number;
+    /** Number of named paper-space layouts. */
+    readonly layouts: number;
     /** Descriptive title-block properties. */
     readonly properties: DrawingProperties;
     readonly entities: number;
@@ -495,6 +497,74 @@ export interface GroupChange {
     readonly revision: number;
     readonly drawing: Drawing;
     readonly group: EntityGroup;
+}
+
+/** Computed view of the model extents on one layout sheet. */
+export interface LayoutView {
+    /** Centre of the model extents in drawing units. */
+    readonly center: Point;
+    /** Model extents width in drawing units. */
+    readonly drawingWidth: number;
+    /** Model extents height in drawing units. */
+    readonly drawingHeight: number;
+    /** Drawing-unit width the sheet can show at its scale. */
+    readonly visibleWidth: number;
+    /** Drawing-unit height the sheet can show at its scale. */
+    readonly visibleHeight: number;
+    /** Whether the whole model fits on the sheet at its scale. */
+    readonly fits: boolean;
+    /** Paper units per drawing unit that would fit the whole model. */
+    readonly fitScale: number;
+}
+
+/** One named paper-space layout. */
+export interface Layout {
+    readonly id: string;
+    readonly name: string;
+    /** Sheet width in millimetres. */
+    readonly width: number;
+    /** Sheet height in millimetres. */
+    readonly height: number;
+    /** Paper units per drawing unit; `1` is 1:1 and `0.01` is 1:100. */
+    readonly scale: number;
+    readonly view: LayoutView;
+}
+
+/** Result of `listLayouts()`. */
+export interface LayoutList {
+    readonly revision: number;
+    readonly layouts: readonly Layout[];
+}
+
+/** Arguments of `createLayout()`. Omitted fields use an A3 landscape sheet at 1:1. */
+export interface CreateLayoutRequest {
+    readonly name: string;
+    readonly width?: number;
+    readonly height?: number;
+    readonly scale?: number;
+}
+
+/** Arguments of `updateLayout()`. */
+export interface UpdateLayoutRequest {
+    readonly layoutId: string;
+    readonly name?: string;
+    readonly width?: number;
+    readonly height?: number;
+    readonly scale?: number;
+}
+
+/** Result of creating or updating one layout. */
+export interface LayoutChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly layout: Layout;
+}
+
+/** Result of `deleteLayout()`. */
+export interface LayoutDeletion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly deleted: string;
 }
 
 /** Result of deleting one group. */

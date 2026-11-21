@@ -34,6 +34,7 @@ import type {
     CopyResult,
     ConvertUnitsRequest,
     CreateGroupRequest,
+    CreateLayoutRequest,
     DimensionStyle,
     DimensionStyleDeletion,
     Drawing,
@@ -60,6 +61,8 @@ import type {
     InspectReport,
     LayerMerge,
     LayerSummary,
+    Layout,
+    LayoutDeletion,
     Linetype,
     LinetypeDeletion,
     OffsetRequest,
@@ -88,6 +91,7 @@ import type {
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdateLayoutRequest,
     UpdateLinetypeRequest,
     UpdatePropertiesRequest,
     UpdateTextStyleRequest,
@@ -296,6 +300,45 @@ export class DrawingDocument {
     /** Moves one entity within the paint order, back to front. */
     reorderEntity(entityId: EntityId, action: DrawOrderAction): DrawOrderResult {
         return this.edit((handle) => service.reorderEntity(handle, entityId, action), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Lists the paper-space layouts with their computed view. */
+    listLayouts(): readonly Layout[] {
+        this.assertOpen();
+        return service.listLayouts(this.handle).layouts;
+    }
+
+    /** Creates one paper-space layout. */
+    createLayout(request: CreateLayoutRequest): Layout {
+        let layout: Layout | undefined;
+        this.edit(
+            (handle) => service.createLayout(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                layout = result.layout;
+            },
+        );
+        return layout as Layout;
+    }
+
+    /** Updates one paper-space layout. */
+    updateLayout(request: UpdateLayoutRequest): Layout {
+        let layout: Layout | undefined;
+        this.edit(
+            (handle) => service.updateLayout(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                layout = result.layout;
+            },
+        );
+        return layout as Layout;
+    }
+
+    /** Removes one paper-space layout. */
+    deleteLayout(layoutId: string): LayoutDeletion {
+        return this.edit((handle) => service.deleteLayout(handle, layoutId), (result) => {
             this.state = result.drawing;
         });
     }

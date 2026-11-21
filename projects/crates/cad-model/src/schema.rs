@@ -370,6 +370,54 @@ pub struct EntityGroup {
     pub entities: Vec<String>,
 }
 
+/// Default paper width of a new layout, in millimetres (A3 landscape).
+pub const DEFAULT_LAYOUT_WIDTH: f64 = 420.0;
+
+/// Default paper height of a new layout, in millimetres (A3 landscape).
+pub const DEFAULT_LAYOUT_HEIGHT: f64 = 297.0;
+
+/// One named paper-space layout.
+///
+/// A layout owns a sheet size and a plot scale. The document does not move
+/// geometry onto the sheet: the view information is computed from the model
+/// extents when layouts are listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Layout {
+    /// Stable layout identifier inside the document; equals the name.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Sheet width in millimetres.
+    pub width: f64,
+    /// Sheet height in millimetres.
+    pub height: f64,
+    /// Paper units per drawing unit; `1.0` plots at 1:1 and `0.01` at 1:100.
+    pub scale: f64,
+}
+
+impl Layout {
+    /// Builds an A3 landscape layout at 1:1.
+    pub fn new(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self { id: name.clone(), name, width: DEFAULT_LAYOUT_WIDTH, height: DEFAULT_LAYOUT_HEIGHT, scale: 1.0 }
+    }
+
+    /// Validates the invariants an opened document must keep.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() || self.name.trim().is_empty() {
+            return Err("a layout needs a non-empty name".to_string());
+        }
+        if !self.width.is_finite() || self.width <= 0.0 || !self.height.is_finite() || self.height <= 0.0 {
+            return Err(format!("layout `{}` has a non-positive paper size", self.name));
+        }
+        if !self.scale.is_finite() || self.scale <= 0.0 {
+            return Err(format!("layout `{}` has a non-positive scale", self.name));
+        }
+        Ok(())
+    }
+}
+
 /// Geometry carried by one entity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -761,6 +809,9 @@ pub struct Drawing {
     /// Descriptive title-block properties.
     #[serde(default)]
     pub properties: DrawingProperties,
+    /// Named paper-space layouts.
+    #[serde(default)]
+    pub layouts: Vec<Layout>,
     /// Entity ids in explicit paint order, back to front. When empty, the layer
     /// order followed by the entity list order is used.
     #[serde(default)]
@@ -785,6 +836,7 @@ impl Drawing {
             groups: Vec::new(),
             linetypes: default_linetypes(),
             properties: DrawingProperties::default(),
+            layouts: Vec::new(),
             draw_order: Vec::new(),
             entities: Vec::new(),
             next_entity: 1,
@@ -877,6 +929,7 @@ impl Drawing {
             "textStyles": self.text_styles,
             "linetypes": self.linetypes,
             "groups": self.groups.len(),
+            "layouts": self.layouts.len(),
             "properties": self.properties,
             "entities": self.entities.len(),
         })
@@ -966,6 +1019,13 @@ impl Drawing {
             }
             if !order_ids.insert(id.as_str()) {
                 return Err(format!("draw order lists entity `{id}` twice"));
+            }
+        }
+        let mut layout_ids = std::collections::HashSet::new();
+        for layout in &self.layouts {
+            layout.validate()?;
+            if !layout_ids.insert(layout.id.as_str()) {
+                return Err(format!("duplicate layout id `{}`", layout.id));
             }
         }
         let mut group_ids = std::collections::HashSet::new();

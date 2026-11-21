@@ -35,6 +35,10 @@ export interface NativeBinding {
     drawing_delete_entity(handle: number, entityId: string): string;
     drawing_list_entities(handle: number): string;
     drawing_reorder_entity(handle: number, entityId: string, action: string): string;
+    drawing_list_layouts(handle: number): string;
+    drawing_create_layout(handle: number, requestJson: string): string;
+    drawing_update_layout(handle: number, layoutId: string, requestJson: string): string;
+    drawing_delete_layout(handle: number, layoutId: string): string;
     drawing_undo(handle: number): string;
     drawing_redo(handle: number): string;
     drawing_properties(handle: number): string;

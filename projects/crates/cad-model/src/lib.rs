@@ -29,10 +29,11 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CONTINUOUS_LINETYPE, CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, DrawingProperties, Entity, EntityGroup,
-    EntityKind, LINETYPE_PATTERN_LIMIT, Layer, Linetype, MAX_LINEWEIGHT, OrdinateAxis, PROPERTY_VALUE_LIMIT, TextStyle, Units, arc_point,
-    arc_sweep, default_dimension_styles, default_hatch_pattern, default_linetypes, default_text_styles, ellipse_point, finite_point,
-    normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
+    CONTINUOUS_LINETYPE, CURVE_STEP_DEGREES, DEFAULT_LAYER, DEFAULT_LAYOUT_HEIGHT, DEFAULT_LAYOUT_WIDTH, DIMENSION_LAYER, DimensionStyle,
+    Drawing, DrawingProperties, Entity, EntityGroup, EntityKind, LINETYPE_PATTERN_LIMIT, Layer, Layout, Linetype, MAX_LINEWEIGHT, OrdinateAxis,
+    PROPERTY_VALUE_LIMIT, TextStyle, Units, arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern, default_linetypes,
+    default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label,
+    radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -3432,6 +3433,189 @@ pub fn remove_group_members(handle: u64, id: &str, entities: &[String]) -> Resul
     group_read(handle, &target)
 }
 
+/// Arguments of [`create_layout`].
+#[derive(Debug, Clone, Default)]
+pub struct LayoutRequest {
+    /// Layout name; also becomes the layout id.
+    pub name: String,
+    /// Sheet width in millimetres; defaults to A3 landscape.
+    pub width: Option<f64>,
+    /// Sheet height in millimetres; defaults to A3 landscape.
+    pub height: Option<f64>,
+    /// Paper units per drawing unit; defaults to 1:1.
+    pub scale: Option<f64>,
+}
+
+/// Fields an update to one layout may change.
+#[derive(Debug, Clone, Default)]
+pub struct LayoutUpdate {
+    /// New layout name; also becomes the layout id.
+    pub name: Option<String>,
+    /// New sheet width in millimetres.
+    pub width: Option<f64>,
+    /// New sheet height in millimetres.
+    pub height: Option<f64>,
+    /// New paper units per drawing unit.
+    pub scale: Option<f64>,
+}
+
+fn layout_index(drawing: &Drawing, id: &str) -> Result<usize, ServiceError> {
+    drawing
+        .layouts
+        .iter()
+        .position(|layout| layout.id == id)
+        .ok_or_else(|| ServiceError::new("object/not-found", format!("layout `{id}` does not exist")))
+}
+
+/// One layout plus the view computed from the current model extents.
+fn layout_json(drawing: &Drawing, layout: &Layout) -> Value {
+    let (min, max, seen) = drawing_extents(drawing);
+    let drawing_width = if seen { (max[0] - min[0]).max(0.0) } else { 0.0 };
+    let drawing_height = if seen { (max[1] - min[1]).max(0.0) } else { 0.0 };
+    let visible_width = layout.width / layout.scale;
+    let visible_height = layout.height / layout.scale;
+    let fits = !seen || (drawing_width <= visible_width + 1e-9 && drawing_height <= visible_height + 1e-9);
+    let fit_scale = if drawing_width > 0.0 && drawing_height > 0.0 {
+        (layout.width / drawing_width).min(layout.height / drawing_height)
+    }
+    else {
+        layout.scale
+    };
+    json!({
+        "id": layout.id,
+        "name": layout.name,
+        "width": layout.width,
+        "height": layout.height,
+        "scale": layout.scale,
+        "view": {
+            "center": [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0],
+            "drawingWidth": drawing_width,
+            "drawingHeight": drawing_height,
+            "visibleWidth": visible_width,
+            "visibleHeight": visible_height,
+            "fits": fits,
+            "fitScale": fit_scale,
+        }
+    })
+}
+
+fn layout_read(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let layout = session.drawing.layouts.iter().find(|layout| layout.id == id);
+        let layout = layout.map(|layout| layout_json(&session.drawing, layout));
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "layout": layout,
+        })
+    })
+}
+
+/// Lists the paper-space layouts of one drawing with their computed view.
+pub fn list_layouts(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let layouts = session.drawing.layouts.iter().map(|layout| layout_json(&session.drawing, layout)).collect::<Vec<_>>();
+        json!({
+            "revision": session.drawing.revision,
+            "layouts": layouts,
+        })
+    })
+}
+
+/// Creates one paper-space layout and returns `{ revision, drawing, layout }`.
+///
+/// Names are unique case-insensitively and also become the layout id. Omitted
+/// sheet fields use an A3 landscape sheet at 1:1; a non-positive size or scale
+/// reports `session/argument-invalid`, and an existing name reports
+/// `drawing/layout-exists`.
+pub fn create_layout(handle: u64, request: LayoutRequest) -> Result<Value, ServiceError> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err(argument("a layout needs a non-empty name"));
+    }
+    let mut layout = Layout::new(name);
+    if let Some(width) = request.width {
+        layout.width = width;
+    }
+    if let Some(height) = request.height {
+        layout.height = height;
+    }
+    if let Some(scale) = request.scale {
+        layout.scale = scale;
+    }
+    layout.validate().map_err(argument)?;
+    let id = layout.id.clone();
+    store::edit(handle, |drawing| {
+        if drawing.layouts.iter().any(|existing| existing.id.eq_ignore_ascii_case(&layout.id)) {
+            return Err(ServiceError::new("drawing/layout-exists", format!("a layout named `{}` already exists", layout.name)));
+        }
+        drawing.layouts.push(layout);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    layout_read(handle, &id)
+}
+
+/// Updates one paper-space layout and returns `{ revision, drawing, layout }`.
+pub fn update_layout(handle: u64, id: &str, update: LayoutUpdate) -> Result<Value, ServiceError> {
+    if update.name.is_none() && update.width.is_none() && update.height.is_none() && update.scale.is_none() {
+        return Err(argument("pass at least one layout field to update"));
+    }
+    let new_name = match &update.name {
+        Some(name) => {
+            let trimmed = name.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(argument("a layout needs a non-empty name"));
+            }
+            Some(trimmed)
+        }
+        None => None,
+    };
+    let target = new_name.clone().unwrap_or_else(|| id.to_string());
+    store::edit(handle, |drawing| {
+        let index = layout_index(drawing, id)?;
+        let mut layout = drawing.layouts[index].clone();
+        if let Some(name) = new_name {
+            layout.id = name.clone();
+            layout.name = name;
+        }
+        if let Some(width) = update.width {
+            layout.width = width;
+        }
+        if let Some(height) = update.height {
+            layout.height = height;
+        }
+        if let Some(scale) = update.scale {
+            layout.scale = scale;
+        }
+        layout.validate().map_err(argument)?;
+        if drawing.layouts.iter().enumerate().any(|(other, existing)| other != index && existing.id.eq_ignore_ascii_case(&layout.id)) {
+            return Err(ServiceError::new("drawing/layout-exists", format!("a layout named `{}` already exists", layout.name)));
+        }
+        drawing.layouts[index] = layout;
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    layout_read(handle, &target)
+}
+
+/// Removes one paper-space layout and returns `{ revision, drawing, deleted }`.
+pub fn delete_layout(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::edit(handle, |drawing| {
+        let index = layout_index(drawing, id)?;
+        drawing.layouts.remove(index);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "deleted": id,
+        })
+    })
+}
+
 /// Converts a drawing between millimetres and inches.
 ///
 /// Every coordinate, radius, ellipse axis, text height and dimension offset is
@@ -6762,6 +6946,68 @@ mod tests {
         assert_eq!(reorder_entity(handle, "entity-404", DrawOrderAction::ToFront).expect_err("unknown entity").code, "object/not-found");
         assert!(DrawOrderAction::parse("sideways").is_none());
         assert_eq!(DrawOrderAction::parse(" Forward "), Some(DrawOrderAction::Forward));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn layouts_create_update_list_and_delete() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]], true).expect("square");
+
+        let created_layout =
+            create_layout(handle, LayoutRequest { name: "Sheet".to_string(), width: Some(200.0), height: Some(150.0), scale: None })
+                .expect("create layout");
+        assert_eq!(created_layout["drawing"]["layouts"], json!(1));
+        assert_eq!(created_layout["layout"]["name"], json!("Sheet"));
+        assert_eq!(created_layout["layout"]["width"], json!(200.0));
+        assert_eq!(created_layout["layout"]["view"]["center"], json!([50.0, 25.0]));
+        assert_eq!(created_layout["layout"]["view"]["drawingWidth"], json!(100.0));
+        assert_eq!(created_layout["layout"]["view"]["visibleWidth"], json!(200.0));
+        assert_eq!(created_layout["layout"]["view"]["fits"], json!(true));
+        assert_eq!(created_layout["layout"]["view"]["fitScale"], json!(2.0));
+
+        let updated = update_layout(handle, "Sheet", LayoutUpdate { width: Some(400.0), scale: Some(0.5), ..LayoutUpdate::default() })
+            .expect("update layout");
+        assert_eq!(updated["layout"]["width"], json!(400.0));
+        assert_eq!(updated["layout"]["view"]["visibleWidth"], json!(800.0));
+        assert_eq!(updated["layout"]["view"]["visibleHeight"], json!(300.0));
+        assert_eq!(updated["layout"]["view"]["fitScale"], json!(3.0));
+
+        let renamed =
+            update_layout(handle, "Sheet", LayoutUpdate { name: Some("Site".to_string()), ..LayoutUpdate::default() }).expect("rename");
+        assert_eq!(renamed["layout"]["id"], json!("Site"));
+        let listed = list_layouts(handle).expect("list");
+        assert_eq!(listed["layouts"].as_array().expect("layouts").len(), 1);
+        assert_eq!(listed["layouts"][0]["name"], json!("Site"));
+
+        let deleted = delete_layout(handle, "Site").expect("delete");
+        assert_eq!(deleted["deleted"], json!("Site"));
+        assert_eq!(list_layouts(handle).expect("list after delete")["layouts"], json!([]));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn layouts_reject_duplicates_invalid_sizes_and_unknown_ids() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        create_layout(handle, LayoutRequest { name: "Sheet".to_string(), ..LayoutRequest::default() }).expect("layout");
+        assert_eq!(
+            create_layout(handle, LayoutRequest { name: "sheet".to_string(), ..LayoutRequest::default() }).expect_err("duplicate").code,
+            "drawing/layout-exists"
+        );
+        assert_eq!(
+            create_layout(handle, LayoutRequest { name: "Zero".to_string(), scale: Some(0.0), ..LayoutRequest::default() })
+                .expect_err("zero scale")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_layout(handle, "missing", LayoutUpdate { scale: Some(2.0), ..LayoutUpdate::default() }).expect_err("unknown").code,
+            "object/not-found"
+        );
+        assert_eq!(update_layout(handle, "Sheet", LayoutUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
+        assert_eq!(delete_layout(handle, "missing").expect_err("unknown delete").code, "object/not-found");
         close(handle).expect("close");
     }
 }
