@@ -6,10 +6,11 @@
 //! TEXT, LWPOLYLINE and the older POLYLINE/VERTEX/SEQEND sequence, including
 //! INSERT references that are expanded into the current space.
 //!
-//! ARC and ELLIPSE are read into the analytic entity kinds. Bulge arcs inside
-//! polylines are flattened to line segments and reported as a loss; entities the
-//! reader does not understand are skipped once per type. Nothing is dropped
-//! silently.
+//! ARC and ELLIPSE are read into the analytic entity kinds, and rotated or
+//! aligned linear DIMENSION references become dimension entities. Bulge arcs
+//! inside polylines are flattened to line segments and reported as a loss;
+//! entities the reader does not understand are skipped once per type. Nothing is
+//! dropped silently.
 
 use std::{collections::BTreeMap, f64::consts::TAU};
 
@@ -181,6 +182,17 @@ fn closed_flag(block: &[Pair]) -> bool {
     integer(block, 70).is_some_and(|flags| flags & 1 == 1)
 }
 
+/// Signed distance of `point` from the `from -> to` line, measured along the
+/// left-hand normal. A zero-length segment has no direction, so the vertical
+/// normal is used; this matches [`crate::schema::offset_points`].
+fn signed_offset(from: [f64; 2], to: [f64; 2], point: [f64; 2]) -> f64 {
+    let dx = to[0] - from[0];
+    let dy = to[1] - from[1];
+    let length = (dx * dx + dy * dy).sqrt();
+    let normal = if length > f64::EPSILON { [-dy / length, dx / length] } else { [0.0, 1.0] };
+    (point[0] - from[0]) * normal[0] + (point[1] - from[1]) * normal[1]
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Vertex {
     x: f64,
@@ -347,6 +359,8 @@ struct Reader {
     unsupported_colors: usize,
     expanded_blocks: usize,
     block_recursions: usize,
+    dimensions_without_type: usize,
+    dimensions_without_definition: usize,
 }
 
 impl Reader {
@@ -360,6 +374,8 @@ impl Reader {
             unsupported_colors: 0,
             expanded_blocks: 0,
             block_recursions: 0,
+            dimensions_without_type: 0,
+            dimensions_without_definition: 0,
         }
     }
 
@@ -540,6 +556,60 @@ impl Reader {
                     index = cursor.max(end);
                     continue;
                 }
+                "DIMENSION" => {
+                    let (Some(from), Some(to)) = (point_at(block, 13, 23), point_at(block, 14, 24))
+                    else {
+                        self.skip("DIMENSION (missing extension line origins)", block);
+                        index = end;
+                        continue;
+                    };
+                    let (from, to) = (xform.apply(from), xform.apply(to));
+                    let dimension_type = match integer(block, 70) {
+                        Some(flags) => flags & 0x07,
+                        None => {
+                            self.dimensions_without_type += 1;
+                            1
+                        }
+                    };
+                    match dimension_type {
+                        // Rotated (0) and aligned (1) dimensions measure the same
+                        // segment. A rotated dimension is only representable when
+                        // its rotation follows the measured segment, because the
+                        // model offsets along that segment's normal.
+                        0 | 1 => {
+                            if dimension_type == 0 {
+                                let rotation = number(block, 50).unwrap_or(0.0) + xform.rotation.to_degrees();
+                                let direction = (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees();
+                                let delta = (rotation - direction).rem_euclid(180.0);
+                                if delta > 1e-6 && (180.0 - delta) > 1e-6 {
+                                    self.skip("DIMENSION (rotated away from its measurement)", block);
+                                    index = end;
+                                    continue;
+                                }
+                            }
+                            let offset = match point_at(block, 10, 20) {
+                                Some(definition) => signed_offset(from, to, xform.apply(definition)),
+                                None => {
+                                    self.dimensions_without_definition += 1;
+                                    0.0
+                                }
+                            };
+                            let text = field(block, 1).map(str::trim).filter(|text| !text.is_empty() && *text != "<>").map(str::to_string);
+                            self.push(layer, EntityKind::Dimension { from, to, offset, text });
+                        }
+                        other => {
+                            let label = match other {
+                                2 => "DIMENSION (angular)",
+                                3 => "DIMENSION (diameter)",
+                                4 => "DIMENSION (radius)",
+                                5 => "DIMENSION (3-point angular)",
+                                6 => "DIMENSION (ordinate)",
+                                _ => "DIMENSION (unknown type)",
+                            };
+                            self.skip(label, block);
+                        }
+                    }
+                }
                 "INSERT" => {
                     let Some(name) = field(block, 2).map(str::trim).filter(|name| !name.is_empty())
                     else {
@@ -632,7 +702,21 @@ impl Reader {
                 format!("{} block reference(s) nested deeper than {MAX_BLOCK_DEPTH} levels were not expanded", self.block_recursions),
             ));
         }
-
+        if self.dimensions_without_type > 0 {
+            losses.push(Loss::notice(
+                "dxf/dimension-type",
+                format!("{} dimension(s) had no type code and were read as aligned", self.dimensions_without_type),
+            ));
+        }
+        if self.dimensions_without_definition > 0 {
+            losses.push(Loss::notice(
+                "dxf/dimension-offset",
+                format!(
+                    "{} dimension(s) had no definition point; their dimension line sits on the measured segment",
+                    self.dimensions_without_definition
+                ),
+            ));
+        }
         (self.drawing, losses)
     }
 }
@@ -747,4 +831,150 @@ pub(crate) fn dxf(text: &str, title: Option<String>) -> Result<(Drawing, Vec<Los
     }
     reader.parse_entities(&blocks, entities, Xform::scale(scale), None, 0);
     Ok(reader.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal ASCII DXF with optional BLOCKS content and the given
+    /// ENTITIES body, both written as raw group-code pairs.
+    fn document(blocks: &str, entities: &str) -> String {
+        format!(
+            "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n{blocks}\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{entities}\n0\nENDSEC\n0\nEOF\n"
+        )
+    }
+
+    fn codes(losses: &[Loss]) -> Vec<&str> {
+        losses.iter().map(|loss| loss.code.as_str()).collect()
+    }
+
+    #[test]
+    fn dimension_import_reads_aligned_and_rotated_references() {
+        let entities = [
+            "0",
+            "DIMENSION",
+            "8",
+            "DIMENSIONS",
+            "70",
+            "1",
+            "13",
+            "0",
+            "23",
+            "0",
+            "14",
+            "10",
+            "24",
+            "0",
+            "10",
+            "5",
+            "20",
+            "3",
+            "1",
+            "W 10",
+            "0",
+            "DIMENSION",
+            "8",
+            "DIMENSIONS",
+            "70",
+            "0",
+            "50",
+            "90",
+            "13",
+            "0",
+            "23",
+            "0",
+            "14",
+            "0",
+            "24",
+            "10",
+            "10",
+            "2",
+            "20",
+            "5",
+            "1",
+            "<>",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), Some("dimensions".to_string())).expect("read dimensions");
+
+        assert_eq!(drawing.entities.len(), 2);
+        assert_eq!(drawing.entities[0].layer, "DIMENSIONS");
+        let EntityKind::Dimension { from, to, offset, text } = &drawing.entities[0].kind
+        else {
+            panic!("expected a dimension, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!((*from, *to), ([0.0, 0.0], [10.0, 0.0]));
+        assert!((offset - 3.0).abs() < 1e-9);
+        assert_eq!(text.as_deref(), Some("W 10"));
+
+        // A rotated dimension whose rotation follows its segment keeps the same
+        // measured points, and `<>` means "use the measured value".
+        let EntityKind::Dimension { offset, text, .. } = &drawing.entities[1].kind
+        else {
+            panic!("expected a rotated dimension, got {:?}", drawing.entities[1].kind);
+        };
+        assert!((offset + 2.0).abs() < 1e-9);
+        assert_eq!(text, &None);
+        assert!(!codes(&losses).contains(&"dxf/unsupported-entity"), "{:?}", codes(&losses));
+    }
+
+    #[test]
+    fn dimension_import_skips_types_the_model_cannot_carry() {
+        let entities = [
+            "0",
+            "DIMENSION",
+            "70",
+            "2",
+            "13",
+            "0",
+            "23",
+            "0",
+            "14",
+            "10",
+            "24",
+            "0",
+            "0",
+            "DIMENSION",
+            "70",
+            "0",
+            "50",
+            "90",
+            "13",
+            "0",
+            "23",
+            "0",
+            "14",
+            "10",
+            "24",
+            "0",
+            "10",
+            "5",
+            "20",
+            "3",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read dimensions");
+
+        assert!(drawing.entities.is_empty());
+        let skipped = losses.iter().filter(|loss| loss.code == "dxf/unsupported-entity").collect::<Vec<_>>();
+        assert_eq!(skipped.len(), 2, "{:?}", codes(&losses));
+        assert!(skipped.iter().any(|loss| loss.detail.contains("angular")));
+        assert!(skipped.iter().any(|loss| loss.detail.contains("rotated")));
+        assert!(skipped.iter().all(|loss| loss.severity == "warning"));
+    }
+
+    #[test]
+    fn dimension_import_reports_a_missing_type_and_definition_point() {
+        let entities = ["0", "DIMENSION", "13", "0", "23", "0", "14", "4", "24", "0"].join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read dimensions");
+
+        let EntityKind::Dimension { offset, .. } = &drawing.entities[0].kind
+        else {
+            panic!("expected a dimension");
+        };
+        assert_eq!(*offset, 0.0, "a missing definition point keeps the measured segment");
+        assert!(codes(&losses).contains(&"dxf/dimension-type"));
+        assert!(codes(&losses).contains(&"dxf/dimension-offset"));
+    }
 }
