@@ -59,6 +59,7 @@ open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
 open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad measure plan.ocad
+open-cad stats plan.ocad
 open-cad undo plan.ocad
 open-cad redo plan.ocad
 open-cad layer add plan.ocad --name Walls --color "#a4262c"
@@ -139,19 +140,22 @@ What this build does NOT do
   as unsupported, and the unimplemented routes as `unsupported`. Its `entities`
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension and ordinate dimension as supported; its
-  `operations` matrix lists transform, copy, array, explode, offset and measure
-  as supported while constraint solving and a 3D kernel stay unsupported. A
+  `operations` matrix lists transform, copy, array, explode, offset, measure and
+  stats as supported while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
   `offset` appends a new circle, arc or polyline: it grows or shrinks a radius,
   or offsets polyline vertices along mitered left/right normals. Document
   checks: `units`, `layers`, `geometry`, `polylines`, `dimensions`,
-  `duplicate-entity`, `zero-length` and `open-contour` run; `constraints` and
-  `references` stay unsupported. `units` is conservative: it
+  `duplicate-entity`, `zero-length` and `open-contour` run by default;
+  `empty-layer` is opt-in and warns about layers that hold no entities.
+  `constraints` and `references` stay unsupported. `units` is conservative: it
   warns only when a dimension's explicit label carries a unit word or inch
   symbol that conflicts with the document unit.
 - `measure` sums line segments, polyline edges and analytic arc lengths; ellipse
   length is sampled at five-degree steps, so it is approximate. Area covers
   closed polylines (shoelace), full circles and full ellipses; partial curves
   and self-intersecting polylines are not exact.
+- `stats` groups the same length and area by layer, adds per-layer entity counts
+  and drawing-wide totals, so an audit can tell which layer owns the geometry.

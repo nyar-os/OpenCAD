@@ -370,6 +370,30 @@ test('offset copies circle and polyline geometry as new entities', { skip: withA
     }
 });
 
+test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Stats' });
+        document.addLine({ layer: '0', from: [0, 0], to: [3, 4] });
+        const stats = document.stats();
+        assert.equal(stats.totals.entities, 1);
+        assert.equal(stats.totals.length, 5);
+        const defaultLayer = stats.layers.find((layer) => layer.id === '0');
+        assert.equal(defaultLayer?.entityCount, 1);
+        const dimensions = stats.layers.find((layer) => layer.id === 'dimensions');
+        assert.equal(dimensions?.entityCount, 0);
+
+        const report = document.inspect({ checks: ['empty-layer'] });
+        assert.equal(report.passed, true);
+        const empty = report.issues.filter((issue) => issue.code === 'layers/empty');
+        assert.equal(empty.length, 1);
+        assert.equal(empty[0]?.layerId, 'dimensions');
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',

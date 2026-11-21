@@ -13,6 +13,14 @@ use crate::schema::{Drawing, EntityKind, Units};
 
 /// Checks this build executes.
 pub(crate) const SUPPORTED_CHECKS: &[&str] =
+    &["units", "layers", "empty-layer", "geometry", "polylines", "dimensions", "duplicate-entity", "zero-length", "open-contour"];
+
+/// Checks a request without an explicit selection runs.
+///
+/// `empty-layer` is opt-in because every new drawing starts with a reserved
+/// but unused `dimensions` layer, and flagging that in every default run would
+/// be noise rather than a finding.
+pub(crate) const DEFAULT_CHECKS: &[&str] =
     &["units", "layers", "geometry", "polylines", "dimensions", "duplicate-entity", "zero-length", "open-contour"];
 
 /// Result of one inspection run.
@@ -232,6 +240,22 @@ impl<'a> Collector<'a> {
         }
         for (id, name) in duplicates {
             self.push("layers/duplicate-name", Severity::Error, Some(&id), None, true, format!("layer id `{id}` reuses the name `{name}`"));
+        }
+    }
+
+    /// Flags layers that carry no entities.
+    ///
+    /// A warning rather than an error: an empty layer is a drawing-organisation
+    /// hint, not invalid geometry. The finding names the layer, not an entity.
+    fn check_empty_layers(&mut self) {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for entity in &self.drawing.entities {
+            *counts.entry(entity.layer.as_str()).or_default() += 1;
+        }
+        for layer in &self.drawing.layers {
+            if counts.get(layer.id.as_str()).copied().unwrap_or(0) == 0 {
+                self.push("layers/empty", Severity::Warning, Some(&layer.id), None, true, format!("layer `{}` has no entities", layer.name));
+            }
         }
     }
 
@@ -603,6 +627,7 @@ fn label_conflicts_with_units(label: &str, units: Units) -> bool {
 pub(crate) fn run(drawing: &Drawing, checks: &[&str]) -> Report {
     let geometry = checks.contains(&"geometry");
     let layers = checks.contains(&"layers");
+    let empty_layers = checks.contains(&"empty-layer");
     let units = checks.contains(&"units");
     let polylines = checks.contains(&"polylines");
     let dimensions = checks.contains(&"dimensions");
@@ -626,6 +651,9 @@ pub(crate) fn run(drawing: &Drawing, checks: &[&str]) -> Report {
     }
     if layers {
         collector.check_layer_names();
+    }
+    if empty_layers {
+        collector.check_empty_layers();
     }
     collector.check_entities();
     Report { revision: drawing.revision, issues: collector.issues }

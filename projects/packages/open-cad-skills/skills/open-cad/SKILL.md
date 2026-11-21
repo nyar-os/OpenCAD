@@ -14,8 +14,9 @@ transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline and measure, move, update and
 delete entities, undo and redo,
 add, rename, merge, hide and lock layers, save atomically, inspect units, layers,
-geometry, polylines, dimensions, duplicate entities, zero-length geometry and
-open contours, import the declared ASCII DXF subset (including SPLINE,
+geometry, polylines, dimensions, duplicate entities, zero-length geometry,
+open contours and opted-in empty layers, report per-layer statistics, import
+the declared ASCII DXF subset (including SPLINE,
 LEADER and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL, OBJ or
 STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
@@ -60,6 +61,7 @@ open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
 open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad measure plan.ocad
+open-cad stats plan.ocad
 
 open-cad undo plan.ocad
 open-cad redo plan.ocad
@@ -115,7 +117,10 @@ dimension entities are refused with `object/unsupported`, and a non-positive
 resulting radius with `session/argument-invalid`. `measure` reports bounds, width,
 height, entity count, path length and enclosed area: ellipse length is sampled at
 five-degree steps and area only covers closed polylines, full circles and full
-ellipses.
+ellipses. `stats` applies the same rules per layer and adds per-layer entity
+counts plus drawing-wide totals. The `empty-layer` inspection check is opt-in:
+`inspect --checks empty-layer` warns about each layer with no entities, and a
+default inspection run does not include it.
 
 `undo` and `redo` use the `<file>.history.json` sidecar that every mutating
 command maintains (up to 32 prior documents, atomic writes), so they work across

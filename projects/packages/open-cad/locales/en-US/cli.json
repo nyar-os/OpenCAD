@@ -21,6 +21,7 @@
             "explode": "Replace one polyline with independent line entities and save the file",
             "offset": "Offset a circle, arc or polyline into a new entity and save the file",
             "measure": "Measure bounds, path length and enclosed area of a drawing file",
+            "stats": "Report entity count, path length and enclosed area per layer",
             "add-line": "Add a line and save the file in place",
             "add-circle": "Add a circle and save the file in place",
             "add-polyline": "Add a polyline and save the file in place",

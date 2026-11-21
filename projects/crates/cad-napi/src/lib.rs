@@ -359,6 +359,14 @@ fn drawing_offset(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Summarises entity count, path length and enclosed area per layer.
+#[function]
+fn drawing_stats(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::stats(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Measures the bounds, path length and enclosed area of an open drawing.
 #[function]
 fn drawing_measure(ctx: CallContext) -> Result<JsValue> {
@@ -1179,6 +1187,16 @@ impl IpcHandler for StudioIpcHandler {
                     Err(error) => failure(id, "offsetError", service_failure(error)),
                 }
             }
+            "drawing.stats" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "statsError", "a stats request needs a drawing handle".to_string());
+                };
+                match open_cad_drawing::stats(handle) {
+                    Ok(result) => reply(id, "statsResult", result),
+                    Err(error) => failure(id, "statsError", service_failure(error)),
+                }
+            }
             "drawing.measure" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -1483,6 +1501,7 @@ register_module![
     drawing_explode,
     drawing_offset,
     drawing_measure,
+    drawing_stats,
     drawing_import_dxf,
     open_gui,
     pump_events,

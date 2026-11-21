@@ -26,6 +26,7 @@ export type SupportLevel = 'supported' | 'partial' | 'unsupported';
 export type InspectCheck =
     | 'units'
     | 'layers'
+    | 'empty-layer'
     | 'geometry'
     | 'polylines'
     | 'constraints'
@@ -56,6 +57,7 @@ export type OperationName =
     | 'explode'
     | 'offset'
     | 'measure'
+    | 'stats'
     | 'constraints'
     | 'kernel3d';
 
@@ -472,6 +474,35 @@ export interface MeasureResult {
     readonly entities: number;
     readonly length: number;
     readonly area: number;
+}
+
+/** One layer's share of a drawing's statistics. */
+export interface LayerStats {
+    readonly id: LayerId;
+    readonly name: string;
+    readonly visible: boolean;
+    readonly locked: boolean;
+    readonly entityCount: number;
+    readonly length: number;
+    readonly area: number;
+}
+
+/**
+ * Result of `stats()`.
+ *
+ * Length and area follow the same rules as `measure()`: analytic lines, arcs
+ * and circles, five-degree ellipse sampling, and shoelace area only for closed
+ * polylines, full circles and full ellipses. Annotations contribute nothing.
+ */
+export interface DrawingStats {
+    readonly revision: number;
+    readonly units: 'mm' | 'inch';
+    readonly layers: readonly LayerStats[];
+    readonly totals: {
+        readonly entities: number;
+        readonly length: number;
+        readonly area: number;
+    };
 }
 
 /** Arguments of `moveEntity()`. Exactly one of the offset and `to` forms. */

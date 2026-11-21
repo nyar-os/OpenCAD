@@ -39,6 +39,7 @@ import type {
     InspectReport,
     LayerChange,
     LayerMerge,
+    DrawingStats,
     MeasureResult,
     MergeLayerRequest,
     MoveEntityRequest,
@@ -390,6 +391,11 @@ export function measure(handle: number, sheet?: string): MeasureResult {
     return decode<MeasureResult>(() =>
         sheet === undefined ? binding('drawing.measure').drawing_measure(handle) : binding('drawing.measure').drawing_measure(handle, sheet),
     );
+}
+
+/** Summarises entity count, path length and enclosed area per layer. */
+export function stats(handle: number): DrawingStats {
+    return decode<DrawingStats>(() => binding('drawing.stats').drawing_stats(handle));
 }
 
 /** Imports the declared ASCII DXF subset into a new drawing handle. */

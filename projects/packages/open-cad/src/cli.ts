@@ -25,6 +25,7 @@ import type {
     ArrayResult,
     CopyResult,
     Drawing,
+    DrawingStats,
     Entity,
     EntityChange,
     EntityDeletion,
@@ -254,6 +255,17 @@ function describeMeasure(result: MeasureResult): string {
         `  size: ${result.width} x ${result.height}`,
         `  length: ${result.length}`,
         `  area: ${result.area}`,
+    ].join('\n');
+}
+
+function describeStats(result: DrawingStats): string {
+    const layers = result.layers.map(
+        (layer) => `  ${layer.id}: entities=${layer.entityCount} length=${layer.length} area=${layer.area}`,
+    );
+    return [
+        `statistics revision=${result.revision} units=${result.units}`,
+        ...layers,
+        `  total: entities=${result.totals.entities} length=${result.totals.length} area=${result.totals.area}`,
     ].join('\n');
 }
 
@@ -1125,6 +1137,24 @@ cli
         try {
             const result = await guard(ctx, () => opened.measure(text(options, 'sheet')));
             ctx.emitResult(result, describeMeasure(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('stats', 'cli.cmd.stats')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.stats());
+            ctx.emitResult(result, describeStats(result));
             return 0;
         } finally {
             opened.close();

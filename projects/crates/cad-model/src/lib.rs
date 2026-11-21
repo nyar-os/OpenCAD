@@ -41,8 +41,19 @@ pub const NOT_IMPLEMENTED: &str = "capability/not-implemented";
 pub const DRAWING_FORMATS: &[&str] = &["dwg", "dxf", "step", "stp", "iges", "igs", "stl", "obj", "svg", "pdf", "png", "jpg"];
 
 /// Inspection checks exposed by [`capabilities`].
-pub const INSPECT_CHECKS: &[&str] =
-    &["units", "layers", "geometry", "polylines", "constraints", "dimensions", "references", "duplicate-entity", "zero-length", "open-contour"];
+pub const INSPECT_CHECKS: &[&str] = &[
+    "units",
+    "layers",
+    "empty-layer",
+    "geometry",
+    "polylines",
+    "constraints",
+    "dimensions",
+    "references",
+    "duplicate-entity",
+    "zero-length",
+    "open-contour",
+];
 
 /// Static render targets.
 pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
@@ -119,7 +130,9 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let check_level = |name: &str| match name {
-        "units" | "layers" | "geometry" | "polylines" | "dimensions" | "duplicate-entity" | "zero-length" | "open-contour" => "supported",
+        "units" | "layers" | "empty-layer" | "geometry" | "polylines" | "dimensions" | "duplicate-entity" | "zero-length" | "open-contour" => {
+            "supported"
+        }
         _ => "unsupported",
     };
     let renderer_level = |name: &str| match name {
@@ -157,10 +170,13 @@ pub fn capabilities() -> Value {
                 _ => "unsupported",
             },
         ),
-        "operations": map(&["transform", "copy", "array", "explode", "offset", "measure", "constraints", "kernel3d"], |name| match name {
-            "transform" | "copy" | "array" | "explode" | "offset" | "measure" => "supported",
-            _ => "unsupported",
-        }),
+        "operations": map(
+            &["transform", "copy", "array", "explode", "offset", "measure", "stats", "constraints", "kernel3d"],
+            |name| match name {
+                "transform" | "copy" | "array" | "explode" | "offset" | "measure" | "stats" => "supported",
+                _ => "unsupported",
+            },
+        ),
     })
 }
 
@@ -271,13 +287,14 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// Runs the requested checks and reports every finding.
 ///
 /// `units`, `layers`, `geometry`, `polylines`, `dimensions`, `duplicate-entity`,
-/// `zero-length` and `open-contour` run; `constraints` and `references` are not
+/// `zero-length` and `open-contour` run by default; `empty-layer` is opt-in and
+/// warns about layers without entities. `constraints` and `references` are not
 /// implemented and requesting them fails with `capability/not-implemented`
 /// rather than reporting a false pass.
 pub fn inspect(handle: u64, checks: Option<Vec<String>>) -> Result<Value, ServiceError> {
     let requested = match checks {
         Some(names) if !names.is_empty() => names,
-        _ => inspection::SUPPORTED_CHECKS.iter().map(|name| (*name).to_string()).collect(),
+        _ => inspection::DEFAULT_CHECKS.iter().map(|name| (*name).to_string()).collect(),
     };
     let mut selected = Vec::with_capacity(requested.len());
     for raw in requested {
@@ -1541,6 +1558,36 @@ fn curve_length(points: &[[f64; 2]]) -> f64 {
     points.windows(2).map(|pair| point_distance(pair[0], pair[1])).sum()
 }
 
+/// Path length and enclosed area one entity contributes to [`measure`] and
+/// [`stats`].
+fn entity_length_area(kind: &EntityKind) -> (f64, f64) {
+    match kind {
+        EntityKind::Line { from, to } => (point_distance(*from, *to), 0.0),
+        EntityKind::Polyline { points, closed } => {
+            let mut length = curve_length(points);
+            let mut area = 0.0;
+            if *closed && points.len() > 1 {
+                length += point_distance(points[0], points[points.len() - 1]);
+                area += polyline_area(points);
+            }
+            (length, area)
+        }
+        EntityKind::Arc { radius, start_angle, end_angle, .. } => (radius.abs() * arc_sweep(*start_angle, *end_angle).to_radians(), 0.0),
+        EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            let length = curve_length(&sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle));
+            let area = if sweep >= 360.0 - 1e-9 { std::f64::consts::PI * rx.abs() * ry.abs() } else { 0.0 };
+            (length, area)
+        }
+        EntityKind::Circle { radius, .. } => (0.0, std::f64::consts::PI * radius * radius),
+        EntityKind::Point { .. }
+        | EntityKind::Text { .. }
+        | EntityKind::Dimension { .. }
+        | EntityKind::RadialDimension { .. }
+        | EntityKind::OrdinateDimension { .. } => (0.0, 0.0),
+    }
+}
+
 /// Measures the drawing extent, path length and enclosed area.
 ///
 /// The exact bounding box comes from every entity's own extent computation.
@@ -1558,34 +1605,9 @@ pub fn measure(handle: u64, sheet: Option<String>) -> Result<Value, ServiceError
         let mut length = 0.0;
         let mut area = 0.0;
         for entity in &drawing.entities {
-            match &entity.kind {
-                EntityKind::Line { from, to } => length += point_distance(*from, *to),
-                EntityKind::Polyline { points, closed } => {
-                    length += curve_length(points);
-                    if *closed && points.len() > 1 {
-                        let first = points[0];
-                        let last = points[points.len() - 1];
-                        length += point_distance(first, last);
-                        area += polyline_area(points);
-                    }
-                }
-                EntityKind::Arc { radius, start_angle, end_angle, .. } => {
-                    length += radius.abs() * arc_sweep(*start_angle, *end_angle).to_radians();
-                }
-                EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
-                    let sweep = arc_sweep(*start_angle, *end_angle);
-                    length += curve_length(&sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle));
-                    if sweep >= 360.0 - 1e-9 {
-                        area += std::f64::consts::PI * rx.abs() * ry.abs();
-                    }
-                }
-                EntityKind::Circle { radius, .. } => area += std::f64::consts::PI * radius * radius,
-                EntityKind::Point { .. }
-                | EntityKind::Text { .. }
-                | EntityKind::Dimension { .. }
-                | EntityKind::RadialDimension { .. }
-                | EntityKind::OrdinateDimension { .. } => {}
-            }
+            let (entity_length, entity_area) = entity_length_area(&entity.kind);
+            length += entity_length;
+            area += entity_area;
         }
         let (width, height) = if seen { (max[0] - min[0], max[1] - min[1]) } else { (0.0, 0.0) };
         let (min_x, min_y) = if seen { (min[0], min[1]) } else { (0.0, 0.0) };
@@ -1598,6 +1620,53 @@ pub fn measure(handle: u64, sheet: Option<String>) -> Result<Value, ServiceError
             "entities": drawing.entities.len(),
             "length": length,
             "area": area,
+        })
+    })
+}
+
+/// Summarises entity count, path length and enclosed area per layer.
+///
+/// Length and area use the same rules as [`measure`]: analytic lines, arcs and
+/// circles, five-degree ellipse sampling, and shoelace area only for closed
+/// polylines, full circles and full ellipses. Annotations contribute nothing.
+/// The response carries `{ revision, units, layers, totals }`, where each layer
+/// is `{ id, name, visible, locked, entityCount, length, area }`.
+pub fn stats(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let drawing = &session.drawing;
+        let mut layers = Vec::with_capacity(drawing.layers.len());
+        for layer in &drawing.layers {
+            let mut entity_count = 0;
+            let mut length = 0.0;
+            let mut area = 0.0;
+            for entity in drawing.entities.iter().filter(|entity| entity.layer == layer.id) {
+                let (entity_length, entity_area) = entity_length_area(&entity.kind);
+                entity_count += 1;
+                length += entity_length;
+                area += entity_area;
+            }
+            layers.push(json!({
+                "id": layer.id,
+                "name": layer.name,
+                "visible": layer.visible,
+                "locked": layer.locked,
+                "entityCount": entity_count,
+                "length": length,
+                "area": area,
+            }));
+        }
+        let mut total_length = 0.0;
+        let mut total_area = 0.0;
+        for entity in &drawing.entities {
+            let (entity_length, entity_area) = entity_length_area(&entity.kind);
+            total_length += entity_length;
+            total_area += entity_area;
+        }
+        json!({
+            "revision": drawing.revision,
+            "units": drawing.units.as_str(),
+            "layers": layers,
+            "totals": { "entities": drawing.entities.len(), "length": total_length, "area": total_area },
         })
     })
 }
@@ -1949,13 +2018,13 @@ mod tests {
         assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
         assert_eq!(matrix["formats"]["obj"], json!("partial"), "OBJ is export-only, so the format is partial");
         assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
-        for check in ["units", "layers", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
+        for check in ["units", "layers", "empty-layer", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
             assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
         }
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
         }
-        for operation in ["transform", "copy", "array", "explode", "offset", "measure"] {
+        for operation in ["transform", "copy", "array", "explode", "offset", "measure", "stats"] {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
         for operation in ["constraints", "kernel3d"] {
@@ -3746,6 +3815,61 @@ mod tests {
         add_circle(handle, "Structure", [0.0, 0.0], 4.0).expect("circle");
         update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
         assert_eq!(offset(handle, "entity-1", 1.0).expect_err("locked").code, "drawing/layer-locked");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn stats_group_length_and_area_by_layer() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Walls", Some("#ff0000")).expect("layer");
+        add_line(handle, "Walls", [0.0, 0.0], [3.0, 0.0]).expect("line");
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("square");
+        add_circle(handle, DEFAULT_LAYER, [10.0, 10.0], 2.0).expect("circle");
+        add_text(handle, DIMENSION_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+
+        let summary = stats(handle).expect("stats");
+        assert_eq!(summary["units"], json!("mm"));
+        assert_eq!(summary["revision"], json!(6));
+        assert_eq!(summary["totals"]["entities"], json!(4));
+        let layers = summary["layers"].as_array().expect("layers");
+        let walls = layers.iter().find(|layer| layer["id"] == json!("Walls")).expect("walls layer");
+        assert_eq!(walls["entityCount"], json!(1));
+        assert_eq!(walls["length"], json!(3.0));
+        assert_eq!(walls["area"], json!(0.0));
+        let default = layers.iter().find(|layer| layer["id"] == json!(DEFAULT_LAYER)).expect("default layer");
+        assert_eq!(default["entityCount"], json!(2));
+        assert_eq!(default["length"], json!(16.0), "square perimeter only");
+        assert!((default["area"].as_f64().expect("area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9, "square and circle area");
+        let dimensions = layers.iter().find(|layer| layer["id"] == json!(DIMENSION_LAYER)).expect("dimension layer");
+        assert_eq!(dimensions["entityCount"], json!(1));
+        assert_eq!(dimensions["length"], json!(0.0));
+        assert!((summary["totals"]["area"].as_f64().expect("total area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9);
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn empty_layer_check_is_opt_in_and_warns_per_layer() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+
+        let default_report = inspect(handle, None).expect("default inspect");
+        let default_codes = default_report["issues"]
+            .as_array()
+            .expect("issues")
+            .iter()
+            .map(|issue| issue["code"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert!(!default_codes.contains(&"layers/empty"), "{default_codes:?}");
+
+        let report = inspect(handle, Some(vec!["empty-layer".to_string()])).expect("empty-layer inspect");
+        assert_eq!(report["passed"], json!(true), "empty layers are warnings");
+        let issues = report["issues"].as_array().expect("issues");
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0]["code"], json!("layers/empty"));
+        assert_eq!(issues[0]["layerId"], json!(DIMENSION_LAYER));
+        assert_eq!(issues[0]["recoverable"], json!(true));
         close(handle).expect("close");
     }
 }

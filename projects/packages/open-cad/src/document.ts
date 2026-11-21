@@ -33,6 +33,7 @@ import type {
     Entity,
     EntityDeletion,
     EntityList,
+    DrawingStats,
     ExplodeResult,
     ExportOptions,
     ExportReport,
@@ -380,6 +381,12 @@ export class DrawingDocument {
     measure(sheet?: string): MeasureResult {
         this.assertOpen();
         return service.measure(this.handle, sheet);
+    }
+
+    /** Summarises entity count, path length and enclosed area per layer. */
+    stats(): DrawingStats {
+        this.assertOpen();
+        return service.stats(this.handle);
     }
 
     /** Converts every length between millimetres and inches. */
