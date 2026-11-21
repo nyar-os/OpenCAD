@@ -31,9 +31,11 @@ import type {
     Entity,
     EntityChange,
     EntityDeletion,
+    EntityGroup,
     EntityMeasureResult,
     ExplodeResult,
     ExportFormat,
+    GroupDeletion,
     HistoryResult,
     ImportLoss,
     InspectCheck,
@@ -318,6 +320,21 @@ function describeTextMatches(result: TextMatchResult): string {
 
 function describeTextReplace(result: TextReplaceResult): string {
     return `replaced ${result.occurrences} occurrence(s) in ${result.count} text entities revision=${result.revision}`;
+}
+
+function describeGroups(groups: readonly EntityGroup[]): string {
+    if (groups.length === 0) {
+        return 'no entity groups';
+    }
+    return groups.map((group) => `${group.name}: ${group.entities.join(',')}`).join('\n');
+}
+
+function describeGroup(group: EntityGroup, revision: number): string {
+    return `entity group ${group.name} entities=${group.entities.length} revision=${revision}`;
+}
+
+function describeGroupDeletion(result: GroupDeletion): string {
+    return `deleted entity group ${result.deleted} revision=${result.revision} groups=${result.drawing.groups}`;
 }
 
 function describeHistory(result: HistoryResult, verb: 'undo' | 'redo'): string {
@@ -1768,6 +1785,109 @@ textstyle
             opened.close();
         }
     });
+
+const group = cli.command('group', 'cli.cmd.group');
+
+group.command('list', 'cli.cmd.group-list').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+        return 2;
+    }
+    const opened = await guard(ctx, () => app.open({ path: file }));
+    try {
+        const groups = await guard(ctx, () => opened.listGroups());
+        ctx.emitResult({ revision: opened.revision, groups }, describeGroups(groups));
+        return 0;
+    } finally {
+        opened.close();
+    }
+});
+
+group
+    .command('create', 'cli.cmd.group-create')
+    .option('--name <name>', 'cli.opt.group-name')
+    .option('--ids <list>', 'cli.opt.ids')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        const entities = idList(options, 'ids');
+        if (name === undefined || entities === undefined) {
+            ctx.fail('open-cad.cli.group-create-required', { message: '`--name <name>` and `--ids <list>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const created = await guard(ctx, () => opened.createGroup({ name, entities }));
+            ctx.emitResult({ revision: opened.revision, drawing: opened.summary(), group: created }, describeGroup(created, opened.revision));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+group
+    .command('delete', 'cli.cmd.group-delete')
+    .option('--name <name>', 'cli.opt.group-name')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.name-required', { message: '`--name <name>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const deletion = await guard(ctx, () => opened.deleteGroup(name));
+            ctx.emitResult(deletion, describeGroupDeletion(deletion));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const groupMemberCommand = (name: string, description: string, add: boolean) => {
+    group
+        .command(name, description)
+        .option('--name <name>', 'cli.opt.group-name')
+        .option('--ids <list>', 'cli.opt.ids')
+        .actionCtx(async (options, _args, ctx) => {
+            const file = input(options);
+            if (file === undefined) {
+                ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+                return 2;
+            }
+            const groupId = text(options, 'name');
+            const entities = idList(options, 'ids');
+            if (groupId === undefined || entities === undefined) {
+                ctx.fail('open-cad.cli.group-members-required', { message: '`--name <name>` and `--ids <list>` are required' });
+                return 2;
+            }
+            const opened = await guard(ctx, () => app.open({ path: file }));
+            try {
+                const updated = await guard(ctx, () =>
+                    add
+                        ? opened.addGroupMembers({ groupId, entities })
+                        : opened.removeGroupMembers({ groupId, entities }),
+                );
+                ctx.emitResult({ revision: opened.revision, drawing: opened.summary(), group: updated }, describeGroup(updated, opened.revision));
+                return 0;
+            } finally {
+                opened.close();
+            }
+        });
+};
+
+groupMemberCommand('add', 'cli.cmd.group-add', true);
+groupMemberCommand('remove', 'cli.cmd.group-remove', false);
 
 const textCommand = cli.command('text', 'cli.cmd.text');
 

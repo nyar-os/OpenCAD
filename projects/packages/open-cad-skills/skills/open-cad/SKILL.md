@@ -17,7 +17,8 @@ delete entities, undo and redo,
 add, rename, merge, hide and lock layers, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
-table), find and replace text content in bulk, select entities with a
+table), find and replace text content in bulk, collect entities into named
+groups, select entities with a
 rectangular window or crossing query, save
 atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
@@ -95,6 +96,12 @@ open-cad textstyle delete plan.ocad --name NOTES-1
 open-cad text find plan.ocad --pattern hall
 open-cad text replace plan.ocad --pattern hall --to "main hall"
 
+open-cad group list plan.ocad
+open-cad group create plan.ocad --name Walls --ids entity-1,entity-2
+open-cad group add plan.ocad --name Walls --ids entity-3
+open-cad group remove plan.ocad --name Walls --ids entity-3
+open-cad group delete plan.ocad --name Walls
+
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
 
@@ -165,6 +172,12 @@ passed, accept `--layer` to narrow the scope, and never touch dimension labels
 or attributes. A replacement on a locked layer refuses the whole edit with
 `drawing/layer-locked`.
 
+Entity groups are named membership lists stored in the `.ocad` document; the
+DXF `GROUP` table is not read or written. `group create` needs `--name` and
+`--ids`, `group add`/`group remove` change membership, and `group delete`
+removes the group. Group membership never changes geometry, and deleting or
+exploding a member removes its id from every group.
+
 `undo` and `redo` use the `<file>.history.json` sidecar that every mutating
 command maintains (up to 32 prior documents, atomic writes), so they work across
 separate CLI processes. Restoring a snapshot bumps the revision relative to the
@@ -212,6 +225,10 @@ start a new document.
   style stores a primary font, fixed height, width factor and oblique angle;
   those variables round-trip through the DXF `STYLE` table. Big-font and
   generation flags, and a per-text style reference, are not modelled.
+- Entity groups are unique by name and keep member ids in insertion order.
+  Grouping is metadata: it never changes geometry, layers or entity revisions.
+  A group may become empty after removals; deleting or exploding a member drops
+  that id from every group.
 - `select --box x1,y1,x2,y2` is a read-only query: `window` (the default) keeps
   entities fully inside the rectangle, `--crossing` also keeps entities that
   cross or touch it, and `--layer` narrows the result. Curves are tested against

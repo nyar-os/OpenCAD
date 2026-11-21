@@ -25,9 +25,10 @@ import type {
     AddTextStyleRequest,
     ArrayRequest,
     ArrayResult,
+    ConvertUnitsRequest,
     CopyRequest,
     CopyResult,
-    ConvertUnitsRequest,
+    CreateGroupRequest,
     CornerResult,
     DimensionStyleChange,
     DimensionStyleDeletion,
@@ -35,12 +36,17 @@ import type {
     Drawing,
     EntityChange,
     EntityDeletion,
+    EntityGroup,
     EntityList,
     EntityMeasureResult,
     ExplodeResult,
     ExportFormat,
     ExportReport,
     FindTextRequest,
+    GroupChange,
+    GroupDeletion,
+    GroupList,
+    GroupMembersRequest,
     HistoryResult,
     ImportDxfRequest,
     ImportDxfResult,
@@ -442,6 +448,46 @@ export function updateTextStyle(handle: number, request: UpdateTextStyleRequest)
 /** Removes one text style from an open drawing. */
 export function deleteTextStyle(handle: number, styleId: string): TextStyleDeletion {
     return decode<TextStyleDeletion>(() => binding('drawing.deleteTextStyle').drawing_delete_text_style(handle, styleId));
+}
+
+/** Lists the entity groups of one open drawing. */
+export function listGroups(handle: number): GroupList {
+    return decode<GroupList>(() => binding('drawing.listGroups').drawing_list_groups(handle));
+}
+
+/** Creates one entity group from existing entities. */
+export function createGroup(handle: number, request: CreateGroupRequest): GroupChange {
+    return decode<GroupChange>(() =>
+        binding('drawing.createGroup').drawing_create_group(
+            handle,
+            JSON.stringify({ name: request.name, entities: request.entities }),
+        ),
+    );
+}
+
+/** Removes one entity group. */
+export function deleteGroup(handle: number, groupId: string): GroupDeletion {
+    return decode<GroupDeletion>(() => binding('drawing.deleteGroup').drawing_delete_group(handle, groupId));
+}
+
+/** Adds existing entities to one group. */
+export function addGroupMembers(handle: number, request: GroupMembersRequest): GroupChange {
+    return decode<GroupChange>(() =>
+        binding('drawing.addGroupMembers').drawing_add_group_members(
+            handle,
+            JSON.stringify({ groupId: request.groupId, entities: request.entities }),
+        ),
+    );
+}
+
+/** Removes entities from one group. */
+export function removeGroupMembers(handle: number, request: GroupMembersRequest): GroupChange {
+    return decode<GroupChange>(() =>
+        binding('drawing.removeGroupMembers').drawing_remove_group_members(
+            handle,
+            JSON.stringify({ groupId: request.groupId, entities: request.entities }),
+        ),
+    );
 }
 
 /** Selects entities with a rectangular window or crossing box. */

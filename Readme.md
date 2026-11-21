@@ -25,8 +25,8 @@ height, width factor and oblique angle) round-trip through the DXF `STYLE`
 table and can be listed, added, updated and removed; a rectangular window or
 crossing query returns the matching entity ids without adding a history step;
 text content can be found and replaced in bulk (ASCII case-insensitive by
-default) in one history step; a
-drawing converts
+default) in one history step; entities can be collected into named groups;
+a drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL, Wavefront OBJ and STEP export work, and
@@ -93,6 +93,11 @@ open-cad textstyle update plan.ocad --name NOTES --to NOTES-1 --height 3
 open-cad textstyle delete plan.ocad --name NOTES-1
 open-cad text find plan.ocad --pattern hall
 open-cad text replace plan.ocad --pattern hall --to "main hall"
+open-cad group list plan.ocad
+open-cad group create plan.ocad --name Walls --ids entity-1,entity-2
+open-cad group add plan.ocad --name Walls --ids entity-3
+open-cad group remove plan.ocad --name Walls --ids entity-3
+open-cad group delete plan.ocad --name Walls
 open-cad units convert plan.ocad --to inch
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
@@ -200,8 +205,8 @@ What this build does NOT do
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
   chamfer, measure, measure-entity, stats, dimension-style, text-style,
-  text-search and select as supported while constraint solving and a 3D kernel
-  stay unsupported. A
+  text-search, group and select as supported while constraint solving and a 3D
+  kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
@@ -224,6 +229,9 @@ What this build does NOT do
   approximate. Area covers closed polylines and hatches (shoelace), full
   circles and full ellipses; partial curves and self-intersecting polylines are
   not exact.
+- Entity groups are named membership lists stored in the `.ocad` document only;
+  the DXF `GROUP` table is not read or written. Grouping never changes geometry,
+  and deleting or exploding a member removes its id from every group.
 - `measure --ids entity-1,entity-2` reports `length`, `area` and `closed` per
   entity plus totals, using the same rules as the drawing-wide `measure`. A
   closed polyline reports its perimeter as `length`; circle circumference is not

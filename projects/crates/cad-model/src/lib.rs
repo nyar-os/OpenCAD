@@ -29,9 +29,9 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, Entity, EntityKind, Layer, OrdinateAxis, TextStyle, Units,
-    arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern, default_text_styles, ellipse_point, finite_point, normalize_angle,
-    offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
+    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, Entity, EntityGroup, EntityKind, Layer, OrdinateAxis,
+    TextStyle, Units, arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern, default_text_styles, ellipse_point, finite_point,
+    normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -186,13 +186,14 @@ pub fn capabilities() -> Value {
                 "dimension-style",
                 "text-style",
                 "text-search",
+                "group",
                 "select",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity" | "stats"
-                | "dimension-style" | "text-style" | "text-search" | "select" => "supported",
+                | "dimension-style" | "text-style" | "text-search" | "group" | "select" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -642,6 +643,7 @@ pub fn delete_entity(handle: u64, entity: &str) -> Result<Value, ServiceError> {
             return Err(error);
         }
         drawing.entities.remove(index);
+        detach_entity_from_groups(drawing, entity);
         drawing.revision += 1;
         Ok(())
     })?;
@@ -1554,6 +1556,7 @@ pub fn explode(handle: u64, entity: &str) -> Result<Value, ServiceError> {
             lines.push(Entity { id, layer: source.layer.clone(), kind: EntityKind::Line { from, to } });
         }
         drawing.entities.splice(index..=index, lines);
+        detach_entity_from_groups(drawing, entity);
         drawing.revision += 1;
         Ok(created)
     })?;
@@ -2727,6 +2730,165 @@ fn read_text_style(handle: u64, id: &str) -> Result<Value, ServiceError> {
     })
 }
 
+/// Arguments of [`create_group`].
+#[derive(Debug, Clone, Default)]
+pub struct GroupCreateRequest {
+    /// Group name; also becomes the group id.
+    pub name: String,
+    /// Member entity ids; repeated ids are kept once.
+    pub entities: Vec<String>,
+}
+
+fn group_members(drawing: &Drawing, entities: &[String]) -> Result<Vec<String>, ServiceError> {
+    let mut members = Vec::with_capacity(entities.len());
+    let mut seen = std::collections::HashSet::new();
+    for raw in entities {
+        let id = raw.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if drawing.entities.iter().all(|entity| entity.id != id) {
+            return Err(ServiceError::new("object/not-found", format!("entity `{id}` does not exist")));
+        }
+        if seen.insert(id.to_string()) {
+            members.push(id.to_string());
+        }
+    }
+    Ok(members)
+}
+
+fn group_index(drawing: &Drawing, id: &str) -> Result<usize, ServiceError> {
+    drawing
+        .groups
+        .iter()
+        .position(|group| group.id == id)
+        .ok_or_else(|| ServiceError::new("object/not-found", format!("entity group `{id}` does not exist")))
+}
+
+fn group_read(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        let group = session.drawing.groups.iter().find(|group| group.id == id);
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "group": group,
+        })
+    })
+}
+
+fn detach_entity_from_groups(drawing: &mut Drawing, entity: &str) {
+    for group in &mut drawing.groups {
+        group.entities.retain(|member| member != entity);
+    }
+}
+
+/// Lists the entity groups of one drawing.
+pub fn list_groups(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "groups": session.drawing.groups,
+        })
+    })
+}
+
+/// Creates one entity group and returns `{ revision, drawing, group }`.
+///
+/// Names are unique case-insensitively and also become the group id. Every
+/// member id must name an existing entity; repeated ids are kept once. A group
+/// needs at least one member, and an existing name reports
+/// `drawing/group-exists`.
+pub fn create_group(handle: u64, request: GroupCreateRequest) -> Result<Value, ServiceError> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err(argument("an entity group needs a non-empty name"));
+    }
+    let group = store::edit(handle, |drawing| {
+        if drawing.groups.iter().any(|existing| existing.id.eq_ignore_ascii_case(&name)) {
+            return Err(ServiceError::new("drawing/group-exists", format!("an entity group named `{name}` already exists")));
+        }
+        let entities = group_members(drawing, &request.entities)?;
+        if entities.is_empty() {
+            return Err(argument("a group needs at least one entity"));
+        }
+        let group = EntityGroup { id: name.clone(), name: name.clone(), entities };
+        drawing.groups.push(group.clone());
+        drawing.revision += 1;
+        Ok(group)
+    })?;
+    group_read(handle, &group.id)
+}
+
+/// Removes one entity group and returns `{ revision, drawing, deleted }`.
+pub fn delete_group(handle: u64, id: &str) -> Result<Value, ServiceError> {
+    store::edit(handle, |drawing| {
+        let index = group_index(drawing, id)?;
+        drawing.groups.remove(index);
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "deleted": id,
+        })
+    })
+}
+
+/// Adds existing entities to one group and returns `{ revision, drawing, group }`.
+///
+/// Each id must name an existing entity; ids already in the group are ignored,
+/// so an edit that adds nothing does not change the revision.
+pub fn add_group_members(handle: u64, id: &str, entities: &[String]) -> Result<Value, ServiceError> {
+    let target = id.to_string();
+    let added = store::read(handle, |session| -> Result<usize, ServiceError> {
+        let index = group_index(&session.drawing, &target)?;
+        let members = group_members(&session.drawing, entities)?;
+        Ok(members.iter().filter(|member| !session.drawing.groups[index].entities.contains(member)).count())
+    })??;
+    if added == 0 {
+        return group_read(handle, &target);
+    }
+    store::edit(handle, |drawing| {
+        let index = group_index(drawing, &target)?;
+        for member in group_members(drawing, entities)? {
+            if !drawing.groups[index].entities.contains(&member) {
+                drawing.groups[index].entities.push(member);
+            }
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    group_read(handle, &target)
+}
+
+/// Removes entities from one group and returns `{ revision, drawing, group }`.
+///
+/// Ids that are not members are ignored; removing nothing does not change the
+/// revision. The group itself stays even when its last member is removed.
+pub fn remove_group_members(handle: u64, id: &str, entities: &[String]) -> Result<Value, ServiceError> {
+    let target = id.to_string();
+    let removal = entities.iter().map(|entity| entity.trim()).filter(|entity| !entity.is_empty()).collect::<std::collections::HashSet<_>>();
+    if removal.is_empty() {
+        return Err(argument("pass at least one entity id to remove"));
+    }
+    let present = store::read(handle, |session| -> Result<bool, ServiceError> {
+        let index = group_index(&session.drawing, &target)?;
+        Ok(session.drawing.groups[index].entities.iter().any(|member| removal.contains(member.as_str())))
+    })??;
+    if !present {
+        return group_read(handle, &target);
+    }
+    store::edit(handle, |drawing| {
+        let index = group_index(drawing, &target)?;
+        drawing.groups[index].entities.retain(|member| !removal.contains(member.as_str()));
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    group_read(handle, &target)
+}
+
 /// Converts a drawing between millimetres and inches.
 ///
 /// Every coordinate, radius, ellipse axis, text height and dimension offset is
@@ -3673,6 +3835,64 @@ mod tests {
 
         update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
         assert_eq!(replace_text(handle, "hall", "x", TextSearchOptions::default()).expect_err("locked layer").code, "drawing/layer-locked");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn groups_create_add_remove_and_prune_deleted_entities() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+        add_line(handle, DEFAULT_LAYER, [0.0, 1.0], [1.0, 1.0]).expect("line");
+        add_line(handle, DEFAULT_LAYER, [0.0, 2.0], [1.0, 2.0]).expect("line");
+
+        let group = create_group(
+            handle,
+            GroupCreateRequest { name: "Frame".to_string(), entities: vec!["entity-1".to_string(), "entity-2".to_string()] },
+        )
+        .expect("create group");
+        assert_eq!(group["group"]["entities"], json!(["entity-1", "entity-2"]));
+        assert_eq!(group["drawing"]["groups"], json!(1));
+        assert_eq!(group["revision"], json!(5));
+
+        assert_eq!(
+            create_group(handle, GroupCreateRequest { name: "frame".to_string(), entities: vec!["entity-1".to_string()] },)
+                .expect_err("duplicate name")
+                .code,
+            "drawing/group-exists"
+        );
+        assert_eq!(
+            create_group(handle, GroupCreateRequest { name: "Missing".to_string(), entities: vec!["entity-9".to_string()] })
+                .expect_err("unknown entity")
+                .code,
+            "object/not-found"
+        );
+        assert_eq!(
+            create_group(handle, GroupCreateRequest { name: "Empty".to_string(), entities: Vec::new() }).expect_err("empty group").code,
+            "session/argument-invalid"
+        );
+
+        let added = add_group_members(handle, "Frame", &["entity-3".to_string(), "entity-1".to_string()]).expect("add members");
+        assert_eq!(added["group"]["entities"], json!(["entity-1", "entity-2", "entity-3"]));
+        let before = added["revision"].as_u64().expect("revision");
+        let noop = add_group_members(handle, "Frame", &["entity-1".to_string()]).expect("no-op add");
+        assert_eq!(noop["revision"], json!(before));
+
+        let removed = remove_group_members(handle, "Frame", &["entity-2".to_string()]).expect("remove member");
+        assert_eq!(removed["group"]["entities"], json!(["entity-1", "entity-3"]));
+
+        delete_entity(handle, "entity-1").expect("delete member");
+        let listed = list_groups(handle).expect("list groups");
+        assert_eq!(listed["groups"][0]["entities"], json!(["entity-3"]));
+
+        let deleted = delete_group(handle, "Frame").expect("delete group");
+        assert_eq!(deleted["deleted"], json!("Frame"));
+        assert_eq!(deleted["drawing"]["groups"], json!(0));
+        assert_eq!(delete_group(handle, "Frame").expect_err("missing group").code, "object/not-found");
+
+        let mut drawing = Drawing::empty(None, Units::Mm);
+        drawing.groups.push(EntityGroup { id: "G".to_string(), name: "G".to_string(), entities: vec!["entity-9".to_string()] });
+        assert!(drawing.validate().is_err());
         close(handle).expect("close");
     }
 

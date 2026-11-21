@@ -208,6 +208,21 @@ pub fn default_text_styles() -> Vec<TextStyle> {
     vec![TextStyle::standard()]
 }
 
+/// One named group of entities.
+///
+/// Membership is metadata: grouping never changes geometry, layers or the
+/// revision of an entity, and member ids point at entities of the same drawing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityGroup {
+    /// Stable group identifier inside the document; equals the name.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Member entity ids in insertion order.
+    pub entities: Vec<String>,
+}
+
 /// Geometry carried by one entity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -590,6 +605,9 @@ pub struct Drawing {
     /// Named text styles; a document always keeps at least one.
     #[serde(default = "default_text_styles")]
     pub text_styles: Vec<TextStyle>,
+    /// Named entity groups.
+    #[serde(default)]
+    pub groups: Vec<EntityGroup>,
     /// Flat entity list.
     pub entities: Vec<Entity>,
     /// Next numeric suffix used for a new entity identifier.
@@ -607,6 +625,7 @@ impl Drawing {
             layers: vec![Layer::default_geometry(), Layer::default_dimension()],
             dim_styles: default_dimension_styles(),
             text_styles: default_text_styles(),
+            groups: Vec::new(),
             entities: Vec::new(),
             next_entity: 1,
         }
@@ -647,6 +666,7 @@ impl Drawing {
             "layers": layers,
             "dimStyles": self.dim_styles,
             "textStyles": self.text_styles,
+            "groups": self.groups.len(),
             "entities": self.entities.len(),
         })
     }
@@ -708,6 +728,24 @@ impl Drawing {
                 return Err(format!("entity `{}` references missing layer `{}`", entity.id, entity.layer));
             }
             entity.validate()?;
+        }
+        let mut group_ids = std::collections::HashSet::new();
+        for group in &self.groups {
+            if group.id.trim().is_empty() || group.name.trim().is_empty() {
+                return Err("an entity group needs a non-empty name".to_string());
+            }
+            if !group_ids.insert(group.id.as_str()) {
+                return Err(format!("duplicate entity group id `{}`", group.id));
+            }
+            let mut members = std::collections::HashSet::new();
+            for member in &group.entities {
+                if !entity_ids.contains(member.as_str()) {
+                    return Err(format!("entity group `{}` references missing entity `{member}`", group.id));
+                }
+                if !members.insert(member.as_str()) {
+                    return Err(format!("entity group `{}` lists entity `{member}` twice", group.id));
+                }
+            }
         }
         Ok(())
     }

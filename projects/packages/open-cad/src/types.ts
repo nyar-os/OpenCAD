@@ -63,6 +63,7 @@ export type OperationName =
     | 'dimension-style'
     | 'text-style'
     | 'text-search'
+    | 'group'
     | 'select'
     | 'constraints'
     | 'kernel3d';
@@ -195,6 +196,8 @@ export interface Drawing {
     readonly dimStyles: readonly DimensionStyle[];
     /** Named text styles; a drawing always keeps at least one. */
     readonly textStyles: readonly TextStyle[];
+    /** Number of named entity groups. */
+    readonly groups: number;
     readonly entities: number;
     /** Whether the handle still has an earlier snapshot to restore. */
     readonly canUndo: boolean;
@@ -352,6 +355,52 @@ export interface Entity {
     readonly id: EntityId;
     readonly layer: LayerId;
     readonly kind: EntityKind;
+}
+
+/**
+ * One named group of entities.
+ *
+ * Membership is metadata: grouping never changes geometry, layers or entity
+ * revisions, and every member id points at an entity of the same drawing.
+ */
+export interface EntityGroup {
+    readonly id: string;
+    readonly name: string;
+    readonly entities: readonly EntityId[];
+}
+
+/** Result of `listGroups()`. */
+export interface GroupList {
+    readonly revision: number;
+    readonly groups: readonly EntityGroup[];
+}
+
+/** Arguments of `createGroup()`. */
+export interface CreateGroupRequest {
+    /** Group name; also becomes the group id. */
+    readonly name: string;
+    /** At least one existing entity id. */
+    readonly entities: readonly EntityId[];
+}
+
+/** Arguments of `addGroupMembers()` and `removeGroupMembers()`. */
+export interface GroupMembersRequest {
+    readonly groupId: string;
+    readonly entities: readonly EntityId[];
+}
+
+/** Result of creating or updating one group. */
+export interface GroupChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly group: EntityGroup;
+}
+
+/** Result of deleting one group. */
+export interface GroupDeletion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly deleted: string;
 }
 
 /** How a rectangular selection treats entities that touch its boundary. */

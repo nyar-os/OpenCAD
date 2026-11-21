@@ -32,11 +32,13 @@ import type {
     CopyRequest,
     CopyResult,
     ConvertUnitsRequest,
+    CreateGroupRequest,
     DimensionStyle,
     DimensionStyleDeletion,
     Drawing,
     Entity,
     EntityDeletion,
+    EntityGroup,
     EntityId,
     EntityList,
     EntityMeasureResult,
@@ -45,6 +47,8 @@ import type {
     ExportOptions,
     ExportReport,
     FindTextRequest,
+    GroupDeletion,
+    GroupMembersRequest,
     HistoryMode,
     HistoryResult,
     ImportLoss,
@@ -440,6 +444,58 @@ export class DrawingDocument {
         return this.edit((handle) => service.deleteTextStyle(handle, styleId), (result) => {
             this.state = result.drawing;
         });
+    }
+
+    /** Lists the entity groups of this document. */
+    listGroups(): readonly EntityGroup[] {
+        this.assertOpen();
+        return service.listGroups(this.handle).groups;
+    }
+
+    /** Creates one entity group from existing entities. */
+    createGroup(request: CreateGroupRequest): EntityGroup {
+        let group: EntityGroup | undefined;
+        this.edit(
+            (handle) => service.createGroup(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                group = result.group;
+            },
+        );
+        return group as EntityGroup;
+    }
+
+    /** Removes one entity group. */
+    deleteGroup(groupId: string): GroupDeletion {
+        return this.edit((handle) => service.deleteGroup(handle, groupId), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Adds existing entities to one group. */
+    addGroupMembers(request: GroupMembersRequest): EntityGroup {
+        let group: EntityGroup | undefined;
+        this.edit(
+            (handle) => service.addGroupMembers(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                group = result.group;
+            },
+        );
+        return group as EntityGroup;
+    }
+
+    /** Removes entities from one group. */
+    removeGroupMembers(request: GroupMembersRequest): EntityGroup {
+        let group: EntityGroup | undefined;
+        this.edit(
+            (handle) => service.removeGroupMembers(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                group = result.group;
+            },
+        );
+        return group as EntityGroup;
     }
 
     /** Moves one entity by an offset or to an absolute anchor. */

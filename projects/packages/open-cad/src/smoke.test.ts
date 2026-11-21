@@ -554,6 +554,35 @@ test('entity measurement reports area and perimeter', { skip: withAddon }, async
     }
 });
 
+test('entity groups keep membership without changing geometry', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Groups' });
+        const first = document.addLine({ layer: '0', from: [0, 0], to: [1, 0] });
+        const second = document.addLine({ layer: '0', from: [0, 1], to: [1, 1] });
+
+        const created = document.createGroup({ name: 'Frame', entities: [first.id, second.id] });
+        assert.deepEqual(created.entities, [first.id, second.id]);
+        assert.equal(document.summary().groups, 1);
+        assert.equal(document.listGroups()[0]?.name, 'Frame');
+
+        const added = document.addGroupMembers({ groupId: 'Frame', entities: [first.id] });
+        assert.equal(added.entities.length, 2);
+        document.deleteEntity(first.id);
+        assert.deepEqual(document.listGroups()[0]?.entities, [second.id]);
+
+        assert.throws(
+            () => document.createGroup({ name: 'frame', entities: [second.id] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/group-exists',
+        );
+        document.deleteGroup('Frame');
+        assert.equal(document.listGroups().length, 0);
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

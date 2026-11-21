@@ -16,6 +16,7 @@ export const errorCodes = [
     'drawing/layer-locked',
     'drawing/layer-exists',
     'drawing/style-exists',
+    'drawing/group-exists',
     'drawing/style-last',
     'drawing/nothing-to-undo',
     'drawing/nothing-to-redo',

@@ -372,6 +372,50 @@ fn drawing_delete_text_style(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Lists the entity groups of an open drawing.
+#[function]
+fn drawing_list_groups(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::list_groups(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Creates one entity group from existing entities.
+#[function]
+fn drawing_create_group(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_create_group(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Removes one entity group.
+#[function]
+fn drawing_delete_group(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let group = text(&ctx, 1)?;
+    let result = open_cad_drawing::delete_group(handle, &group).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Adds existing entities to one group.
+#[function]
+fn drawing_add_group_members(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_group_members(handle, &request, true).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Removes entities from one group.
+#[function]
+fn drawing_remove_group_members(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_group_members(handle, &request, false).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Selects entities with a rectangular window or crossing box.
 #[function]
 fn drawing_select(ctx: CallContext) -> Result<JsValue> {
@@ -863,6 +907,31 @@ fn call_replace_text(handle: u64, request: &Value) -> std::result::Result<Value,
     let pattern = request_string(request, "pattern")?;
     let replacement = request.get("replacement").and_then(Value::as_str).unwrap_or("");
     open_cad_drawing::replace_text(handle, &pattern, replacement, text_search_options(request)).map_err(service_failure)
+}
+
+fn request_ids(request: &Value, key: &str) -> std::result::Result<Vec<String>, String> {
+    let ids = request.get(key).and_then(Value::as_array).ok_or_else(|| format!("session/argument-invalid: `{key}` must be an array"))?;
+    ids.iter()
+        .map(|id| id.as_str().map(str::to_string).ok_or_else(|| format!("session/argument-invalid: every entry of `{key}` must be a string")))
+        .collect()
+}
+
+fn call_create_group(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let name = request_string(request, "name")?;
+    let entities = request_ids(request, "entities")?;
+    open_cad_drawing::create_group(handle, open_cad_drawing::GroupCreateRequest { name, entities }).map_err(service_failure)
+}
+
+fn call_group_members(handle: u64, request: &Value, add: bool) -> std::result::Result<Value, String> {
+    let group = request_string(request, "groupId")?;
+    let entities = request_ids(request, "entities")?;
+    let result = if add {
+        open_cad_drawing::add_group_members(handle, &group, &entities)
+    }
+    else {
+        open_cad_drawing::remove_group_members(handle, &group, &entities)
+    };
+    result.map_err(service_failure)
 }
 
 fn call_transform(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -1814,6 +1883,11 @@ register_module![
     drawing_add_text_style,
     drawing_update_text_style,
     drawing_delete_text_style,
+    drawing_list_groups,
+    drawing_create_group,
+    drawing_delete_group,
+    drawing_add_group_members,
+    drawing_remove_group_members,
     drawing_select,
     drawing_merge_layer,
     drawing_convert_units,
