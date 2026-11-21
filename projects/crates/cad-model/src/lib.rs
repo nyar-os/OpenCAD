@@ -64,7 +64,7 @@ pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
 pub const ARRAY_MODES: &[&str] = &["rectangular", "polar"];
 
 /// Exchange formats [`export`] knows about.
-pub const EXPORT_TARGETS: &[&str] = &["dxf", "obj", "step", "stl", "svg", "pdf"];
+pub const EXPORT_TARGETS: &[&str] = &["dxf", "dxf-r12", "obj", "step", "stl", "svg", "pdf"];
 
 const FILE_FORMAT: &str = "open-cad-drawing";
 const FILE_VERSION: u64 = 1;
@@ -142,7 +142,7 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let export_level = |name: &str| match name {
-        "svg" | "dxf" | "pdf" | "stl" | "step" | "obj" => "supported",
+        "svg" | "dxf" | "dxf-r12" | "pdf" | "stl" | "step" | "obj" => "supported",
         _ => "unsupported",
     };
 
@@ -492,10 +492,10 @@ pub struct ExportOptions {
 
 /// Projects one drawing into an exchange format.
 ///
-/// `svg`, `dxf`, `pdf`, `stl`, `obj` and `step` are written atomically and
-/// report any loss. The STL, OBJ and STEP writers extrude closed profiles with
-/// the default thickness; use [`export_with_options`] to choose another. An
-/// unknown format reports `format/unsupported`.
+/// `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj` and `step` are written
+/// atomically and report any loss. The STL, OBJ and STEP writers extrude closed
+/// profiles with the default thickness; use [`export_with_options`] to choose
+/// another. An unknown format reports `format/unsupported`.
 pub fn export(handle: u64, format: &str, path: &Path) -> Result<Value, ServiceError> {
     export_with_options(handle, format, path, ExportOptions::default())
 }
@@ -512,6 +512,7 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
         let (contents, losses) = match format.as_str() {
             "svg" => (exchange::svg(drawing), Vec::new()),
             "dxf" => exchange::dxf(drawing),
+            "dxf-r12" => exchange::dxf_r12(drawing),
             "pdf" => exchange::pdf(drawing),
             "stl" => {
                 let report = exchange::stl(drawing, options.thickness.unwrap_or(exchange::STL_DEFAULT_THICKNESS));
@@ -531,7 +532,7 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
             other => {
                 return Err(ServiceError::new(
                     "format/unsupported",
-                    format!("`{other}` is not an export target of this build; use `svg`, `dxf`, `pdf`, `stl`, `obj` or `step`"),
+                    format!("`{other}` is not an export target of this build; use `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj` or `step`"),
                 ));
             }
         };
@@ -7009,5 +7010,60 @@ mod tests {
         assert_eq!(update_layout(handle, "Sheet", LayoutUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
         assert_eq!(delete_layout(handle, "missing").expect_err("unknown delete").code, "object/not-found");
         close(handle).expect("close");
+    }
+
+    #[test]
+    fn dxf_r12_export_simplifies_entities_r12_cannot_carry() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_ellipse(handle, DEFAULT_LAYER, [20.0, 20.0], 10.0, 5.0, 0.0, 0.0, 360.0).expect("ellipse");
+        add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], None).expect("hatch");
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 5.0]).expect("line");
+
+        let drawing = drawing_of(handle);
+        let (text, losses) = exchange::dxf_r12(&drawing);
+        assert!(text.contains("$ACADVER\n1\nAC1009\n"), "{text}");
+        assert!(!text.contains("$INSUNITS"), "{text}");
+        assert!(!text.contains("\nELLIPSE\n"), "{text}");
+        assert!(!text.contains("\nHATCH\n"), "{text}");
+        assert!(text.contains("\nPOLYLINE\n"), "{text}");
+        let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+        for code in ["dxf/r12-units", "dxf/r12-ellipse", "dxf/r12-hatch"] {
+            assert!(codes.contains(&code), "{codes:?}");
+        }
+
+        let (auto, _) = exchange::dxf(&drawing);
+        assert!(auto.contains("\nELLIPSE\n"), "the default DXF target keeps analytic ellipses");
+        assert!(auto.contains("AC1015"), "the default target upgrades for a hatch");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn dxf_r12_omits_layer_flags_r12_cannot_write() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Hidden", Some("#ff0000")).expect("layer");
+        update_layer(handle, "Hidden", LayerUpdate { plottable: Some(false), lineweight: Some(0.5), ..LayerUpdate::default() })
+            .expect("update layer");
+        add_line(handle, "Hidden", [0.0, 0.0], [1.0, 0.0]).expect("line");
+
+        let (text, losses) = exchange::dxf_r12(&drawing_of(handle));
+        assert!(text.contains("0\nLAYER\n2\nHidden\n"), "{text}");
+        assert!(!text.contains("\n370\n"), "{text}");
+        assert!(!text.contains("\n290\n"), "{text}");
+        let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+        assert!(codes.contains(&"dxf/r12-lineweight"), "{codes:?}");
+        assert!(codes.contains(&"dxf/r12-plottable"), "{codes:?}");
+        close(handle).expect("close");
+
+        let empty = create(CreateRequest::default()).expect("empty create");
+        let empty_handle = handle_of(&empty);
+        let (text, losses) = exchange::dxf_r12(&drawing_of(empty_handle));
+        assert!(text.contains("$ACADVER\n1\nAC1009\n"), "{text}");
+        let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+        assert!(codes.contains(&"dxf/r12-units"), "{codes:?}");
+        assert!(!codes.contains(&"dxf/r12-lineweight"), "{codes:?}");
+        assert!(!codes.contains(&"dxf/r12-plottable"), "{codes:?}");
+        close(empty_handle).expect("close");
     }
 }

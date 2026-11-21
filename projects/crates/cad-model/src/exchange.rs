@@ -410,8 +410,43 @@ fn dxf_hatch(out: &mut String, layer: &str, points: &[[f64; 2]], pattern: &str) 
     dxf_pair(out, 98, 0);
 }
 
-/// Renders one drawing to ASCII DXF R12 and reports what the target lost.
+/// Writes one POLYLINE with VERTEX records and a closing SEQEND.
+fn dxf_polyline(out: &mut String, layer: &str, points: &[[f64; 2]], closed: bool) {
+    let layer = dxf_layer_name(layer);
+    dxf_pair(out, 0, "POLYLINE");
+    dxf_pair(out, 8, &layer);
+    dxf_pair(out, 66, 1);
+    dxf_pair(out, 10, "0");
+    dxf_pair(out, 20, "0");
+    dxf_pair(out, 30, "0");
+    dxf_pair(out, 70, if closed { 1 } else { 0 });
+    for point in points {
+        dxf_pair(out, 0, "VERTEX");
+        dxf_pair(out, 8, &layer);
+        dxf_pair(out, 10, num(point[0]));
+        dxf_pair(out, 20, num(point[1]));
+        dxf_pair(out, 30, "0");
+    }
+    dxf_pair(out, 0, "SEQEND");
+    dxf_pair(out, 8, &layer);
+}
+
+/// Renders one drawing to the automatically chosen ASCII DXF version.
 pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
+    dxf_with_flavor(drawing, false)
+}
+
+/// Renders one drawing to ASCII DXF R12 (`AC1009`).
+///
+/// Entities R12 cannot carry are simplified: an ellipse becomes a sampled
+/// `POLYLINE` and a hatch becomes its closed boundary `POLYLINE`. Header and
+/// layer values R12 does not know (`$INSUNITS`, lineweight and the plot flag)
+/// are omitted and reported, so the file stays openable by AutoCAD R12.
+pub(crate) fn dxf_r12(drawing: &Drawing) -> (String, Vec<Loss>) {
+    dxf_with_flavor(drawing, true)
+}
+
+fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
     let mut out = String::new();
     let mut losses = Vec::new();
 
@@ -420,15 +455,28 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     dxf_pair(&mut out, 9, "$ACADVER");
     let custom_lines = drawing.layers.iter().any(|layer| layer.linetype != CONTINUOUS_LINETYPE || layer.lineweight > 0.0);
     let layer_flags = drawing.layers.iter().any(|layer| !layer.plottable);
-    let version = if custom_lines || layer_flags || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) {
+    let version = if r12 {
+        "AC1009"
+    }
+    else if custom_lines || layer_flags || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) {
         "AC1015"
     }
     else {
         "AC1009"
     };
     dxf_pair(&mut out, 1, version);
-    dxf_pair(&mut out, 9, "$INSUNITS");
-    dxf_pair(&mut out, 70, drawing.units.dxf_insunits());
+    if r12 {
+        losses.push(Loss::warning(
+            "dxf/r12-units",
+            None,
+            None,
+            "the R12 header omits `$INSUNITS`, so the drawing unit is not written".to_string(),
+        ));
+    }
+    else {
+        dxf_pair(&mut out, 9, "$INSUNITS");
+        dxf_pair(&mut out, 70, drawing.units.dxf_insunits());
+    }
     dxf_pair(&mut out, 0, "ENDSEC");
 
     dxf_pair(&mut out, 0, "SECTION");
@@ -466,8 +514,26 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
         dxf_pair(&mut out, 70, flags);
         dxf_pair(&mut out, 62, 7);
         dxf_pair(&mut out, 6, dxf_text(&layer.linetype));
-        dxf_pair(&mut out, 370, (layer.lineweight * 100.0).round() as i64);
-        if version != "AC1009" {
+        if r12 {
+            if layer.lineweight > 0.0 {
+                losses.push(Loss::warning(
+                    "dxf/r12-lineweight",
+                    Some(&layer.id),
+                    None,
+                    format!("layer lineweight `{}` is not written in R12", num(layer.lineweight)),
+                ));
+            }
+            if !layer.plottable {
+                losses.push(Loss::warning(
+                    "dxf/r12-plottable",
+                    Some(&layer.id),
+                    None,
+                    "the R12 LAYER record has no plot flag, so the layer is treated as plottable".to_string(),
+                ));
+            }
+        }
+        else {
+            dxf_pair(&mut out, 370, (layer.lineweight * 100.0).round() as i64);
             dxf_pair(&mut out, 290, i64::from(layer.plottable));
         }
         if layer.color != "#ffffff" {
@@ -535,6 +601,20 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
                 dxf_pair(&mut out, 51, num_exact(*end_angle));
             }
             EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+                if r12 {
+                    let sweep = arc_sweep(*start_angle, *end_angle);
+                    let sampled = sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle);
+                    let closed = sweep >= 360.0 - 1e-9;
+                    let points = if closed { closed_profile(&sampled) } else { sampled };
+                    dxf_polyline(&mut out, &entity.layer, &points, closed);
+                    losses.push(Loss::warning(
+                        "dxf/r12-ellipse",
+                        Some(&entity.layer),
+                        Some(&entity.id),
+                        "ellipse is written as a sampled POLYLINE because R12 has no ELLIPSE entity".to_string(),
+                    ));
+                    continue;
+                }
                 let (major, minor, rotation, start_angle, end_angle) = if ry.abs() > rx.abs() {
                     // DXF requires the major-axis vector; rotating by 90 degrees
                     // and shifting the parameter by -90 keeps the same curve.
@@ -567,23 +647,7 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
                 dxf_text_entity(&mut out, &entity.layer, *at, *height, content);
             }
             EntityKind::Polyline { points, closed } => {
-                let layer = dxf_layer_name(&entity.layer);
-                dxf_pair(&mut out, 0, "POLYLINE");
-                dxf_pair(&mut out, 8, &layer);
-                dxf_pair(&mut out, 66, 1);
-                dxf_pair(&mut out, 10, "0");
-                dxf_pair(&mut out, 20, "0");
-                dxf_pair(&mut out, 30, "0");
-                dxf_pair(&mut out, 70, if *closed { 1 } else { 0 });
-                for point in points {
-                    dxf_pair(&mut out, 0, "VERTEX");
-                    dxf_pair(&mut out, 8, &layer);
-                    dxf_pair(&mut out, 10, num(point[0]));
-                    dxf_pair(&mut out, 20, num(point[1]));
-                    dxf_pair(&mut out, 30, "0");
-                }
-                dxf_pair(&mut out, 0, "SEQEND");
-                dxf_pair(&mut out, 8, &layer);
+                dxf_polyline(&mut out, &entity.layer, points, *closed);
             }
             EntityKind::Dimension { from, to, offset, text } => {
                 let (p1, p2) = offset_points(*from, *to, *offset);
@@ -644,6 +708,17 @@ pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
                         Some(&entity.layer),
                         Some(&entity.id),
                         format!("hatch `{}` has fewer than 3 boundary points and was skipped", entity.id),
+                    ));
+                    continue;
+                }
+                if r12 {
+                    let boundary = closed_profile(points);
+                    dxf_polyline(&mut out, &entity.layer, &boundary, true);
+                    losses.push(Loss::warning(
+                        "dxf/r12-hatch",
+                        Some(&entity.layer),
+                        Some(&entity.id),
+                        format!("hatch pattern `{pattern}` becomes its closed boundary POLYLINE because R12 has no HATCH entity"),
                     ));
                     continue;
                 }
