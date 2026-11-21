@@ -4,7 +4,8 @@
 //! what the drawing model can represent. It reads the HEADER `$INSUNITS` value,
 //! the LAYER table, BLOCKS definitions, and LINE, CIRCLE, ARC, ELLIPSE, POINT,
 //! TEXT, LWPOLYLINE and the older POLYLINE/VERTEX/SEQEND sequence, including
-//! INSERT references that are expanded into the current space.
+//! INSERT references that are expanded into the current space and the ATTRIB
+//! values that follow them.
 //!
 //! ARC and ELLIPSE are read into the analytic entity kinds, and rotated or
 //! aligned linear DIMENSION references become dimension entities. Bulge arcs
@@ -361,6 +362,8 @@ struct Reader {
     block_recursions: usize,
     dimensions_without_type: usize,
     dimensions_without_definition: usize,
+    attribute_values: usize,
+    empty_attributes: usize,
 }
 
 impl Reader {
@@ -376,6 +379,8 @@ impl Reader {
             block_recursions: 0,
             dimensions_without_type: 0,
             dimensions_without_definition: 0,
+            attribute_values: 0,
+            empty_attributes: 0,
         }
     }
 
@@ -432,12 +437,17 @@ impl Reader {
 
     fn parse_entities(&mut self, blocks: &BTreeMap<String, BlockDef>, pairs: &[Pair], xform: Xform, inherit: Option<&str>, depth: usize) {
         let mut index = 0;
+        // Layer inherited by the ATTRIB values that follow an INSERT.
+        let mut attribute_layer: Option<String> = None;
         while index < pairs.len() {
             if pairs[index].code != 0 {
                 index += 1;
                 continue;
             }
             let kind = pairs[index].value.trim().to_ascii_uppercase();
+            if kind != "ATTRIB" && kind != "SEQEND" {
+                attribute_layer = None;
+            }
             let end = block_end(pairs, index + 1);
             let block = &pairs[index + 1..end];
             let layer = resolve_layer(layer_name(block), inherit);
@@ -610,6 +620,25 @@ impl Reader {
                         }
                     }
                 }
+                "ATTRIB" => {
+                    let content = field(block, 1).unwrap_or("").trim_end_matches('\r').to_string();
+                    if content.trim().is_empty() {
+                        self.empty_attributes += 1;
+                    }
+                    else {
+                        let Some(at) = point_at(block, 10, 20)
+                        else {
+                            self.skip("ATTRIB (missing position)", block);
+                            index = end;
+                            continue;
+                        };
+                        let height = number(block, 40).unwrap_or(2.5) * xform.factor();
+                        let raw = layer_name(block);
+                        let layer = if raw == "0" { attribute_layer.clone().unwrap_or(raw) } else { raw };
+                        self.attribute_values += 1;
+                        self.push(layer, EntityKind::Text { at: xform.apply(at), height, content });
+                    }
+                }
                 "INSERT" => {
                     let Some(name) = field(block, 2).map(str::trim).filter(|name| !name.is_empty())
                     else {
@@ -617,6 +646,7 @@ impl Reader {
                         index = end;
                         continue;
                     };
+                    attribute_layer = Some(layer.clone());
                     let insertion = point_at(block, 10, 20).unwrap_or([0.0, 0.0]);
                     let scale_x = number(block, 41).unwrap_or(1.0);
                     let scale_y = number(block, 42).unwrap_or(scale_x);
@@ -638,7 +668,7 @@ impl Reader {
                     }
                 }
                 // Structural markers are consumed by their owning entity.
-                "ATTRIB" | "SEQEND" | "VERTEX" | "ENDBLK" => {}
+                "SEQEND" | "VERTEX" | "ENDBLK" => {}
                 _ => self.skip(&kind, block),
             }
             index = end;
@@ -717,6 +747,17 @@ impl Reader {
                 ),
             ));
         }
+        if self.attribute_values > 0 {
+            losses
+                .push(Loss::notice("dxf/attribute-text", format!("{} block attribute value(s) were imported as text", self.attribute_values)));
+        }
+        if self.empty_attributes > 0 {
+            losses.push(Loss::warning(
+                "dxf/attribute-empty",
+                format!("{} block attribute(s) had no value and were skipped", self.empty_attributes),
+            ));
+        }
+
         (self.drawing, losses)
     }
 }
@@ -976,5 +1017,36 @@ mod tests {
         assert_eq!(*offset, 0.0, "a missing definition point keeps the measured segment");
         assert!(codes(&losses).contains(&"dxf/dimension-type"));
         assert!(codes(&losses).contains(&"dxf/dimension-offset"));
+    }
+
+    #[test]
+    fn attribute_values_follow_the_insert_layer() {
+        let blocks = ["0", "BLOCK", "8", "0", "2", "TITLE", "70", "0", "10", "0", "20", "0", "0", "ENDBLK"].join("\n");
+        let entities = [
+            "0", "INSERT", "8", "TITLE", "2", "TITLE", "10", "0", "20", "0", "0", "ATTRIB", "8", "0", "10", "2", "20", "3", "40", "2.5", "1",
+            "A-101", "0", "ATTRIB", "8", "NOTES", "10", "4", "20", "3", "40", "2.5", "1", "NOTE", "0", "ATTRIB", "8", "0", "10", "6", "20",
+            "3", "40", "2.5", "1", "", "0", "SEQEND", "8", "0",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document(&blocks, &entities), None).expect("read attributes");
+
+        assert_eq!(drawing.entities.len(), 2);
+        assert_eq!(drawing.entities[0].layer, "TITLE");
+        let EntityKind::Text { at, height, content } = &drawing.entities[0].kind
+        else {
+            panic!("expected text, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!((*at, *height, content.as_str()), ([2.0, 3.0], 2.5, "A-101"));
+        assert_eq!(drawing.entities[1].layer, "NOTES");
+        assert!(codes(&losses).contains(&"dxf/attribute-text"));
+        assert!(codes(&losses).contains(&"dxf/attribute-empty"));
+        assert_eq!(
+            losses.iter().find(|loss| loss.code == "dxf/attribute-text").map(|loss| loss.detail.as_str()),
+            Some("2 block attribute value(s) were imported as text")
+        );
+        assert_eq!(
+            losses.iter().find(|loss| loss.code == "dxf/attribute-empty").map(|loss| loss.detail.as_str()),
+            Some("1 block attribute(s) had no value and were skipped")
+        );
     }
 }
