@@ -103,14 +103,17 @@ What this build does NOT do
   TEXT, LWPOLYLINE (including bulge), POLYLINE/VERTEX/SEQEND (a 3D polyline is
   projected onto the XY plane), SPLINE (read as a polyline through its fit
   points, or its control polygon when no fit points exist), LEADER (read as
-  an open polyline) and HATCH (one closed boundary path). Rotated or aligned
-  linear DIMENSION references are read.
+  an open polyline), MLEADER (leader vertices as an open polyline plus one
+  TEXT entity per inline text line) and HATCH (one closed boundary path).
+  Rotated or aligned linear DIMENSION references are read.
   ARC and ELLIPSE stay analytic, and only bulge arcs are flattened; rotated or
   aligned linear, radial, diameter and ordinate dimensions are read, while
-  angular dimensions and MLEADER are skipped. A HATCH boundary made of line,
+  angular dimensions are skipped. A HATCH boundary made of line,
   arc or polyline edges becomes a closed polygon; elliptical and spline edges
   skip the entity, and the pattern name is kept as a description without a
-  pattern definition.
+  pattern definition. MLEADER inline formatting is removed, its lines are
+  stacked as separate `TEXT` entities and leader style, landing, arrow and
+  background are not modelled.
   Every approximation and skip is reported as a loss with a stable code, a
   severity (`notice` or `warning`) and a detail.
 - No STEP or OBJ reader, and no PNG writer, and no STL reader. STL and OBJ
@@ -142,6 +145,9 @@ What this build does NOT do
 - `fillet` and `chamfer` accept only two straight lines. Arc/line or polyline
   corners, variable radius, extending a segment to reach the trim point and 3D
   edges are not implemented.
+- MLEADER text is read only when it is inline context data. Text stored in an
+  external MTEXT object is not resolved, and leader style, landing, arrow,
+  background and column layout are not modelled.
 - No interactive viewport, selection or snapping.
 - No constraint solver or associative dimensions; `constraints` and `references`
   checks are reported as unsupported.

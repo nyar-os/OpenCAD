@@ -440,6 +440,108 @@ fn parse_hatch(block: &[Pair]) -> Option<HatchData> {
     Some(HatchData { points: unique, pattern: if solid { "SOLID".to_string() } else { pattern }, bulges, curved_edges })
 }
 
+/// Strips the inline MTEXT formatting from one MLEADER context string.
+fn mleader_plain_text(raw: &str) -> String {
+    let mut cleaned = String::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            match chars.peek().copied() {
+                Some('P') => {
+                    chars.next();
+                    cleaned.push('\n');
+                }
+                Some('~') => {
+                    chars.next();
+                    cleaned.push(' ');
+                }
+                Some('\\') => {
+                    chars.next();
+                    cleaned.push('\\');
+                }
+                Some(next) if next.is_ascii_alphabetic() => {
+                    for skipped in chars.by_ref() {
+                        if skipped == ';' {
+                            break;
+                        }
+                    }
+                }
+                _ => cleaned.push(character),
+            }
+        }
+        else if character != '{' && character != '}' {
+            cleaned.push(character);
+        }
+    }
+    cleaned.trim().to_string()
+}
+
+/// One MLEADER read from the entity body.
+struct MLeaderData {
+    points: Vec<[f64; 2]>,
+    lines: Vec<String>,
+    /// The entity carried context data but no inline text block.
+    text_missing: bool,
+}
+
+/// Reads a MLEADER leader path and its inline text lines.
+///
+/// Context data is a flat list of group pairs split by `304` marker strings.
+/// Only the `LEADER{...}` section contributes vertices and only the
+/// `TEXT{...}` section contributes text, so the text insertion point is not
+/// mistaken for a leader vertex.
+fn parse_mleader(block: &[Pair]) -> MLeaderData {
+    let mut points: Vec<[f64; 2]> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    let mut pending_x: Option<f64> = None;
+    let mut in_leader = false;
+    let mut in_text = false;
+    let mut saw_context = false;
+    let mut saw_text = false;
+    for pair in block {
+        if pair.code == 304 {
+            saw_context = true;
+            let raw = pair.value.trim();
+            let upper = raw.to_ascii_uppercase();
+            if upper.starts_with("LEADER{") {
+                in_leader = true;
+                in_text = false;
+            }
+            else if upper.starts_with("TEXT{") {
+                in_text = true;
+                in_leader = false;
+                saw_text = true;
+            }
+            else if raw == "}" {
+                in_leader = false;
+                in_text = false;
+            }
+            else if in_text {
+                saw_text = true;
+                lines.extend(mleader_plain_text(raw).lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string));
+            }
+            continue;
+        }
+        if !in_leader {
+            continue;
+        }
+        match pair.code {
+            10 => {
+                pending_x = pair.value.trim().parse::<f64>().ok().filter(|value| value.is_finite());
+            }
+            20 => {
+                if let (Some(x), Ok(y)) = (pending_x.take(), pair.value.trim().parse::<f64>())
+                    && y.is_finite()
+                {
+                    points.push([x, y]);
+                }
+            }
+            _ => {}
+        }
+    }
+    MLeaderData { points, lines, text_missing: saw_context && !saw_text }
+}
+
 /// Accumulated placement of a block reference.
 #[derive(Debug, Clone, Copy)]
 struct Xform {
@@ -526,6 +628,9 @@ struct Reader {
     projected_polylines: usize,
     hatches: usize,
     hatch_bulges: usize,
+    mleaders: usize,
+    mleader_text_lines: usize,
+    mleader_missing_text: usize,
 }
 
 impl Reader {
@@ -549,6 +654,9 @@ impl Reader {
             projected_polylines: 0,
             hatches: 0,
             hatch_bulges: 0,
+            mleaders: 0,
+            mleader_text_lines: 0,
+            mleader_missing_text: 0,
         }
     }
 
@@ -719,6 +827,29 @@ impl Reader {
                     self.leaders += 1;
                     let points = points.into_iter().map(|point| xform.apply(point)).collect();
                     self.push(layer, EntityKind::Polyline { points, closed: false });
+                }
+                "MLEADER" => {
+                    let MLeaderData { points, lines, text_missing } = parse_mleader(block);
+                    if points.len() < 2 {
+                        self.skip("MLEADER (fewer than two leader vertices)", block);
+                        index = end;
+                        continue;
+                    }
+                    self.mleaders += 1;
+                    let height = number(block, 40).filter(|height| *height > 0.0).unwrap_or(2.5) * xform.factor();
+                    let anchor = xform.apply(points[0]);
+                    let points = points.into_iter().map(|point| xform.apply(point)).collect();
+                    self.push(layer.clone(), EntityKind::Polyline { points, closed: false });
+                    if lines.is_empty() && text_missing {
+                        self.mleader_missing_text += 1;
+                    }
+                    let mut emitted = 0usize;
+                    for line in lines.iter().map(|line| line.trim()).filter(|line| !line.is_empty()) {
+                        let at = [anchor[0], anchor[1] - height * 1.4 * emitted as f64];
+                        self.push(layer.clone(), EntityKind::Text { at, height, content: line.to_string() });
+                        emitted += 1;
+                    }
+                    self.mleader_text_lines += emitted;
                 }
                 "TEXT" => {
                     let Some(at) = point_at(block, 10, 20)
@@ -1068,6 +1199,30 @@ impl Reader {
                 format!("{} HATCH boundary path(s) contained bulge arcs that were flattened to line segments", self.hatch_bulges),
             ));
         }
+        if self.mleaders > 0 {
+            losses.push(Loss::notice(
+                "dxf/mleader-leader",
+                format!(
+                    "{} MLEADER entity/entities were read as an open polyline plus TEXT; leader style, landing, arrow and background are not modelled",
+                    self.mleaders
+                ),
+            ));
+        }
+        if self.mleader_text_lines > 0 {
+            losses.push(Loss::notice(
+                "dxf/mleader-text",
+                format!("{} MLEADER text line(s) became single-line TEXT entities with inline formatting removed", self.mleader_text_lines),
+            ));
+        }
+        if self.mleader_missing_text > 0 {
+            losses.push(Loss::warning(
+                "dxf/mleader-text-missing",
+                format!(
+                    "{} MLEADER entity/entities carried no inline text block; only the leader polyline was imported",
+                    self.mleader_missing_text
+                ),
+            ));
+        }
 
         (self.drawing, losses)
     }
@@ -1245,6 +1400,76 @@ mod tests {
         let (drawing, losses) = dxf(&document("", &spline_edge), None).expect("read unsupported hatch");
         assert!(drawing.entities.is_empty());
         assert!(losses.iter().any(|loss| loss.code == "dxf/unsupported-entity" && loss.detail.contains("curved")));
+    }
+
+    #[test]
+    fn mleader_import_reads_leader_vertices_and_flattens_multiline_text() {
+        let entities = [
+            "0",
+            "MLEADER",
+            "8",
+            "NOTES",
+            "40",
+            "2.5",
+            "304",
+            "CONTEXT_DATA{",
+            "304",
+            "LEADER{",
+            "290",
+            "1",
+            "10",
+            "0",
+            "20",
+            "0",
+            "10",
+            "10",
+            "20",
+            "5",
+            "304",
+            "}",
+            "304",
+            "TEXT{",
+            "10",
+            "99",
+            "20",
+            "99",
+            "304",
+            "{\\fArial|b0;\\Pfirst line\\Psecond line}",
+            "304",
+            "}",
+            "304",
+            "}",
+        ]
+        .join("\n");
+        let (drawing, losses) = dxf(&document("", &entities), None).expect("read mleader");
+
+        assert_eq!(drawing.entities.len(), 3, "{:?}", codes(&losses));
+        let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+        else {
+            panic!("expected a leader polyline, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!(points.as_slice(), &[[0.0, 0.0], [10.0, 5.0]]);
+        assert!(!closed);
+        let EntityKind::Text { at, height, content } = &drawing.entities[1].kind
+        else {
+            panic!("expected a text line, got {:?}", drawing.entities[1].kind);
+        };
+        assert_eq!((*at, *height, content.as_str()), ([0.0, 0.0], 2.5, "first line"));
+        let EntityKind::Text { at, content, .. } = &drawing.entities[2].kind
+        else {
+            panic!("expected a text line, got {:?}", drawing.entities[2].kind);
+        };
+        assert!((at[0] - 0.0).abs() < 1e-9 && (at[1] + 3.5).abs() < 1e-9, "stacked line at {at:?}");
+        assert_eq!(content, "second line");
+        assert!(codes(&losses).contains(&"dxf/mleader-leader"));
+        assert!(codes(&losses).contains(&"dxf/mleader-text"));
+
+        let textless =
+            ["0", "MLEADER", "8", "NOTES", "304", "CONTEXT_DATA{", "304", "LEADER{", "10", "0", "20", "0", "10", "5", "20", "5", "304", "}"]
+                .join("\n");
+        let (drawing, losses) = dxf(&document("", &textless), None).expect("read textless mleader");
+        assert_eq!(drawing.entities.len(), 1);
+        assert!(losses.iter().any(|loss| loss.code == "dxf/mleader-text-missing" && loss.severity == "warning"));
     }
 
     #[test]

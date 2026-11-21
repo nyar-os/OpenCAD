@@ -18,8 +18,8 @@ add, rename, merge, hide and lock layers, save atomically, inspect units, layers
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
 the declared ASCII DXF subset (including SPLINE,
-LEADER, HATCH and 3D POLYLINE projection), and export SVG, ASCII DXF, PDF, STL,
-OBJ or STEP.
+LEADER, MLEADER, HATCH and 3D POLYLINE projection), and export SVG, ASCII DXF,
+PDF, STL, OBJ or STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
 reader and STL/OBJ import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
@@ -177,14 +177,15 @@ start a new document.
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
   POLYLINE/VERTEX/SEQEND (3D polylines are projected onto the XY plane), SPLINE
   (a polyline through the fit points, or the control polygon when there are no
-  fit points) and LEADER (an open polyline). HATCH imports one closed boundary
-  path made of line, arc or polyline edges as a filled polygon; elliptical or
-  spline boundary edges skip the entity. Rotated or aligned linear, radial,
-  diameter and ordinate DIMENSION references are read. ARC and ELLIPSE stay
-  analytic; only polyline bulge arcs are flattened. MLEADER and angular
-  dimensions are reported as `dxf/unsupported-entity`, and every approximation
-  is reported with its own notice code. The import result carries `losses` as
-  `{ code, severity, detail }`.
+  fit points), LEADER (an open polyline), MLEADER (leader vertices as an open
+  polyline plus one TEXT entity per inline text line) and HATCH (one closed
+  boundary path made of line, arc or polyline edges as a filled polygon, while
+  elliptical or spline boundary edges skip the entity). Rotated or aligned
+  linear, radial, diameter and ordinate DIMENSION references are read. ARC and
+  ELLIPSE stay analytic; only polyline bulge arcs are flattened. Angular
+  dimensions are reported as `dxf/unsupported-entity`, MLEADER formatting is
+  removed, and every approximation is reported with its own notice code. The
+  import result carries `losses` as `{ code, severity, detail }`.
 
 ## Inspection
 
