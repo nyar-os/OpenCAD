@@ -17,7 +17,8 @@ delete entities, undo and redo,
 add, rename, merge, hide and lock layers, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
-table), save atomically, inspect units, layers,
+table), select entities with a rectangular window or crossing query, save
+atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
 the declared ASCII DXF subset (including SPLINE,
@@ -88,6 +89,9 @@ open-cad textstyle list plan.ocad
 open-cad textstyle add plan.ocad --name NOTES --font romans.shx --width-factor 0.8 --oblique 10
 open-cad textstyle update plan.ocad --name NOTES --to NOTES-1 --height 3
 open-cad textstyle delete plan.ocad --name NOTES-1
+
+open-cad select plan.ocad --box 0,0,100,100
+open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
 
 open-cad units convert plan.ocad --to inch
 
@@ -194,6 +198,10 @@ start a new document.
   style stores a primary font, fixed height, width factor and oblique angle;
   those variables round-trip through the DXF `STYLE` table. Big-font and
   generation flags, and a per-text style reference, are not modelled.
+- `select --box x1,y1,x2,y2` is a read-only query: `window` (the default) keeps
+  entities fully inside the rectangle, `--crossing` also keeps entities that
+  cross or touch it, and `--layer` narrows the result. Curves are tested against
+  sampled outlines; hidden and locked layers stay selectable.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
   `$INSUNITS`, the LAYER, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),

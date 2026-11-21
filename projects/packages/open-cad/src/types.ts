@@ -60,6 +60,7 @@ export type OperationName =
     | 'stats'
     | 'dimension-style'
     | 'text-style'
+    | 'select'
     | 'constraints'
     | 'kernel3d';
 
@@ -348,6 +349,29 @@ export interface Entity {
     readonly id: EntityId;
     readonly layer: LayerId;
     readonly kind: EntityKind;
+}
+
+/** How a rectangular selection treats entities that touch its boundary. */
+export type SelectionMode = 'window' | 'crossing';
+
+/** Arguments of `select()`. */
+export interface SelectionRequest {
+    /** Two opposite corners `[x, y]` of the selection rectangle. */
+    readonly window: readonly [Point, Point];
+    /** `window` keeps fully contained entities; `crossing` also keeps touching ones. Defaults to `window`. */
+    readonly mode?: SelectionMode;
+    /** Restrict the result to one layer id. */
+    readonly layer?: LayerId;
+}
+
+/** Result of `select()`. */
+export interface SelectionResult {
+    readonly revision: number;
+    readonly mode: SelectionMode;
+    readonly window: readonly [Point, Point];
+    readonly layer: string | null;
+    readonly count: number;
+    readonly ids: readonly EntityId[];
 }
 
 /** Arguments of `addLine()`. */

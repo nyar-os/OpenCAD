@@ -57,6 +57,8 @@ import type {
     MoveEntityRequest,
     SaveOptions,
     SaveReport,
+    SelectionRequest,
+    SelectionResult,
     TextStyle,
     TextStyleDeletion,
     TransformRequest,
@@ -500,6 +502,12 @@ export class DrawingDocument {
     stats(): DrawingStats {
         this.assertOpen();
         return service.stats(this.handle);
+    }
+
+    /** Selects entities with a rectangular window or crossing box. */
+    select(request: SelectionRequest): SelectionResult {
+        this.assertOpen();
+        return service.select(this.handle, request);
     }
 
     /** Converts every length between millimetres and inches. */

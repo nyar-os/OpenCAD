@@ -45,6 +45,7 @@ import type {
     OpenCADCapabilities,
     Point,
     SaveReport,
+    SelectionResult,
     TextStyle,
     TextStyleChange,
     TransformOperation,
@@ -170,6 +171,25 @@ const points = (options: ParsedOptions, key: string): Point[] | undefined => {
         parsed.push([x, y]);
     }
     return parsed.length > 0 ? parsed : undefined;
+};
+
+const box = (options: ParsedOptions, key: string): [Point, Point] | undefined => {
+    const raw = text(options, key);
+    if (raw === undefined) {
+        return undefined;
+    }
+    const parts = raw.split(',');
+    if (parts.length !== 4) {
+        return undefined;
+    }
+    const values = parts.map((part) => Number(part.trim()));
+    if (values.some((value) => !Number.isFinite(value))) {
+        return undefined;
+    }
+    return [
+        [values[0] as number, values[1] as number],
+        [values[2] as number, values[3] as number],
+    ];
 };
 
 function describeCapabilities(matrix: OpenCADCapabilities): string {
@@ -310,6 +330,11 @@ function describeTextStyles(styles: readonly TextStyle[]): string {
 
 function describeTextStyle(change: TextStyleChange): string {
     return `text style ${change.style.name} revision=${change.revision}`;
+}
+
+function describeSelection(result: SelectionResult): string {
+    const ids = result.ids.length > 0 ? result.ids.join(',') : 'none';
+    return `selected ${result.count} entities mode=${result.mode} layer=${result.layer ?? 'all'} ids=${ids}`;
 }
 
 function describeUnits(result: UnitsConversion): string {
@@ -1282,6 +1307,38 @@ cli
         try {
             const result = await guard(ctx, () => opened.stats());
             ctx.emitResult(result, describeStats(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('select', 'cli.cmd.select')
+    .option('--box <x1,y1,x2,y2>', 'cli.opt.box')
+    .option('--crossing', 'cli.opt.crossing')
+    .option('--layer <layer>', 'cli.opt.select-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const window = box(options, 'box');
+        if (window === undefined) {
+            ctx.fail('open-cad.cli.box-required', { message: '`--box x1,y1,x2,y2` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.select({
+                    window,
+                    mode: flag(options, 'crossing') ? 'crossing' : 'window',
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeSelection(result));
             return 0;
         } finally {
             opened.close();

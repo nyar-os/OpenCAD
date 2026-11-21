@@ -372,6 +372,15 @@ fn drawing_delete_text_style(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Selects entities with a rectangular window or crossing box.
+#[function]
+fn drawing_select(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_select(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity of an open drawing.
 #[function]
 fn drawing_move_entity(ctx: CallContext) -> Result<JsValue> {
@@ -762,6 +771,30 @@ fn call_update_text_style(handle: u64, request: &Value) -> std::result::Result<V
         oblique: optional_number(request, "oblique"),
     };
     open_cad_drawing::update_text_style(handle, &style, update).map_err(service_failure)
+}
+
+fn call_select(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let mode = match request.get("mode").and_then(Value::as_str).unwrap_or("window") {
+        "window" => open_cad_drawing::SelectionMode::Window,
+        "crossing" => open_cad_drawing::SelectionMode::Crossing,
+        other => return Err(format!("session/argument-invalid: `{other}` is not a selection mode; use `window` or `crossing`")),
+    };
+    let window = request
+        .get("window")
+        .and_then(Value::as_array)
+        .filter(|points| points.len() == 2)
+        .ok_or_else(|| "session/argument-invalid: `window` must be two [x, y] corners".to_string())?;
+    let corner = |value: &Value| -> std::result::Result<[f64; 2], String> {
+        let pair = value
+            .as_array()
+            .filter(|pair| pair.len() == 2)
+            .ok_or_else(|| "session/argument-invalid: every window corner needs two numbers".to_string())?;
+        let x = pair[0].as_f64().ok_or_else(|| "session/argument-invalid: every window corner needs two numbers".to_string())?;
+        let y = pair[1].as_f64().ok_or_else(|| "session/argument-invalid: every window corner needs two numbers".to_string())?;
+        Ok([x, y])
+    };
+    let layer = request.get("layer").and_then(Value::as_str);
+    open_cad_drawing::select(handle, mode, [corner(&window[0])?, corner(&window[1])?], layer).map_err(service_failure)
 }
 
 fn call_move_entity(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -1735,6 +1768,7 @@ register_module![
     drawing_add_text_style,
     drawing_update_text_style,
     drawing_delete_text_style,
+    drawing_select,
     drawing_merge_layer,
     drawing_convert_units,
     drawing_move_entity,

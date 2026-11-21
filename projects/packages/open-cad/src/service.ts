@@ -54,6 +54,8 @@ import type {
     OffsetResult,
     OpenCADCapabilities,
     SaveReport,
+    SelectionRequest,
+    SelectionResult,
     TextStyleChange,
     TextStyleDeletion,
     TextStyleList,
@@ -435,6 +437,16 @@ export function updateTextStyle(handle: number, request: UpdateTextStyleRequest)
 /** Removes one text style from an open drawing. */
 export function deleteTextStyle(handle: number, styleId: string): TextStyleDeletion {
     return decode<TextStyleDeletion>(() => binding('drawing.deleteTextStyle').drawing_delete_text_style(handle, styleId));
+}
+
+/** Selects entities with a rectangular window or crossing box. */
+export function select(handle: number, request: SelectionRequest): SelectionResult {
+    return decode<SelectionResult>(() =>
+        binding('drawing.select').drawing_select(
+            handle,
+            JSON.stringify({ window: request.window, mode: request.mode ?? 'window', layer: request.layer }),
+        ),
+    );
 }
 
 /** Converts one open drawing between millimetres and inches. */

@@ -346,6 +346,29 @@ test('text styles are read and written through the document', { skip: withAddon 
     }
 });
 
+test('selection returns window and crossing matches', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Selection' });
+        document.addLayer({ name: 'Walls' });
+        const first = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const second = document.addLine({ layer: 'Walls', from: [10, 10], to: [20, 20] });
+
+        const window = document.select({ window: [[-1, -1], [11, 1]] });
+        assert.equal(window.mode, 'window');
+        assert.deepEqual(window.ids, [first.id]);
+
+        const crossing = document.select({ window: [[9, -1], [11, 11]], mode: 'crossing' });
+        assert.deepEqual([...crossing.ids].sort(), [first.id, second.id].sort());
+
+        const walls = document.select({ window: [[9, -1], [11, 11]], mode: 'crossing', layer: 'Walls' });
+        assert.deepEqual(walls.ids, [second.id]);
+        assert.equal(walls.layer, 'Walls');
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('unit conversion scales lengths and round trips', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

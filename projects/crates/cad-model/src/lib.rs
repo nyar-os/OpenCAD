@@ -184,12 +184,13 @@ pub fn capabilities() -> Value {
                 "stats",
                 "dimension-style",
                 "text-style",
+                "select",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" | "dimension-style"
-                | "text-style" => "supported",
+                | "text-style" | "select" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -2572,6 +2573,178 @@ pub fn list_entities(handle: u64) -> Result<Value, ServiceError> {
     })
 }
 
+/// How a rectangular selection treats entities that touch its boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    /// Select only entities whose whole outline lies inside the rectangle.
+    Window,
+    /// Select entities inside the rectangle or crossing its boundary.
+    Crossing,
+}
+
+impl SelectionMode {
+    /// Stable lowercase name used in JSON and the CLI.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::Crossing => "crossing",
+        }
+    }
+}
+
+/// Selects entities with a rectangular window or crossing box.
+///
+/// A `window` selection keeps entities whose complete outline lies inside the
+/// rectangle; a `crossing` selection also keeps entities whose outline crosses
+/// its boundary. Curves are sampled at [`CURVE_STEP_DEGREES`], so a window test
+/// is exact to that step. `layer` restricts the result to one layer id. The
+/// query does not mutate the drawing and adds no history step; hidden and
+/// locked layers remain selectable.
+pub fn select(handle: u64, mode: SelectionMode, window: [[f64; 2]; 2], layer: Option<&str>) -> Result<Value, ServiceError> {
+    if !finite_point(window[0]) || !finite_point(window[1]) {
+        return Err(argument("the selection window needs two finite corners"));
+    }
+    let rect = SelectionRect::new(window[0], window[1]);
+    if rect.width() <= 0.0 && rect.height() <= 0.0 {
+        return Err(argument("the selection window needs a non-zero width or height"));
+    }
+    let layer = layer.map(str::trim).filter(|id| !id.is_empty());
+    store::read(handle, |session| {
+        if let Some(id) = layer
+            && session.drawing.layer(id).is_none()
+        {
+            return Err(ServiceError::new("object/not-found", format!("layer `{id}` does not exist")));
+        }
+        let ids = session
+            .drawing
+            .entities
+            .iter()
+            .filter(|entity| layer.is_none_or(|id| entity.layer == id))
+            .filter(|entity| entity_matches_selection(&entity.kind, mode, rect))
+            .map(|entity| entity.id.clone())
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "revision": session.drawing.revision,
+            "mode": mode.as_str(),
+            "window": window,
+            "layer": layer,
+            "count": ids.len(),
+            "ids": ids,
+        }))
+    })?
+}
+
+/// Axis-aligned rectangle normalised from two corners.
+#[derive(Debug, Clone, Copy)]
+struct SelectionRect {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+}
+
+impl SelectionRect {
+    fn new(a: [f64; 2], b: [f64; 2]) -> Self {
+        Self { min_x: a[0].min(b[0]), min_y: a[1].min(b[1]), max_x: a[0].max(b[0]), max_y: a[1].max(b[1]) }
+    }
+
+    fn width(&self) -> f64 {
+        self.max_x - self.min_x
+    }
+
+    fn height(&self) -> f64 {
+        self.max_y - self.min_y
+    }
+
+    fn contains(&self, point: [f64; 2]) -> bool {
+        point[0] >= self.min_x && point[0] <= self.max_x && point[1] >= self.min_y && point[1] <= self.max_y
+    }
+
+    fn corners(&self) -> [[f64; 2]; 4] {
+        [[self.min_x, self.min_y], [self.max_x, self.min_y], [self.max_x, self.max_y], [self.min_x, self.max_y]]
+    }
+}
+
+/// Whether one entity belongs to a selection rectangle.
+fn entity_matches_selection(kind: &EntityKind, mode: SelectionMode, rect: SelectionRect) -> bool {
+    let (points, closed) = entity_outline(kind);
+    if points.is_empty() {
+        return false;
+    }
+    match mode {
+        SelectionMode::Window => points.iter().all(|point| rect.contains(*point)),
+        SelectionMode::Crossing => points.iter().any(|point| rect.contains(*point)) || outline_crosses_rect(&points, closed, rect),
+    }
+}
+
+/// Outline of one entity, in drawing order, plus whether it closes back.
+fn entity_outline(kind: &EntityKind) -> (Vec<[f64; 2]>, bool) {
+    match kind {
+        EntityKind::Line { from, to } => (vec![*from, *to], false),
+        EntityKind::Circle { center, radius } => (sample_arc(*center, radius.abs(), 0.0, 360.0), false),
+        EntityKind::Arc { center, radius, start_angle, end_angle } => (sample_arc(*center, radius.abs(), *start_angle, *end_angle), false),
+        EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+            (sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle), false)
+        }
+        EntityKind::Point { at } => (vec![*at], false),
+        EntityKind::Polyline { points, closed } => (points.clone(), *closed),
+        EntityKind::Text { at, height, content } => {
+            let size = height.abs();
+            let width = size * 0.6 * content.chars().count() as f64;
+            (vec![*at, [at[0] + width, at[1]], [at[0] + width, at[1] + size], [at[0], at[1] + size]], true)
+        }
+        EntityKind::Dimension { from, to, offset, .. } => {
+            let (p1, p2) = offset_points(*from, *to, *offset);
+            (vec![*from, p1, p2, *to], false)
+        }
+        EntityKind::RadialDimension { center, radius, angle, offset, .. } => {
+            (vec![*center, radial_target(*center, *radius, *angle), radial_label(*center, *radius, *angle, *offset)], false)
+        }
+        EntityKind::OrdinateDimension { origin, feature, axis, offset, .. } => {
+            let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
+            (vec![*feature, guide, base, *origin], false)
+        }
+        EntityKind::Hatch { points, .. } => (points.clone(), true),
+    }
+}
+
+/// Whether any outline edge crosses one rectangle edge.
+fn outline_crosses_rect(points: &[[f64; 2]], closed: bool, rect: SelectionRect) -> bool {
+    let corners = rect.corners();
+    let mut edges = points.windows(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
+    if closed && points.len() >= 2 {
+        edges.push((points[points.len() - 1], points[0]));
+    }
+    edges.iter().any(|(from, to)| (0..4).any(|index| segments_intersect(*from, *to, corners[index], corners[(index + 1) % 4])))
+}
+
+/// Twice the signed area of the triangle `a, b, c`.
+fn orientation(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Whether two closed segments `a -> b` and `c -> d` intersect, touching included.
+fn segments_intersect(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
+    let o1 = orientation(a, b, c);
+    let o2 = orientation(a, b, d);
+    let o3 = orientation(c, d, a);
+    let o4 = orientation(c, d, b);
+    let opposite = |left: f64, right: f64| (left > 0.0 && right < 0.0) || (left < 0.0 && right > 0.0);
+    if opposite(o1, o2) && opposite(o3, o4) {
+        return true;
+    }
+    let zero = |value: f64| value.abs() < 1e-12;
+    (zero(o1) && on_segment(a, b, c))
+        || (zero(o2) && on_segment(a, b, d))
+        || (zero(o3) && on_segment(c, d, a))
+        || (zero(o4) && on_segment(c, d, b))
+}
+
+/// Whether a collinear point lies within the bounding box of a segment.
+fn on_segment(a: [f64; 2], b: [f64; 2], point: [f64; 2]) -> bool {
+    point[0] >= a[0].min(b[0]) && point[0] <= a[0].max(b[0]) && point[1] >= a[1].min(b[1]) && point[1] <= a[1].max(b[1])
+}
+
 /// Imports the declared ASCII DXF subset and returns `{ handle, drawing, ... }`.
 ///
 /// The reader keeps the HEADER `$INSUNITS` value and the LAYER table, expands
@@ -2663,9 +2836,20 @@ mod tests {
         for check in ["constraints", "references"] {
             assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
         }
-        for operation in
-            ["transform", "copy", "array", "explode", "offset", "fillet", "chamfer", "measure", "stats", "dimension-style", "text-style"]
-        {
+        for operation in [
+            "transform",
+            "copy",
+            "array",
+            "explode",
+            "offset",
+            "fillet",
+            "chamfer",
+            "measure",
+            "stats",
+            "dimension-style",
+            "text-style",
+            "select",
+        ] {
             assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
         }
         for operation in ["constraints", "kernel3d"] {
@@ -3160,6 +3344,44 @@ mod tests {
         assert_eq!(notes["height"], json!(3.0));
         assert_eq!(notes["widthFactor"], json!(0.75));
         assert_eq!(notes["oblique"], json!(10.0));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn selection_matches_window_and_crossing_rectangles() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "walls", None).expect("layer");
+        let first = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+        let second = add_line(handle, "walls", [10.0, 10.0], [20.0, 20.0]).expect("line");
+        add_circle(handle, DEFAULT_LAYER, [50.0, 50.0], 5.0).expect("circle");
+
+        let window = select(handle, SelectionMode::Window, [[-1.0, -1.0], [11.0, 1.0]], None).expect("window");
+        assert_eq!(window["mode"], json!("window"));
+        assert_eq!(window["count"], json!(1));
+        assert_eq!(window["ids"], json!([first["entity"]["id"]]));
+
+        let crossing = select(handle, SelectionMode::Crossing, [[9.0, -1.0], [11.0, 11.0]], None).expect("crossing");
+        assert_eq!(crossing["count"], json!(2), "{crossing}");
+        assert_eq!(crossing["ids"][0], first["entity"]["id"]);
+        assert_eq!(crossing["ids"][1], second["entity"]["id"]);
+
+        let walls = select(handle, SelectionMode::Crossing, [[9.0, -1.0], [11.0, 11.0]], Some("walls")).expect("layer filter");
+        assert_eq!(walls["count"], json!(1));
+        assert_eq!(walls["ids"][0], second["entity"]["id"]);
+        assert_eq!(walls["layer"], json!("walls"));
+
+        let circle = select(handle, SelectionMode::Crossing, [[44.0, 44.0], [56.0, 56.0]], None).expect("circle");
+        assert_eq!(circle["count"], json!(1));
+
+        assert_eq!(
+            select(handle, SelectionMode::Window, [[5.0, 5.0], [5.0, 5.0]], None).expect_err("degenerate").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            select(handle, SelectionMode::Window, [[0.0, 0.0], [1.0, 1.0]], Some("missing")).expect_err("missing layer").code,
+            "object/not-found"
+        );
         close(handle).expect("close");
     }
 

@@ -20,7 +20,9 @@ dimension styles (scale, arrowhead size, text height, extension length, origin
 offset and label precision) that can be listed, added, updated and removed and
 round-trip through the DXF `DIMSTYLE` table; named text styles (font, fixed
 height, width factor and oblique angle) round-trip through the DXF `STYLE`
-table and can be listed, added, updated and removed; a drawing converts
+table and can be listed, added, updated and removed; a rectangular window or
+crossing query returns the matching entity ids without adding a history step; a
+drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
 SVG, ASCII DXF, vector PDF, ASCII STL, Wavefront OBJ and STEP export work, and
@@ -68,6 +70,8 @@ open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
 open-cad stats plan.ocad
+open-cad select plan.ocad --box 0,0,100,100
+open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
 open-cad undo plan.ocad
 open-cad redo plan.ocad
 open-cad layer add plan.ocad --name Walls --color "#a4262c"
@@ -171,6 +175,9 @@ What this build does NOT do
 - Text styles keep only the primary font, fixed height, width factor and
   oblique angle. Big-font, generation-flag and per-text style references are
   not modelled.
+- Selection is a rectangular query. There is no interactive viewport, fence or
+  lasso selection, and curves are tested against their sampled outlines.
+  Locked and hidden layers stay selectable unless `--layer` narrows the query.
 - No bare layer deletion. `layer merge --from A --to B` moves every entity of
   `A` onto `B` and removes the now-empty `A` in one history step. A locked
   source or target layer refuses the merge.
@@ -181,8 +188,8 @@ What this build does NOT do
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
-  chamfer, measure, stats, dimension-style and text-style as supported while
-  constraint solving and a 3D kernel stay unsupported. A
+  chamfer, measure, stats, dimension-style, text-style and select as supported
+  while constraint solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
