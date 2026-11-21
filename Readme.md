@@ -13,7 +13,9 @@ Working document core. A `.ocad` project can be created, opened, edited, saved
 and reopened; lines, circles, arcs, ellipses, polylines, text, linear
 dimensions, radial/diameter dimensions, ordinate dimensions and hatches are real
 entities; transform (translate/rotate/scale/mirror), copy,
-rectangular/polar array, polyline explode, offset, fillet, chamfer and measure are supported; each handle
+rectangular/polar array, polyline explode, offset, fillet, chamfer and measure are supported;
+a selected entity or set of entities can be measured for its path length and
+enclosed area; each handle
 keeps a 32-snapshot undo/redo history;
 layers can be added, renamed, merged, hidden and locked; a drawing keeps named
 dimension styles (scale, arrowhead size, text height, extension length, origin
@@ -71,6 +73,7 @@ open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
+open-cad measure plan.ocad --ids entity-1,entity-2
 open-cad stats plan.ocad
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
@@ -196,8 +199,9 @@ What this build does NOT do
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
-  chamfer, measure, stats, dimension-style, text-style, text-search and select as
-  supported while constraint solving and a 3D kernel stay unsupported. A
+  chamfer, measure, measure-entity, stats, dimension-style, text-style,
+  text-search and select as supported while constraint solving and a 3D kernel
+  stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
@@ -220,5 +224,9 @@ What this build does NOT do
   approximate. Area covers closed polylines and hatches (shoelace), full
   circles and full ellipses; partial curves and self-intersecting polylines are
   not exact.
+- `measure --ids entity-1,entity-2` reports `length`, `area` and `closed` per
+  entity plus totals, using the same rules as the drawing-wide `measure`. A
+  closed polyline reports its perimeter as `length`; circle circumference is not
+  included, matching `measure`.
 - `stats` groups the same length and area by layer, adds per-layer entity counts
   and drawing-wide totals, so an audit can tell which layer owns the geometry.

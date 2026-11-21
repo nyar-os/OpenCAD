@@ -22,7 +22,7 @@
             "offset": "Offset a circle, arc or polyline into a new entity and save the file",
             "fillet": "Fillet two lines with a tangent arc, trimming both, and save the file",
             "chamfer": "Chamfer two lines with a bevel, trimming both, and save the file",
-            "measure": "Measure bounds, path length and enclosed area of a drawing file",
+            "measure": "Measure bounds, path length and enclosed area of a drawing file; pass --ids to measure single entities",
             "stats": "Report entity count, path length and enclosed area per layer",
             "select": "Select entities inside or crossing a rectangular window without changing the drawing",
             "add-line": "Add a line and save the file in place",

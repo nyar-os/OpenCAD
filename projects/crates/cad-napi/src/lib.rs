@@ -517,6 +517,16 @@ fn drawing_measure(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Measures the path length and enclosed area of one or more entities.
+#[function]
+fn drawing_measure_entities(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let ids: Vec<String> = serde_json::from_str(&raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::measure_entities(handle, &ids).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Imports the declared ASCII DXF subset into a new drawing.
 #[function]
 fn drawing_import_dxf(ctx: CallContext) -> Result<JsValue> {
@@ -1819,6 +1829,7 @@ register_module![
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,
+    drawing_measure_entities,
     drawing_stats,
     drawing_import_dxf,
     open_gui,

@@ -31,6 +31,7 @@ import type {
     Entity,
     EntityChange,
     EntityDeletion,
+    EntityMeasureResult,
     ExplodeResult,
     ExportFormat,
     HistoryResult,
@@ -281,6 +282,18 @@ function describeMeasure(result: MeasureResult): string {
         `  size: ${result.width} x ${result.height}`,
         `  length: ${result.length}`,
         `  area: ${result.area}`,
+    ].join('\n');
+}
+
+function describeEntityMeasure(result: EntityMeasureResult): string {
+    const entries = result.entities.map(
+        (entity) =>
+            `  ${entity.id} ${entity.kind} layer=${entity.layer}${entity.closed ? ' closed' : ''} length=${entity.length} area=${entity.area}`,
+    );
+    return [
+        `measured ${result.totals.entities} entities revision=${result.revision} units=${result.units}`,
+        ...entries,
+        `  total: length=${result.totals.length} area=${result.totals.area}`,
     ].join('\n');
 }
 
@@ -1292,6 +1305,7 @@ cli
 
 cli
     .command('measure', 'cli.cmd.measure')
+    .option('--ids <list>', 'cli.opt.ids')
     .option('--sheet <sheet>', 'cli.opt.sheet')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -1299,10 +1313,17 @@ cli
             ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
             return 2;
         }
+        const ids = idList(options, 'ids');
         const opened = await guard(ctx, () => app.open({ path: file }));
         try {
-            const result = await guard(ctx, () => opened.measure(text(options, 'sheet')));
-            ctx.emitResult(result, describeMeasure(result));
+            if (ids === undefined) {
+                const result = await guard(ctx, () => opened.measure(text(options, 'sheet')));
+                ctx.emitResult(result, describeMeasure(result));
+            }
+            else {
+                const result = await guard(ctx, () => opened.measureEntities(ids));
+                ctx.emitResult(result, describeEntityMeasure(result));
+            }
             return 0;
         } finally {
             opened.close();

@@ -39,6 +39,7 @@ import type {
     EntityDeletion,
     EntityId,
     EntityList,
+    EntityMeasureResult,
     DrawingStats,
     ExplodeResult,
     ExportOptions,
@@ -513,6 +514,12 @@ export class DrawingDocument {
     measure(sheet?: string): MeasureResult {
         this.assertOpen();
         return service.measure(this.handle, sheet);
+    }
+
+    /** Measures the path length and enclosed area of one or more entities. */
+    measureEntities(ids: readonly EntityId[]): EntityMeasureResult {
+        this.assertOpen();
+        return service.measureEntities(this.handle, ids);
     }
 
     /** Summarises entity count, path length and enclosed area per layer. */

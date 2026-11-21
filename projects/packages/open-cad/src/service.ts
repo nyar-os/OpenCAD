@@ -36,6 +36,7 @@ import type {
     EntityChange,
     EntityDeletion,
     EntityList,
+    EntityMeasureResult,
     ExplodeResult,
     ExportFormat,
     ExportReport,
@@ -568,6 +569,13 @@ export function offset(handle: number, request: OffsetRequest): OffsetResult {
 export function measure(handle: number, sheet?: string): MeasureResult {
     return decode<MeasureResult>(() =>
         sheet === undefined ? binding('drawing.measure').drawing_measure(handle) : binding('drawing.measure').drawing_measure(handle, sheet),
+    );
+}
+
+/** Measures the path length and enclosed area of one or more entities. */
+export function measureEntities(handle: number, ids: readonly string[]): EntityMeasureResult {
+    return decode<EntityMeasureResult>(() =>
+        binding('drawing.measureEntities').drawing_measure_entities(handle, JSON.stringify(ids)),
     );
 }
 

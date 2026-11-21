@@ -12,7 +12,7 @@ drawings, add lines, circles, arcs, ellipses, polylines, text, hatches, linear,
 radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline, fillet or chamfer two lines and
-measure, move, update and
+measure a drawing or selected entities, move, update and
 delete entities, undo and redo,
 add, rename, merge, hide and lock layers, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
@@ -70,6 +70,7 @@ open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
+open-cad measure plan.ocad --ids entity-1,entity-2
 open-cad stats plan.ocad
 
 open-cad undo plan.ocad
@@ -150,7 +151,10 @@ lines are refused with `session/argument-invalid`; other entity types with
 `object/unsupported`. `measure` reports bounds, width,
 height, entity count, path length and enclosed area: ellipse length is sampled at
 five-degree steps and area only covers closed polylines, full circles and full
-ellipses. `stats` applies the same rules per layer and adds per-layer entity
+ellipses. `measure --ids a,b` applies the same rules per entity, reports
+`length`, `area` and `closed` for each one plus totals, and refuses an unknown id
+with `object/not-found`; a closed polyline reports its perimeter as `length`.
+`stats` applies the same rules per layer and adds per-layer entity
 counts plus drawing-wide totals. The `empty-layer` inspection check is opt-in:
 `inspect --checks empty-layer` warns about each layer with no entities, and a
 default inspection run does not include it.

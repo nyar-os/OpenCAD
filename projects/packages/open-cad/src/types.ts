@@ -47,7 +47,8 @@ export type EntityKindName =
     | 'text'
     | 'dimension'
     | 'radial-dimension'
-    | 'ordinate-dimension';
+    | 'ordinate-dimension'
+    | 'hatch';
 
 /** Edit operations in the capability matrix. */
 export type OperationName =
@@ -57,6 +58,7 @@ export type OperationName =
     | 'explode'
     | 'offset'
     | 'measure'
+    | 'measure-entity'
     | 'stats'
     | 'dimension-style'
     | 'text-style'
@@ -647,6 +649,31 @@ export interface MeasureResult {
     readonly entities: number;
     readonly length: number;
     readonly area: number;
+}
+
+/** One entity measured by `measureEntities()`. */
+export interface EntityMeasurement {
+    readonly id: EntityId;
+    readonly layer: LayerId;
+    readonly kind: EntityKindName;
+    /** Whether the entity encloses an area, so `length` is its perimeter. */
+    readonly closed: boolean;
+    /** Path length, or perimeter for a closed entity. */
+    readonly length: number;
+    /** Enclosed area; zero for open curves and annotations. */
+    readonly area: number;
+}
+
+/** Result of `measureEntities()`. */
+export interface EntityMeasureResult {
+    readonly revision: number;
+    readonly units: 'mm' | 'inch';
+    readonly entities: readonly EntityMeasurement[];
+    readonly totals: {
+        readonly entities: number;
+        readonly length: number;
+        readonly area: number;
+    };
 }
 
 /** One layer's share of a drawing's statistics. */

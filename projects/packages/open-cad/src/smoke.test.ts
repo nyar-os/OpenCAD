@@ -524,6 +524,36 @@ test('fillet and chamfer trim two lines and append the corner entity', { skip: w
     }
 });
 
+test('entity measurement reports area and perimeter', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Measure entities' });
+        const square = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10], [0, 10]], closed: true });
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [3, 4] });
+
+        const measured = document.measureEntities([square.id, line.id]);
+        assert.equal(measured.totals.entities, 2);
+        assert.equal(measured.totals.area, 100);
+        assert.equal(measured.totals.length, 45);
+        assert.deepEqual(measured.entities[0], {
+            id: square.id,
+            layer: '0',
+            kind: 'polyline',
+            closed: true,
+            length: 40,
+            area: 100,
+        });
+        assert.equal(measured.entities[1]?.area, 0);
+        assert.throws(
+            () => document.measureEntities(['entity-9']),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

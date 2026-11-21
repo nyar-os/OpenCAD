@@ -181,6 +181,7 @@ pub fn capabilities() -> Value {
                 "fillet",
                 "chamfer",
                 "measure",
+                "measure-entity",
                 "stats",
                 "dimension-style",
                 "text-style",
@@ -190,8 +191,8 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "stats" | "dimension-style"
-                | "text-style" | "text-search" | "select" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity" | "stats"
+                | "dimension-style" | "text-style" | "text-search" | "select" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -1980,6 +1981,16 @@ fn curve_length(points: &[[f64; 2]]) -> f64 {
     points.windows(2).map(|pair| point_distance(pair[0], pair[1])).sum()
 }
 
+/// Whether an entity encloses an area, so its `length` is a perimeter.
+fn entity_closed(kind: &EntityKind) -> bool {
+    match kind {
+        EntityKind::Polyline { closed, .. } => *closed,
+        EntityKind::Hatch { .. } | EntityKind::Circle { .. } => true,
+        EntityKind::Ellipse { start_angle, end_angle, .. } => arc_sweep(*start_angle, *end_angle) >= 360.0 - 1e-9,
+        _ => false,
+    }
+}
+
 /// Path length and enclosed area one entity contributes to [`measure`] and
 /// [`stats`].
 fn entity_length_area(kind: &EntityKind) -> (f64, f64) {
@@ -2051,6 +2062,56 @@ pub fn measure(handle: u64, sheet: Option<String>) -> Result<Value, ServiceError
             "area": area,
         })
     })
+}
+
+/// Measures the path length and enclosed area of one or more entities.
+///
+/// Length and area use the same rules as [`measure`]: line segments, polyline
+/// edges (including the closing edge of a closed polyline), hatch boundaries and
+/// analytic arc lengths; ellipse length is sampled at five-degree steps. `area`
+/// covers closed polylines, hatches, full circles and full ellipses, so a closed
+/// polyline reports its perimeter as `length` and its enclosed area as `area`.
+/// Repeated ids are measured once. A missing id reports `object/not-found`.
+/// The response carries `{ revision, units, entities, totals }`, where each
+/// entity is `{ id, layer, kind, closed, length, area }`.
+pub fn measure_entities(handle: u64, ids: &[String]) -> Result<Value, ServiceError> {
+    if ids.is_empty() {
+        return Err(argument("pass at least one entity id to measure"));
+    }
+    store::read(handle, |session| -> Result<Value, ServiceError> {
+        let mut entries = Vec::new();
+        let mut total_length = 0.0;
+        let mut total_area = 0.0;
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            let entity = session
+                .drawing
+                .entities
+                .iter()
+                .find(|entity| &entity.id == id)
+                .ok_or_else(|| ServiceError::new("object/not-found", format!("entity `{id}` does not exist")))?;
+            let (length, area) = entity_length_area(&entity.kind);
+            total_length += length;
+            total_area += area;
+            entries.push(json!({
+                "id": entity.id,
+                "layer": entity.layer,
+                "kind": kind_name(&entity.kind),
+                "closed": entity_closed(&entity.kind),
+                "length": length,
+                "area": area,
+            }));
+        }
+        Ok(json!({
+            "revision": session.drawing.revision,
+            "units": session.drawing.units.as_str(),
+            "entities": entries,
+            "totals": { "entities": entries.len(), "length": total_length, "area": total_area },
+        }))
+    })?
 }
 
 /// Summarises entity count, path length and enclosed area per layer.
@@ -4627,6 +4688,29 @@ mod tests {
         assert_eq!(measured["entities"], json!(1));
         assert_eq!(measured["area"], json!(100.0));
         assert_eq!(measured["length"], json!(40.0));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn measure_entities_reports_closed_polyline_area_and_perimeter() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("square");
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [3.0, 4.0]).expect("line");
+
+        let measured =
+            measure_entities(handle, &["entity-1".to_string(), "entity-2".to_string(), "entity-1".to_string()]).expect("measure entities");
+        assert_eq!(measured["totals"], json!({ "entities": 2, "length": 45.0, "area": 100.0 }));
+        assert_eq!(measured["entities"][0]["kind"], json!("polyline"));
+        assert_eq!(measured["entities"][0]["closed"], json!(true));
+        assert_eq!(measured["entities"][0]["length"], json!(40.0));
+        assert_eq!(measured["entities"][0]["area"], json!(100.0));
+        assert_eq!(measured["entities"][1]["closed"], json!(false));
+        assert_eq!(measured["entities"][1]["length"], json!(5.0));
+        assert_eq!(measured["entities"][1]["area"], json!(0.0));
+
+        assert_eq!(measure_entities(handle, &[]).expect_err("empty ids").code, "session/argument-invalid");
+        assert_eq!(measure_entities(handle, &["entity-9".to_string()]).expect_err("unknown id").code, "object/not-found");
         close(handle).expect("close");
     }
 
