@@ -36,6 +36,8 @@ export interface NativeBinding {
     drawing_list_entities(handle: number): string;
     drawing_undo(handle: number): string;
     drawing_redo(handle: number): string;
+    drawing_properties(handle: number): string;
+    drawing_update_properties(handle: number, requestJson: string): string;
     drawing_add_layer(handle: number, requestJson: string): string;
     drawing_update_layer(handle: number, requestJson: string): string;
     drawing_list_dim_styles(handle: number): string;

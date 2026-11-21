@@ -29,9 +29,10 @@ mod schema;
 mod store;
 
 pub use schema::{
-    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, Entity, EntityGroup, EntityKind, Layer, OrdinateAxis,
-    TextStyle, Units, arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern, default_text_styles, ellipse_point, finite_point,
-    normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
+    CURVE_STEP_DEGREES, DEFAULT_LAYER, DIMENSION_LAYER, DimensionStyle, Drawing, DrawingProperties, Entity, EntityGroup, EntityKind, Layer,
+    OrdinateAxis, PROPERTY_VALUE_LIMIT, TextStyle, Units, arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern,
+    default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label,
+    radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -188,12 +189,13 @@ pub fn capabilities() -> Value {
                 "text-search",
                 "group",
                 "select",
+                "properties",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity" | "stats"
-                | "dimension-style" | "text-style" | "text-search" | "group" | "select" => "supported",
+                | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -356,6 +358,121 @@ fn history_report(session: &store::Session) -> Value {
         "drawing": summary,
         "canUndo": can_undo,
         "canRedo": can_redo,
+    })
+}
+
+/// Fields one drawing-properties update may change.
+///
+/// Every field is optional; `None` keeps the current value and an empty string
+/// clears it. `title` is stored apart from the other properties, so an empty
+/// title removes it.
+#[derive(Debug, Clone, Default)]
+pub struct PropertiesUpdate {
+    /// Drawing title; an empty value removes it.
+    pub title: Option<String>,
+    /// Person or team that produced the drawing.
+    pub author: Option<String>,
+    /// Free-form description of the drawing.
+    pub description: Option<String>,
+    /// Company or organisation the drawing belongs to.
+    pub company: Option<String>,
+    /// Project name.
+    pub project: Option<String>,
+    /// Keyword list, kept verbatim.
+    pub keywords: Option<String>,
+}
+
+/// Reads the title and descriptive properties of one drawing.
+///
+/// The response carries `{ revision, title, properties }`; the query does not
+/// change the drawing or add a history step.
+pub fn properties(handle: u64) -> Result<Value, ServiceError> {
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "title": session.drawing.title,
+            "properties": session.drawing.properties,
+        })
+    })
+}
+
+/// Validates and trims one property value.
+fn property_value(raw: &str, field: &str) -> Result<String, ServiceError> {
+    let value = raw.trim();
+    if value.chars().count() > PROPERTY_VALUE_LIMIT {
+        return Err(argument(format!("`{field}` is longer than {PROPERTY_VALUE_LIMIT} characters")));
+    }
+    Ok(value.to_string())
+}
+
+/// Updates the title and descriptive properties of one drawing.
+///
+/// Values are trimmed and an empty value clears the field. Nothing is written
+/// and no history step is added when every field is omitted. The response
+/// carries `{ revision, drawing, title, properties }`.
+pub fn update_properties(handle: u64, update: PropertiesUpdate) -> Result<Value, ServiceError> {
+    if update.title.is_none()
+        && update.author.is_none()
+        && update.description.is_none()
+        && update.company.is_none()
+        && update.project.is_none()
+        && update.keywords.is_none()
+    {
+        return Err(argument("pass at least one of `title`, `author`, `description`, `company`, `project` or `keywords`"));
+    }
+    let title = match &update.title {
+        Some(raw) => property_value(raw, "title")?,
+        None => String::new(),
+    };
+    let author = match &update.author {
+        Some(raw) => Some(property_value(raw, "author")?),
+        None => None,
+    };
+    let description = match &update.description {
+        Some(raw) => Some(property_value(raw, "description")?),
+        None => None,
+    };
+    let company = match &update.company {
+        Some(raw) => Some(property_value(raw, "company")?),
+        None => None,
+    };
+    let project = match &update.project {
+        Some(raw) => Some(property_value(raw, "project")?),
+        None => None,
+    };
+    let keywords = match &update.keywords {
+        Some(raw) => Some(property_value(raw, "keywords")?),
+        None => None,
+    };
+    store::edit(handle, |drawing| {
+        if update.title.is_some() {
+            drawing.title = if title.is_empty() { None } else { Some(title.clone()) };
+        }
+        if let Some(value) = author {
+            drawing.properties.author = value;
+        }
+        if let Some(value) = description {
+            drawing.properties.description = value;
+        }
+        if let Some(value) = company {
+            drawing.properties.company = value;
+        }
+        if let Some(value) = project {
+            drawing.properties.project = value;
+        }
+        if let Some(value) = keywords {
+            drawing.properties.keywords = value;
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "title": session.drawing.title,
+            "properties": session.drawing.properties,
+        })
     })
 }
 
@@ -3712,6 +3829,48 @@ mod tests {
         assert_eq!(notes["height"], json!(3.0));
         assert_eq!(notes["widthFactor"], json!(0.75));
         assert_eq!(notes["oblique"], json!(10.0));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn drawing_properties_are_read_and_written() {
+        let created = create(CreateRequest { title: Some("Site".to_string()), ..CreateRequest::default() }).expect("create");
+        let handle = handle_of(&created);
+        let initial = properties(handle).expect("properties");
+        assert_eq!(initial["title"], json!("Site"));
+        assert_eq!(initial["properties"]["author"], json!(""));
+
+        let updated = update_properties(
+            handle,
+            PropertiesUpdate {
+                title: Some("  Site plan  ".to_string()),
+                author: Some("Design team".to_string()),
+                company: Some("OpenCAD".to_string()),
+                project: Some("Harbour".to_string()),
+                ..PropertiesUpdate::default()
+            },
+        )
+        .expect("update");
+        assert_eq!(updated["title"], json!("Site plan"));
+        assert_eq!(updated["drawing"]["title"], json!("Site plan"));
+        assert_eq!(updated["drawing"]["properties"]["author"], json!("Design team"));
+        assert_eq!(updated["properties"]["company"], json!("OpenCAD"));
+        assert_eq!(updated["revision"], json!(2));
+
+        let cleared =
+            update_properties(handle, PropertiesUpdate { author: Some(String::new()), ..PropertiesUpdate::default() }).expect("clear");
+        assert_eq!(cleared["properties"]["author"], json!(""));
+        assert_eq!(cleared["properties"]["company"], json!("OpenCAD"));
+
+        let without =
+            update_properties(handle, PropertiesUpdate { title: Some(String::new()), ..PropertiesUpdate::default() }).expect("clear title");
+        assert_eq!(without["title"], Value::Null);
+
+        assert!(update_properties(handle, PropertiesUpdate::default()).is_err());
+        assert!(
+            update_properties(handle, PropertiesUpdate { author: Some("a".repeat(PROPERTY_VALUE_LIMIT + 1)), ..PropertiesUpdate::default() })
+                .is_err()
+        );
         close(handle).expect("close");
     }
 

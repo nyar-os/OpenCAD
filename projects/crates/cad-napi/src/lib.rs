@@ -265,6 +265,35 @@ fn drawing_redo(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Reads the title and descriptive properties of an open drawing.
+#[function]
+fn drawing_properties(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let result = open_cad_drawing::properties(handle).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Updates the title and descriptive properties of an open drawing.
+#[function]
+fn drawing_update_properties(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let field = |key: &str| request[key].as_str().map(str::to_string);
+    let result = open_cad_drawing::update_properties(
+        handle,
+        open_cad_drawing::PropertiesUpdate {
+            title: field("title"),
+            author: field("author"),
+            description: field("description"),
+            company: field("company"),
+            project: field("project"),
+            keywords: field("keywords"),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Adds a layer to an open drawing.
 #[function]
 fn drawing_add_layer(ctx: CallContext) -> Result<JsValue> {
@@ -1873,6 +1902,8 @@ register_module![
     drawing_list_entities,
     drawing_undo,
     drawing_redo,
+    drawing_properties,
+    drawing_update_properties,
     drawing_add_layer,
     drawing_update_layer,
     drawing_list_dim_styles,

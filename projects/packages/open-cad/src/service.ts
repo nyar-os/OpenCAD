@@ -34,6 +34,8 @@ import type {
     DimensionStyleDeletion,
     DimensionStyleList,
     Drawing,
+    DrawingPropertiesChange,
+    DrawingPropertiesResult,
     EntityChange,
     EntityDeletion,
     EntityGroup,
@@ -76,6 +78,7 @@ import type {
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdatePropertiesRequest,
     UpdateTextStyleRequest,
 } from './types.js';
 
@@ -320,6 +323,28 @@ export function deleteEntity(handle: number, entityId: string): EntityDeletion {
 /** Lists every entity of one open drawing. */
 export function listEntities(handle: number): EntityList {
     return decode<EntityList>(() => binding('drawing.listEntities').drawing_list_entities(handle));
+}
+
+/** Reads the title and descriptive properties of one open drawing. */
+export function properties(handle: number): DrawingPropertiesResult {
+    return decode<DrawingPropertiesResult>(() => binding('drawing.properties').drawing_properties(handle));
+}
+
+/** Updates the title and descriptive properties of one open drawing. */
+export function updateProperties(handle: number, request: UpdatePropertiesRequest): DrawingPropertiesChange {
+    return decode<DrawingPropertiesChange>(() =>
+        binding('drawing.updateProperties').drawing_update_properties(
+            handle,
+            JSON.stringify({
+                title: request.title,
+                author: request.author,
+                description: request.description,
+                company: request.company,
+                project: request.project,
+                keywords: request.keywords,
+            }),
+        ),
+    );
 }
 
 /** Restores the previous snapshot of one drawing. */

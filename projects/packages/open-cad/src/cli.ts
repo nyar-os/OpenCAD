@@ -1953,6 +1953,72 @@ textCommand
         }
     });
 
+const properties = cli.command('properties', 'cli.cmd.properties');
+
+properties.command('show', 'cli.cmd.properties-show').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+        return 2;
+    }
+    const opened = await guard(ctx, () => app.open({ path: file }));
+    try {
+        const result = { revision: opened.revision, title: opened.title, properties: opened.properties };
+        ctx.emitResult(
+            result,
+            [
+                `properties revision=${result.revision}`,
+                `  title: ${result.title ?? '(untitled)'}`,
+                `  author: ${result.properties.author}`,
+                `  company: ${result.properties.company}`,
+                `  project: ${result.properties.project}`,
+                `  description: ${result.properties.description}`,
+                `  keywords: ${result.properties.keywords}`,
+            ].join('\n'),
+        );
+        return 0;
+    } finally {
+        opened.close();
+    }
+});
+
+properties
+    .command('set', 'cli.cmd.properties-set')
+    .option('--title <title>', 'cli.opt.title')
+    .option('--author <text>', 'cli.opt.author')
+    .option('--description <text>', 'cli.opt.description')
+    .option('--company <text>', 'cli.opt.company')
+    .option('--project <text>', 'cli.opt.project')
+    .option('--keywords <text>', 'cli.opt.keywords')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const request = {
+            title: text(options, 'title'),
+            author: text(options, 'author'),
+            description: text(options, 'description'),
+            company: text(options, 'company'),
+            project: text(options, 'project'),
+            keywords: text(options, 'keywords'),
+        };
+        if (Object.values(request).every((value) => value === undefined)) {
+            ctx.fail('open-cad.cli.properties-required', { message: 'pass at least one property to set' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const updated = await guard(ctx, () => opened.updateProperties(request));
+            const change = { revision: opened.revision, drawing: opened.summary(), title: opened.title, properties: updated };
+            ctx.emitResult(change, `updated properties revision=${change.revision} title=${change.title ?? '(untitled)'}`);
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 const units = cli.command('units', 'cli.cmd.units');
 
 units

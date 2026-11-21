@@ -65,6 +65,7 @@ export type OperationName =
     | 'text-search'
     | 'group'
     | 'select'
+    | 'properties'
     | 'constraints'
     | 'kernel3d';
 
@@ -152,6 +153,46 @@ export interface LayerSummary {
     readonly entityCount: number;
 }
 
+/**
+ * Descriptive title-block properties of a drawing.
+ *
+ * An empty string means the field is not set. Changing these values never
+ * moves geometry or changes a layer.
+ */
+export interface DrawingProperties {
+    readonly author: string;
+    readonly description: string;
+    readonly company: string;
+    readonly project: string;
+    readonly keywords: string;
+}
+
+/** Result of `properties()`. */
+export interface DrawingPropertiesResult {
+    readonly revision: number;
+    readonly title: string | null;
+    readonly properties: DrawingProperties;
+}
+
+/** Arguments of `updateProperties()`. Omitted fields keep their value; an empty string clears one. */
+export interface UpdatePropertiesRequest {
+    /** Drawing title; an empty string removes it. */
+    readonly title?: string;
+    readonly author?: string;
+    readonly description?: string;
+    readonly company?: string;
+    readonly project?: string;
+    readonly keywords?: string;
+}
+
+/** Result of `updateProperties()`. */
+export interface DrawingPropertiesChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly title: string | null;
+    readonly properties: DrawingProperties;
+}
+
 /** One named dimension style; mirrors a DXF `DIMSTYLE` table entry. */
 export interface DimensionStyle {
     readonly id: string;
@@ -198,6 +239,8 @@ export interface Drawing {
     readonly textStyles: readonly TextStyle[];
     /** Number of named entity groups. */
     readonly groups: number;
+    /** Descriptive title-block properties. */
+    readonly properties: DrawingProperties;
     readonly entities: number;
     /** Whether the handle still has an earlier snapshot to restore. */
     readonly canUndo: boolean;

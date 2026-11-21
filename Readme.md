@@ -26,6 +26,8 @@ table and can be listed, added, updated and removed; a rectangular window or
 crossing query returns the matching entity ids without adding a history step;
 text content can be found and replaced in bulk (ASCII case-insensitive by
 default) in one history step; entities can be collected into named groups;
+drawing title-block properties (title, author, company, project, description and
+keywords) can be read and written;
 a drawing converts
 between millimetres and inches by scaling every length; inspection reports
 per-object findings;
@@ -98,6 +100,8 @@ open-cad group create plan.ocad --name Walls --ids entity-1,entity-2
 open-cad group add plan.ocad --name Walls --ids entity-3
 open-cad group remove plan.ocad --name Walls --ids entity-3
 open-cad group delete plan.ocad --name Walls
+open-cad properties show plan.ocad
+open-cad properties set plan.ocad --title "Harbour plan" --author "Design team" --company OpenCAD --project Harbour
 open-cad units convert plan.ocad --to inch
 open-cad entity list plan.ocad
 open-cad inspect plan.ocad --checks units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour
@@ -205,8 +209,8 @@ What this build does NOT do
   radial dimension, ordinate dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
   chamfer, measure, measure-entity, stats, dimension-style, text-style,
-  text-search, group and select as supported while constraint solving and a 3D
-  kernel stay unsupported. A
+  text-search, group, select and properties as supported while constraint
+  solving and a 3D kernel stay unsupported. A
   rectangular `array` of `rows * columns` cells creates that many minus one
   copies (the source stays in place); a polar array of `count` items does the
   same. `explode` replaces one polyline with independent line entities.
@@ -229,6 +233,10 @@ What this build does NOT do
   approximate. Area covers closed polylines and hatches (shoelace), full
   circles and full ellipses; partial curves and self-intersecting polylines are
   not exact.
+- Drawing properties are stored in the `.ocad` document only; the DXF header,
+  title-block geometry and sheet attributes are not written or read. Values are
+  trimmed, empty values clear a field, and each value is limited to 512
+  characters.
 - Entity groups are named membership lists stored in the `.ocad` document only;
   the DXF `GROUP` table is not read or written. Grouping never changes geometry,
   and deleting or exploding a member removes its id from every group.

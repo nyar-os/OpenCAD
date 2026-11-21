@@ -64,6 +64,9 @@
             "group-remove": "Remove entities from a group and save the file in place",
             "units": "Convert the lengths of an existing drawing file between millimetres and inches",
             "units-convert": "Scale every length and change the declared unit, then save the file in place",
+            "properties": "Read and edit the title and descriptive properties of an existing drawing file",
+            "properties-show": "Print the title, author, company, project, description and keywords",
+            "properties-set": "Update one or more drawing properties and save the file in place",
             "gui": "Open the OpenCAD Studio window"
         },
         "opt": {
@@ -146,7 +149,12 @@
             "fixed-height": "Fixed text cap height; 0 leaves the height to each text entity",
             "width-factor": "Horizontal text width factor; 1 is normal",
             "oblique": "Text oblique angle in degrees, -85 to 85",
-            "to-unit": "Unit to convert to: mm or inch"
+            "to-unit": "Unit to convert to: mm or inch",
+            "author": "Drawing author",
+            "description": "Free-form drawing description",
+            "company": "Company or organisation",
+            "project": "Project name",
+            "keywords": "Keyword list, kept verbatim"
         }
     }
 }

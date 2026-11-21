@@ -583,6 +583,31 @@ test('entity groups keep membership without changing geometry', { skip: withAddo
     }
 });
 
+test('drawing properties carry the title block', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Site plan' });
+        assert.equal(document.title, 'Site plan');
+        assert.equal(document.properties.author, '');
+
+        const updated = document.updateProperties({ author: ' Design team ', company: 'OpenCAD', project: 'Harbour' });
+        assert.equal(updated.author, 'Design team');
+        assert.equal(updated.company, 'OpenCAD');
+        assert.equal(document.properties.project, 'Harbour');
+        assert.equal(document.summary().properties.company, 'OpenCAD');
+
+        document.updateProperties({ title: 'Harbour plan' });
+        assert.equal(document.title, 'Harbour plan');
+        assert.throws(
+            () => document.updateProperties({}),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('stats and the empty-layer check summarise layers', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

@@ -19,7 +19,8 @@ dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
 table), find and replace text content in bulk, collect entities into named
 groups, select entities with a
-rectangular window or crossing query, save
+rectangular window or crossing query, read and write title-block properties
+(title, author, company, project, description and keywords), save
 atomically, inspect units, layers,
 geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
@@ -104,6 +105,9 @@ open-cad group delete plan.ocad --name Walls
 
 open-cad select plan.ocad --box 0,0,100,100
 open-cad select plan.ocad --box 0,0,100,100 --crossing --layer Walls
+
+open-cad properties show plan.ocad
+open-cad properties set plan.ocad --title "Harbour plan" --author "Design team" --company OpenCAD
 
 open-cad units convert plan.ocad --to inch
 
@@ -225,6 +229,10 @@ start a new document.
   style stores a primary font, fixed height, width factor and oblique angle;
   those variables round-trip through the DXF `STYLE` table. Big-font and
   generation flags, and a per-text style reference, are not modelled.
+- Drawing properties store the title-block metadata (title, author, company,
+  project, description and keywords) in the `.ocad` document. Values are
+  trimmed, an empty value clears the field and each value is limited to 512
+  characters; the DXF header and title-block geometry are not written.
 - Entity groups are unique by name and keep member ids in insertion order.
   Grouping is metadata: it never changes geometry, layers or entity revisions.
   A group may become empty after removals; deleting or exploding a member drops

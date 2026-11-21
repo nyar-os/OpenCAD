@@ -208,6 +208,47 @@ pub fn default_text_styles() -> Vec<TextStyle> {
     vec![TextStyle::standard()]
 }
 
+/// Descriptive properties of a drawing, kept beside the geometry.
+///
+/// These fields carry the values a title block reports (author, description,
+/// company, project and keywords) without changing any coordinate. An empty
+/// string means the field is not set.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DrawingProperties {
+    /// Person or team that produced the drawing.
+    pub author: String,
+    /// Free-form description of the drawing.
+    pub description: String,
+    /// Company or organisation the drawing belongs to.
+    pub company: String,
+    /// Project name.
+    pub project: String,
+    /// Keyword list, kept verbatim.
+    pub keywords: String,
+}
+
+/// Longest value a [`DrawingProperties`] field accepts.
+pub const PROPERTY_VALUE_LIMIT: usize = 512;
+
+impl DrawingProperties {
+    /// Validates the length bounds an opened document must keep.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("author", &self.author),
+            ("description", &self.description),
+            ("company", &self.company),
+            ("project", &self.project),
+            ("keywords", &self.keywords),
+        ] {
+            if value.chars().count() > PROPERTY_VALUE_LIMIT {
+                return Err(format!("drawing {name} is longer than {PROPERTY_VALUE_LIMIT} characters"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One named group of entities.
 ///
 /// Membership is metadata: grouping never changes geometry, layers or the
@@ -608,6 +649,9 @@ pub struct Drawing {
     /// Named entity groups.
     #[serde(default)]
     pub groups: Vec<EntityGroup>,
+    /// Descriptive title-block properties.
+    #[serde(default)]
+    pub properties: DrawingProperties,
     /// Flat entity list.
     pub entities: Vec<Entity>,
     /// Next numeric suffix used for a new entity identifier.
@@ -626,6 +670,7 @@ impl Drawing {
             dim_styles: default_dimension_styles(),
             text_styles: default_text_styles(),
             groups: Vec::new(),
+            properties: DrawingProperties::default(),
             entities: Vec::new(),
             next_entity: 1,
         }
@@ -667,6 +712,7 @@ impl Drawing {
             "dimStyles": self.dim_styles,
             "textStyles": self.text_styles,
             "groups": self.groups.len(),
+            "properties": self.properties,
             "entities": self.entities.len(),
         })
     }
@@ -716,6 +762,7 @@ impl Drawing {
                 return Err(format!("duplicate text style id `{}`", style.id));
             }
         }
+        self.properties.validate()?;
         let mut entity_ids = std::collections::HashSet::new();
         for entity in &self.entities {
             if entity.id.trim().is_empty() {

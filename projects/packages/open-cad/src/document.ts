@@ -36,6 +36,7 @@ import type {
     DimensionStyle,
     DimensionStyleDeletion,
     Drawing,
+    DrawingProperties,
     Entity,
     EntityDeletion,
     EntityGroup,
@@ -76,6 +77,7 @@ import type {
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
+    UpdatePropertiesRequest,
     UpdateTextStyleRequest,
 } from './types.js';
 
@@ -146,6 +148,11 @@ export class DrawingDocument {
         return this.state.units;
     }
 
+    /** Descriptive title-block properties. */
+    get properties(): DrawingProperties {
+        return this.state.properties;
+    }
+
     /** Layers in paint order. */
     get layers(): readonly LayerSummary[] {
         return this.state.layers;
@@ -205,6 +212,19 @@ export class DrawingDocument {
     /** Latest summary, also available under the `drawing` field name. */
     get drawing(): Drawing {
         return this.state;
+    }
+
+    /** Updates the title and descriptive properties and refreshes the summary. */
+    updateProperties(request: UpdatePropertiesRequest): DrawingProperties {
+        let properties: DrawingProperties | undefined;
+        this.edit(
+            (handle) => service.updateProperties(handle, request),
+            (result) => {
+                this.state = result.drawing;
+                properties = result.properties;
+            },
+        );
+        return properties as DrawingProperties;
     }
 
     /** Runs the requested checks against this document. */
