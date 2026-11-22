@@ -5310,6 +5310,41 @@ mod tests {
     }
 
     #[test]
+    fn svg_and_pdf_draw_layer_lineweight_and_dash_pattern() {
+        let dir = TempDir::new("stroke-style");
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_linetype(
+            handle,
+            LinetypeRequest { name: "DASHED".to_string(), description: Some("Dashed".to_string()), pattern: Some(vec![5.0, 2.0]) },
+        )
+        .expect("linetype");
+        update_layer(
+            handle,
+            DEFAULT_LAYER,
+            LayerUpdate { linetype: Some("DASHED".to_string()), lineweight: Some(0.8), ..LayerUpdate::default() },
+        )
+        .expect("layer");
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 0.0]).expect("line");
+
+        let svg_path = dir.path.join("plan.svg");
+        export(handle, "svg", &svg_path).expect("export svg");
+        let svg = fs::read_to_string(&svg_path).expect("read svg");
+        assert!(svg.contains(r#"stroke-width="0.8""#), "the layer lineweight is the SVG stroke width: {svg}");
+        assert!(svg.contains(r#"stroke-dasharray="5 2""#), "the line type becomes an SVG dash array: {svg}");
+
+        let pdf_path = dir.path.join("plan.pdf");
+        export(handle, "pdf", &pdf_path).expect("export pdf");
+        let pdf = fs::read_to_string(&pdf_path).expect("read pdf");
+        let widths = pdf.lines().filter_map(|line| line.strip_suffix(" w").and_then(|value| value.parse::<f64>().ok())).collect::<Vec<_>>();
+        assert!(
+            widths.iter().any(|width| (*width - 0.7).abs() > 1e-9),
+            "the PDF stroke width follows the layer lineweight instead of the default 0.7: {widths:?}"
+        );
+        close(handle).expect("close");
+    }
+
+    #[test]
     fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
         let created = create(CreateRequest::default()).expect("create");
         let handle = handle_of(&created);

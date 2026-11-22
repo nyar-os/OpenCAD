@@ -188,9 +188,54 @@ fn color_of(value: &str) -> Color {
 struct Projection<'a> {
     map: &'a dyn Fn([f64; 2]) -> FlatPoint,
     scale: f64,
+    /// Default outline width in flat-drawing units.
     stroke: f64,
+    /// Factor that converts a model length into flat-drawing units.
+    lineweight_scale: f64,
     label_offset: f64,
     label_size: f64,
+}
+
+/// Converts a layer lineweight in millimetres to drawing units.
+fn lineweight_units(units: Units, lineweight: f64) -> f64 {
+    match units {
+        Units::Mm => lineweight,
+        Units::Inch => lineweight / 25.4,
+    }
+}
+
+/// Reduces a line type dash pattern to the single dash/gap pair the shared
+/// vector scene carries.
+///
+/// A pattern with one entry repeats that entry as the gap, a longer pattern
+/// averages its dash entries and its gap entries. A zero-length dash or gap
+/// has no representation and the stroke stays solid.
+fn dash_pair(pattern: &[f64], scale: f64) -> Option<[f64; 2]> {
+    let dashes = pattern.iter().copied().filter(|dash| dash.is_finite() && *dash >= 0.0).collect::<Vec<_>>();
+    if dashes.is_empty() {
+        return None;
+    }
+    let even = dashes.iter().step_by(2).copied().collect::<Vec<_>>();
+    let odd = dashes.iter().skip(1).step_by(2).copied().collect::<Vec<_>>();
+    let on = even.iter().sum::<f64>() / even.len() as f64;
+    let off = if odd.is_empty() { on } else { odd.iter().sum::<f64>() / odd.len() as f64 };
+    if on <= 0.0 || off <= 0.0 {
+        return None;
+    }
+    Some([on * scale, off * scale])
+}
+
+/// Outline width and dash pair of one layer, in flat-drawing units.
+fn layer_stroke(drawing: &Drawing, layer: &crate::schema::Layer, projection: &Projection<'_>) -> (f64, Option<[f64; 2]>) {
+    let width = if layer.lineweight > 0.0 {
+        lineweight_units(drawing.units, layer.lineweight) * projection.lineweight_scale
+    }
+    else {
+        projection.stroke
+    };
+    let dash =
+        drawing.linetypes.iter().find(|line| line.id == layer.linetype).and_then(|line| dash_pair(&line.pattern, projection.lineweight_scale));
+    (width, dash)
 }
 
 fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>) -> FlatDrawing {
@@ -204,7 +249,9 @@ fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>)
             continue;
         }
         let color = color_of(&layer.color);
-        let stroke_style = Style::stroke(color, projection.stroke);
+        let (width, dash) = layer_stroke(drawing, layer, projection);
+        let mut stroke_style = Style::stroke(color, width);
+        stroke_style.dash = dash;
         let text_style = Style::fill(color);
         push_entity(&mut flat, entity, color, &stroke_style, &text_style, projection);
     }
@@ -337,7 +384,7 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
     let stroke = stroke_width(drawing.units);
     let map = |point: [f64; 2]| frame.map(point);
-    let projection = Projection { map: &map, scale: 1.0, stroke, label_offset: 1.0, label_size: stroke * 3.5 };
+    let projection = Projection { map: &map, scale: 1.0, stroke, lineweight_scale: 1.0, label_offset: 1.0, label_size: stroke * 3.5 };
     let flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
     let svg = flat.to_svg().unwrap_or_else(|_| {
         format!(
@@ -839,7 +886,7 @@ pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
     let offset_x = (PDF_PAGE_WIDTH - width * scale) / 2.0 - min_x * scale;
     let offset_y = (PDF_PAGE_HEIGHT - height * scale) / 2.0 - min_y * scale;
     let map = |point: [f64; 2]| FlatPoint::new(point[0] * scale + offset_x, PDF_PAGE_HEIGHT - (point[1] * scale + offset_y));
-    let projection = Projection { map: &map, scale, stroke: 0.7, label_offset: 1.75, label_size: 1.75 * scale };
+    let projection = Projection { map: &map, scale, stroke: 0.7, lineweight_scale: scale, label_offset: 1.75, label_size: 1.75 * scale };
     let flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
     let out = flat.to_pdf().map_or_else(|_| String::from("%PDF-1.7\n%%EOF\n"), |bytes| String::from_utf8_lossy(&bytes).into_owned());
 

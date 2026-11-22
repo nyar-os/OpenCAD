@@ -258,8 +258,13 @@ What this build does NOT do
 - Line types store a name, description and dash pattern and a drawing always
   keeps at least one. Layers carry a line type id and a lineweight in
   millimetres; both round-trip through the DXF `LTYPE` and LAYER tables
-  (lineweight as code 370). SVG and PDF ignore lineweight and dash patterns;
-  per-entity overrides are not modelled.
+  (lineweight as code 370). SVG strokes every layer at its lineweight and
+  reduces the line type's dash pattern to one dash/gap pair
+  (`stroke-dasharray`); a longer pattern averages its dash entries and its gap
+  entries, and a zero-length dash or gap keeps the stroke solid. PDF strokes at
+  the same lineweight but keeps lines solid because its scene backend has no
+  dash surface. A zero lineweight keeps the exporter default. Per-entity
+  overrides are not modelled.
 - Drawing properties are stored in the `.ocad` document only; the DXF header,
   title-block geometry and sheet attributes are not written or read. Values are
   trimmed, empty values clear a field, and each value is limited to 512

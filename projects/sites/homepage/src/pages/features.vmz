@@ -114,10 +114,12 @@
                     <span class="chip chip--available">partial</span>
                     <h3>Exchange</h3>
                     <p>
-                        SVG keeps layer colours and every entity. DXF is ASCII R12
+                        SVG keeps layer colours, lineweights and dash patterns
+                        and every entity. DXF is ASCII R12
                         with a HEADER, LAYER table and LINE/CIRCLE/TEXT entities,
                         plus a loss report. PDF is a minimal vector A4 landscape
-                        page. DXF import reads only the declared subset.
+                        page that honours layer lineweights. DXF import reads only
+                        the declared subset.
                     </p>
                 </article>
                 <article class="feature">
