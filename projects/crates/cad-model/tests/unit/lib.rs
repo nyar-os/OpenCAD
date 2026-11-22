@@ -949,6 +949,138 @@ fn snap_intersections_cover_line_circle_and_circle_circle() {
 }
 
 #[test]
+fn snap_intersections_cover_line_to_arc_pairs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let arc = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 180.0).expect("arc");
+    let line = add_line(handle, DEFAULT_LAYER, [-20.0, 5.0], [20.0, 5.0]).expect("line");
+    let ids = |values: &[&Value]| Some(values.iter().map(|value| value["entity"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+
+    let crossings =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&line, &arc]), ..SnapRequest::default() })
+            .expect("line arc");
+    let offset = (100.0_f64 - 25.0).sqrt();
+    assert_eq!(crossings["count"], json!(2));
+    assert!(snap_has_point(&crossings, [-offset, 5.0]));
+    assert!(snap_has_point(&crossings, [offset, 5.0]));
+
+    let below = add_line(handle, DEFAULT_LAYER, [-20.0, -5.0], [20.0, -5.0]).expect("lower line");
+    let outside =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&below, &arc]), ..SnapRequest::default() })
+            .expect("lower line arc");
+    assert_eq!(outside["count"], json!(0), "an arc only reports crossings inside its counter-clockwise sweep");
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_intersections_keep_arc_circle_crossings_inside_the_sweep() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let arc = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("arc");
+    let circle = add_circle(handle, DEFAULT_LAYER, [10.0, 0.0], 10.0).expect("circle");
+    let ids = |values: &[&Value]| Some(values.iter().map(|value| value["entity"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+
+    let crossings =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&arc, &circle]), ..SnapRequest::default() })
+            .expect("arc circle");
+    assert_eq!(crossings["count"], json!(1), "the lower crossing lies outside the quarter arc");
+    let height = (100.0_f64 - 25.0).sqrt();
+    assert!(snap_has_point(&crossings, [5.0, height]));
+    assert!(!snap_has_point(&crossings, [5.0, -height]));
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_intersections_cover_arc_to_arc_pairs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let first = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 180.0).expect("first arc");
+    let second = add_arc(handle, DEFAULT_LAYER, [10.0, 0.0], 10.0, 0.0, 180.0).expect("second arc");
+    let ids = |values: &[&Value]| Some(values.iter().map(|value| value["entity"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+
+    let crossings =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&first, &second]), ..SnapRequest::default() })
+            .expect("arc arc");
+    assert_eq!(crossings["count"], json!(1), "the lower crossing lies outside both upper arcs");
+    let height = (100.0_f64 - 25.0).sqrt();
+    assert!(snap_has_point(&crossings, [5.0, height]));
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_intersections_handle_arcs_that_cross_zero_degrees() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let arc = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 270.0, 90.0).expect("wrapping arc");
+    let vertical = add_line(handle, DEFAULT_LAYER, [5.0, -20.0], [5.0, 20.0]).expect("vertical line");
+    let horizontal = add_line(handle, DEFAULT_LAYER, [-20.0, 5.0], [20.0, 5.0]).expect("horizontal line");
+    let ids = |values: &[&Value]| Some(values.iter().map(|value| value["entity"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+    let offset = (100.0_f64 - 25.0).sqrt();
+
+    let both =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&vertical, &arc]), ..SnapRequest::default() })
+            .expect("vertical arc");
+    assert_eq!(both["count"], json!(2));
+    assert!(snap_has_point(&both, [5.0, offset]));
+    assert!(snap_has_point(&both, [5.0, -offset]));
+
+    let single =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&horizontal, &arc]), ..SnapRequest::default() })
+            .expect("horizontal arc");
+    assert_eq!(single["count"], json!(1), "the left crossing lies outside the sweep from 270 to 90 degrees");
+    assert!(snap_has_point(&single, [offset, 5.0]));
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_intersections_reject_arc_tangencies() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let arc = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 180.0).expect("arc");
+    let tangent_line = add_line(handle, DEFAULT_LAYER, [-5.0, 10.0], [5.0, 10.0]).expect("tangent line");
+    let tangent_circle = add_circle(handle, DEFAULT_LAYER, [20.0, 0.0], 10.0).expect("tangent circle");
+    let tangent_arc = add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 10.0, 180.0, 360.0).expect("tangent arc");
+    let ids = |values: &[&Value]| Some(values.iter().map(|value| value["entity"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+
+    for (label, other) in [("line", &tangent_line), ("circle", &tangent_circle), ("arc", &tangent_arc)] {
+        let result =
+            snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&arc, other]), ..SnapRequest::default() })
+                .expect(label);
+        assert_eq!(result["count"], json!(0), "a tangency with a {label} is not an intersection candidate");
+    }
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_intersections_with_arcs_sort_deterministically() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let line = add_line(handle, DEFAULT_LAYER, [-60.0, 0.0], [60.0, 0.0]).expect("line");
+    let left = add_arc(handle, DEFAULT_LAYER, [-20.0, 0.0], 10.0, 0.0, 180.0).expect("left arc");
+    let right = add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 10.0, 0.0, 180.0).expect("right arc");
+    let request = SnapRequest {
+        modes: vec!["intersection".to_string()],
+        point: Some([0.0, 0.0]),
+        ids: Some(vec![
+            line["entity"]["id"].as_str().unwrap().to_string(),
+            left["entity"]["id"].as_str().unwrap().to_string(),
+            right["entity"]["id"].as_str().unwrap().to_string(),
+        ]),
+        ..SnapRequest::default()
+    };
+
+    let ordered = snap_points(handle, request.clone()).expect("ordered");
+    assert_eq!(ordered["count"], json!(4));
+    let distances =
+        ordered["points"].as_array().expect("points").iter().map(|entry| entry["distance"].as_f64().expect("distance")).collect::<Vec<_>>();
+    assert!(distances.windows(2).all(|pair| pair[0] <= pair[1]), "candidates sort by distance: {distances:?}");
+
+    let again = snap_points(handle, request).expect("again");
+    assert_eq!(ordered["points"], again["points"]);
+    close(handle).expect("close");
+}
+
+#[test]
 fn snap_ordering_tolerance_and_defaults_stay_deterministic() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);

@@ -191,9 +191,10 @@ available without a sheet name.
   yields no candidate. On an arc only the contact points inside its
   counter-clockwise sweep remain. Lines, polylines, ellipses, splines, points,
   text, hatches and dimensions contribute none.
-- `intersection` covers bounded line-to-line, line-to-circle and
-  circle-to-circle pairs. Tangency, parallel lines, concentric circles and
-  separated pairs produce no candidate.
+- `intersection` covers bounded line-to-line, line-to-circle, circle-to-circle,
+  line-to-arc, arc-to-circle and arc-to-arc pairs. A crossing with an arc must
+  lie on the arc's counter-clockwise sweep. Tangency, parallel lines, concentric
+  circles and separated pairs produce no candidate.
 
 Candidates sort by distance to the probe point, then by entity id, then by mode,
 so equal-distance results are deterministic. A tolerance keeps only candidates
@@ -296,7 +297,7 @@ the same id for target and boundary reports `session/argument-invalid`.
 - Snap quadrants, nearest points and perpendicular points are analytic for
   lines, polylines, circles and arcs only, and tangent points for circles and
   arcs; ellipses and splines stay endpoint, midpoint and centre snaps.
-  Intersections cover lines and full circles, not arcs, ellipses or splines.
+  Intersections cover lines, full circles and arcs, not ellipses or splines.
 - `text find`/`replace` covers `TEXT` entities only, not text inside dimensions
   or hatches.
 - Named UCS entities are not modelled; the UCS is a coordinate query, not a

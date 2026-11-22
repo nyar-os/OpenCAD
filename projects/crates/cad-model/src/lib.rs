@@ -5061,6 +5061,25 @@ fn circle_geometry(kind: &EntityKind) -> Option<([f64; 2], f64)> {
     }
 }
 
+/// Circle geometry of an arc entity plus its counter-clockwise sweep, skipping
+/// a degenerate radius.
+fn arc_geometry(kind: &EntityKind) -> Option<(([f64; 2], f64), f64, f64)> {
+    match kind {
+        EntityKind::Arc { center, radius, start_angle, end_angle } if radius.abs() > 1e-12 => {
+            Some(((*center, radius.abs()), *start_angle, arc_sweep(*start_angle, *end_angle)))
+        }
+        _ => None,
+    }
+}
+
+/// Keeps only the points whose angle around `center` lies on the arc sweep.
+fn retain_on_arc(points: Vec<[f64; 2]>, center: [f64; 2], start_angle: f64, sweep: f64) -> Vec<[f64; 2]> {
+    points
+        .into_iter()
+        .filter(|point| angle_within_sweep(start_angle, sweep, (point[1] - center[1]).atan2(point[0] - center[0]).to_degrees()))
+        .collect()
+}
+
 /// Points where a bounded segment meets a full circle; a tangent gives none.
 fn segment_circle_intersections(from: [f64; 2], to: [f64; 2], center: [f64; 2], radius: f64) -> Vec<[f64; 2]> {
     let delta = [to[0] - from[0], to[1] - from[1]];
@@ -5110,7 +5129,9 @@ fn circle_circle_intersections(first: ([f64; 2], f64), second: ([f64; 2], f64)) 
 }
 
 /// Intersections one unordered entity pair contributes, in a deterministic
-/// order: line to line, line to circle, then circle to circle.
+/// order: line to line, line to circle, circle to circle, then the arc pairs.
+/// A crossing with an arc must lie on the counter-clockwise sweep of every arc
+/// it touches.
 fn pair_intersections(first: &EntityKind, second: &EntityKind) -> Vec<[f64; 2]> {
     let first_line = line_endpoints(first);
     let second_line = line_endpoints(second);
@@ -5125,6 +5146,31 @@ fn pair_intersections(first: &EntityKind, second: &EntityKind) -> Vec<[f64; 2]> 
     }
     if let (Some(first_circle), Some(second_circle)) = (circle_geometry(first), circle_geometry(second)) {
         return circle_circle_intersections(first_circle, second_circle);
+    }
+    if let (Some((from, to)), Some((second_circle, start_angle, sweep))) = (first_line, arc_geometry(second)) {
+        let (center, radius) = second_circle;
+        return retain_on_arc(segment_circle_intersections(from, to, center, radius), center, start_angle, sweep);
+    }
+    if let (Some((first_circle, start_angle, sweep)), Some((from, to))) = (arc_geometry(first), second_line) {
+        let (center, radius) = first_circle;
+        return retain_on_arc(segment_circle_intersections(from, to, center, radius), center, start_angle, sweep);
+    }
+    if let (Some((first_circle, start_angle, sweep)), Some(second_circle)) = (arc_geometry(first), circle_geometry(second)) {
+        let (center, _) = first_circle;
+        return retain_on_arc(circle_circle_intersections(first_circle, second_circle), center, start_angle, sweep);
+    }
+    if let (Some(first_circle), Some((second_circle, start_angle, sweep))) = (circle_geometry(first), arc_geometry(second)) {
+        let (center, _) = second_circle;
+        return retain_on_arc(circle_circle_intersections(first_circle, second_circle), center, start_angle, sweep);
+    }
+    if let (Some((first_circle, first_start, first_sweep)), Some((second_circle, second_start, second_sweep))) =
+        (arc_geometry(first), arc_geometry(second))
+    {
+        let (first_center, _) = first_circle;
+        let (second_center, _) = second_circle;
+        let points = circle_circle_intersections(first_circle, second_circle);
+        let on_first = retain_on_arc(points, first_center, first_start, first_sweep);
+        return retain_on_arc(on_first, second_center, second_start, second_sweep);
     }
     Vec::new()
 }

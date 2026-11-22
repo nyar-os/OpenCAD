@@ -330,8 +330,9 @@ start a new document.
 - `snap --near x,y` is a read-only query over `endpoint`, `midpoint`, `center`
   and `intersection` candidates. `--modes` narrows the kinds, `--tolerance`
   keeps only candidates within that distance of `--near`, and `--layer`/`--ids`
-  narrow the entities. Intersections are computed between two straight lines
-  only; candidates are sorted by distance and capped at 1000.
+  narrow the entities. Intersections cover lines, full circles and bounded arcs
+  (line-line, line-circle, line-arc, circle-circle, circle-arc and arc-arc);
+  candidates are sorted by distance and capped at 1000.
 - `open-cad import` builds a new drawing from the declared ASCII DXF subset:
   `$INSUNITS`, the LAYER, LTYPE, STYLE and DIMSTYLE tables, BLOCKS/INSERT expansion, and LINE, CIRCLE, ARC,
   ELLIPSE, POINT, TEXT, LWPOLYLINE (bulge sampled as arcs),
