@@ -84,6 +84,7 @@ export interface NativeBinding {
     drawing_array(handle: number, requestJson: string): string;
     drawing_explode(handle: number, entityId: string): string;
     drawing_offset(handle: number, requestJson: string): string;
+    drawing_offset_by_side(handle: number, requestJson: string): string;
     drawing_fillet(handle: number, requestJson: string): string;
     drawing_chamfer(handle: number, requestJson: string): string;
     drawing_measure(handle: number, sheet?: string): string;

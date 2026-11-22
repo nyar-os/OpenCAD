@@ -662,6 +662,79 @@ test('offset copies circle and polyline geometry as new entities', { skip: withA
     }
 });
 
+test('offsetBySide creates a new entity with side-aware geometry', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Offset by side' });
+        const circle = document.addCircle({ layer: '0', center: [0, 0], radius: 10 });
+        const grown = document.offsetBySide({ entityId: circle.id, distance: 2, side: 'outside' });
+        assert.equal(grown.source, circle.id);
+        assert.equal(grown.side, 'outside');
+        assert.equal(grown.distance, 2);
+        assert.equal(grown.entity.kind.type, 'circle');
+        assert.notEqual(grown.entity.id, circle.id);
+        if (grown.entity.kind.type === 'circle') {
+            assert.equal(grown.entity.kind.radius, 12);
+        }
+
+        const shrunk = document.offsetBySide({ entityId: circle.id, distance: 4, side: 'inside' });
+        if (shrunk.entity.kind.type === 'circle') {
+            assert.equal(shrunk.entity.kind.radius, 6);
+        }
+
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const left = document.offsetBySide({ entityId: line.id, distance: 2, side: 'left' });
+        assert.deepEqual(left.entity.kind, { type: 'line', from: [0, 2], to: [10, 2] });
+        const right = document.offsetBySide({ entityId: line.id, distance: 3, side: 'right' });
+        assert.deepEqual(right.entity.kind, { type: 'line', from: [0, -3], to: [10, -3] });
+        const signed = document.offset({ entityId: line.id, distance: 2 });
+        assert.deepEqual(signed.entity.kind, left.entity.kind, 'signed and side offsets agree');
+        assert.deepEqual(document.listEntities().find((entity) => entity.id === line.id)?.kind, {
+            type: 'line',
+            from: [0, 0],
+            to: [10, 0],
+        });
+
+        const polyline = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10]], closed: false });
+        const moved = document.offsetBySide({ entityId: polyline.id, distance: 1, side: 'left' });
+        if (moved.entity.kind.type === 'polyline') {
+            assert.deepEqual(moved.entity.kind.points, [[0, 1], [9, 1], [9, 10]]);
+        }
+
+        await assert.rejects(
+            async () => document.offsetBySide({ entityId: circle.id, distance: 20, side: 'inside' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'offset/invalid-distance',
+        );
+        await assert.rejects(
+            async () => document.offsetBySide({ entityId: circle.id, distance: -1, side: 'outside' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'offset/invalid-distance',
+        );
+        await assert.rejects(
+            async () => document.offsetBySide({ entityId: circle.id, distance: 1, side: 'left' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'offset/invalid-side',
+        );
+
+        const sharp = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [0, 0.1]], closed: false });
+        await assert.rejects(
+            async () => document.offsetBySide({ entityId: sharp.id, distance: 1, side: 'left' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'offset/miter-limit',
+        );
+
+        const text = document.addText({ layer: '0', at: [0, 0], height: 2, content: 'note' });
+        await assert.rejects(
+            async () => document.offsetBySide({ entityId: text.id, distance: 1, side: 'left' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'offset/unsupported-entity',
+        );
+        await assert.rejects(
+            async () => document.offsetBySide({ entityId: 'entity-404', distance: 1, side: 'left' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'offset/not-found',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('fillet and chamfer trim two lines and append the corner entity', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

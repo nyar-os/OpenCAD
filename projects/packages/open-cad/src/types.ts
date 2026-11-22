@@ -945,7 +945,7 @@ export interface ExplodeResult {
 /** Arguments of `offset()`. */
 export interface OffsetRequest {
     readonly entityId: EntityId;
-    /** Positive grows a circle or arc and offsets a polyline or line left; negative shrinks or offsets right. */
+    /** Signed distance: positive grows a circle/arc and offsets left, negative shrinks or offsets right. */
     readonly distance: number;
 }
 
@@ -960,6 +960,31 @@ export interface OffsetResult {
     readonly drawing: Drawing;
     readonly entity: Entity;
     readonly source: EntityId;
+}
+
+/** Direction an offset moves relative to its source entity. */
+export type OffsetSide = 'left' | 'right' | 'outside' | 'inside';
+
+/** Arguments of `offsetBySide()`. `distance` must be positive. */
+export interface OffsetBySideRequest {
+    readonly entityId: EntityId;
+    /** Positive, finite offset distance in drawing units. */
+    readonly distance: number;
+    /**
+     * `left` or `right` for a line or polyline, measured along its travel
+     * direction; `outside` or `inside` for a circle or arc.
+     */
+    readonly side: OffsetSide;
+}
+
+/** Result of `offsetBySide()`. */
+export interface OffsetBySideResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly source: EntityId;
+    readonly side: OffsetSide;
+    readonly distance: number;
 }
 
 /** Result of `fillet()` or `chamfer()`. Both source lines are trimmed. */

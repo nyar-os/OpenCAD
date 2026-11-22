@@ -80,6 +80,8 @@ import type {
     MoveEntityRequest,
     OffsetRequest,
     OffsetResult,
+    OffsetBySideRequest,
+    OffsetBySideResult,
     OpenCADCapabilities,
     Point,
     PointMeasurement,
@@ -877,6 +879,16 @@ export function explode(handle: number, entityId: string): ExplodeResult {
 export function offset(handle: number, request: OffsetRequest): OffsetResult {
     return decode<OffsetResult>(() =>
         binding('drawing.offset').drawing_offset(handle, JSON.stringify({ entityId: request.entityId, distance: request.distance })),
+    );
+}
+
+/** Offsets a circle, arc, polyline or line by an explicit side. */
+export function offsetBySide(handle: number, request: OffsetBySideRequest): OffsetBySideResult {
+    return decode<OffsetBySideResult>(() =>
+        binding('drawing.offsetBySide').drawing_offset_by_side(
+            handle,
+            JSON.stringify({ entityId: request.entityId, distance: request.distance, side: request.side }),
+        ),
     );
 }
 

@@ -2054,6 +2054,87 @@ pub fn explode(handle: u64, entity: &str) -> Result<Value, ServiceError> {
     })
 }
 
+/// Direction an [`offset`] moves away from its source entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffsetSide {
+    /// Offset to the left of the travel direction (lines and polylines).
+    Left,
+    /// Offset to the right of the travel direction (lines and polylines).
+    Right,
+    /// Increase the radius (circles and arcs).
+    Outside,
+    /// Decrease the radius (circles and arcs).
+    Inside,
+}
+
+impl OffsetSide {
+    /// Parses `left`, `right`, `outside` or `inside`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "outside" => Some(Self::Outside),
+            "inside" => Some(Self::Inside),
+            _ => None,
+        }
+    }
+
+    /// Stable lowercase name used in JSON and the CLI.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Outside => "outside",
+            Self::Inside => "inside",
+        }
+    }
+}
+
+/// Largest allowed ratio between a miter length and the offset distance.
+const OFFSET_MITER_LIMIT: f64 = 4.0;
+
+fn miter_limit() -> ServiceError {
+    ServiceError::new("offset/miter-limit", "a polyline corner needs a miter longer than 4 times the offset distance")
+}
+
+fn invalid_side(entity: &str, kind: &str) -> ServiceError {
+    let sides = if kind == "line" || kind == "polyline" { "`left` or `right`" } else { "`outside` or `inside`" };
+    ServiceError::new("offset/invalid-side", format!("entity `{entity}` is a {kind}; use {sides}"))
+}
+
+fn linear_offset(entity: &str, distance: f64, side: OffsetSide, kind: &str) -> Result<f64, ServiceError> {
+    match side {
+        OffsetSide::Left => Ok(distance),
+        OffsetSide::Right => Ok(-distance),
+        _ => Err(invalid_side(entity, kind)),
+    }
+}
+
+fn radial_offset(entity: &str, radius: f64, distance: f64, side: OffsetSide, kind: &str) -> Result<f64, ServiceError> {
+    let delta = match side {
+        OffsetSide::Outside => distance,
+        OffsetSide::Inside => -distance,
+        _ => return Err(invalid_side(entity, kind)),
+    };
+    let offset_radius = radius + delta;
+    if !offset_radius.is_finite() || offset_radius <= 0.0 {
+        return Err(ServiceError::new(
+            "offset/invalid-distance",
+            format!("offsetting {kind} `{entity}` by {distance} leaves a non-positive radius"),
+        ));
+    }
+    Ok(clean_zero(offset_radius))
+}
+
+/// Normalises `-0` to `0` so exported values never carry a negative zero.
+fn clean_zero(value: f64) -> f64 {
+    if value == 0.0 { 0.0 } else { value }
+}
+
+fn clean_point(point: [f64; 2]) -> [f64; 2] {
+    [clean_zero(point[0]), clean_zero(point[1])]
+}
+
 /// Offsets a circle, arc, polyline or straight line into a new entity on the
 /// same layer.
 ///
@@ -2118,6 +2199,90 @@ pub fn offset(handle: u64, entity_id: &str, distance: f64) -> Result<Value, Serv
             "drawing": session.summary(),
             "entity": created,
             "source": entity_id,
+        })
+    })
+}
+
+/// Offsets a circle, arc, polyline or straight line by an explicit side.
+///
+/// `distance` must be positive and finite. `side` is `left` or `right` for a
+/// line and polyline, measured along the travel direction, and `outside` or
+/// `inside` for a circle and arc, which change only the radius. A line becomes
+/// an equal-length parallel line; a polyline offsets each segment and joins
+/// consecutive segments with a miter, refusing a corner whose miter exceeds
+/// four times `distance` with `offset/miter-limit`. Ellipse, spline, text,
+/// point, hatch and dimension entities report `offset/unsupported-entity`; an
+/// unknown id reports `offset/not-found`; a radius at or below zero and a
+/// non-finite result report `offset/invalid-distance`; a side that does not
+/// match the entity kind reports `offset/invalid-side`. A locked layer reports
+/// `drawing/layer-locked`. The source entity is not changed; the response
+/// carries `{ revision, drawing, entity, source, side, distance }`.
+pub fn offset_by_side(handle: u64, entity_id: &str, distance: f64, side: OffsetSide) -> Result<Value, ServiceError> {
+    if !distance.is_finite() || distance <= 0.0 {
+        return Err(ServiceError::new("offset/invalid-distance", "`distance` must be a positive finite number"));
+    }
+    let created = store::edit(handle, |drawing| {
+        let index = drawing
+            .entities
+            .iter()
+            .position(|candidate| candidate.id == entity_id)
+            .ok_or_else(|| ServiceError::new("offset/not-found", format!("entity `{entity_id}` does not exist")))?;
+        let source = drawing.entities[index].clone();
+        if let Some(error) = locked_layer(drawing, &source.layer) {
+            return Err(error);
+        }
+        let kind = match &source.kind {
+            EntityKind::Circle { center, radius } => {
+                EntityKind::Circle { center: clean_point(*center), radius: radial_offset(entity_id, *radius, distance, side, "circle")? }
+            }
+            EntityKind::Arc { center, radius, start_angle, end_angle } => EntityKind::Arc {
+                center: clean_point(*center),
+                radius: radial_offset(entity_id, *radius, distance, side, "arc")?,
+                start_angle: clean_zero(*start_angle),
+                end_angle: clean_zero(*end_angle),
+            },
+            EntityKind::Polyline { points, closed } => {
+                let signed = linear_offset(entity_id, distance, side, "polyline")?;
+                EntityKind::Polyline { points: offset_polyline_with(points, *closed, signed, true)?, closed: *closed }
+            }
+            EntityKind::Line { from, to } => {
+                if side != OffsetSide::Left && side != OffsetSide::Right {
+                    return Err(invalid_side(entity_id, "line"));
+                }
+                let normal =
+                    segment_normal(*from, *to).ok_or_else(|| argument(format!("line `{entity_id}` has zero length and cannot be offset")))?;
+                let signed = if side == OffsetSide::Left { distance } else { -distance };
+                let shifted =
+                    [[from[0] + normal[0] * signed, from[1] + normal[1] * signed], [to[0] + normal[0] * signed, to[1] + normal[1] * signed]];
+                if !finite_point(shifted[0]) || !finite_point(shifted[1]) {
+                    return Err(ServiceError::new(
+                        "offset/invalid-distance",
+                        format!("offsetting line `{entity_id}` produces a non-finite point"),
+                    ));
+                }
+                EntityKind::Line { from: clean_point(shifted[0]), to: clean_point(shifted[1]) }
+            }
+            other => {
+                return Err(ServiceError::new(
+                    "offset/unsupported-entity",
+                    format!("entity `{entity_id}` is a {} and cannot be offset", kind_name(other)),
+                ));
+            }
+        };
+        let id = drawing.take_entity_id();
+        let entity = Entity { id, layer: source.layer.clone(), kind };
+        drawing.entities.push(entity.clone());
+        drawing.revision += 1;
+        Ok(entity)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": created,
+            "source": entity_id,
+            "side": side.as_str(),
+            "distance": distance,
         })
     })
 }
@@ -2372,6 +2537,10 @@ fn segment_normal(from: [f64; 2], to: [f64; 2]) -> Option<[f64; 2]> {
 }
 
 fn offset_polyline(points: &[[f64; 2]], closed: bool, distance: f64) -> Result<Vec<[f64; 2]>, ServiceError> {
+    offset_polyline_with(points, closed, distance, false)
+}
+
+fn offset_polyline_with(points: &[[f64; 2]], closed: bool, distance: f64, reject_long_miter: bool) -> Result<Vec<[f64; 2]>, ServiceError> {
     if points.len() < 2 {
         return Err(argument("a polyline needs at least 2 vertices to offset"));
     }
@@ -2387,14 +2556,20 @@ fn offset_polyline(points: &[[f64; 2]], closed: bool, distance: f64) -> Result<V
             .ok_or_else(|| argument("a polyline with a zero-length closing segment cannot be offset"))?;
         normals.push(closing);
     }
-    let mut moved = offset_vertices(unique, &normals, closed, distance)?;
+    let mut moved = offset_vertices(unique, &normals, closed, distance, reject_long_miter)?;
     if repeated {
         moved.push(moved[0]);
     }
     Ok(moved)
 }
 
-fn offset_vertices(points: &[[f64; 2]], normals: &[[f64; 2]], closed: bool, distance: f64) -> Result<Vec<[f64; 2]>, ServiceError> {
+fn offset_vertices(
+    points: &[[f64; 2]],
+    normals: &[[f64; 2]],
+    closed: bool,
+    distance: f64,
+    reject_long_miter: bool,
+) -> Result<Vec<[f64; 2]>, ServiceError> {
     let mut moved = Vec::with_capacity(points.len());
     for (index, point) in points.iter().enumerate() {
         let previous = if index > 0 {
@@ -2411,7 +2586,19 @@ fn offset_vertices(points: &[[f64; 2]], normals: &[[f64; 2]], closed: bool, dist
             (Some(a), Some(b)) => {
                 let sum = [a[0] + b[0], a[1] + b[1]];
                 let denominator = 1.0 + a[0] * b[0] + a[1] * b[1];
-                if denominator.abs() < 1e-9 || (sum[0] * sum[0] + sum[1] * sum[1]).sqrt() < 1e-9 {
+                let sum_length = (sum[0] * sum[0] + sum[1] * sum[1]).sqrt();
+                if reject_long_miter {
+                    if denominator <= 1e-12 || !denominator.is_finite() {
+                        return Err(miter_limit());
+                    }
+                    let ratio = sum_length / denominator;
+                    if !ratio.is_finite() || ratio > OFFSET_MITER_LIMIT {
+                        return Err(miter_limit());
+                    }
+                    let factor = distance / denominator;
+                    [sum[0] * factor, sum[1] * factor]
+                }
+                else if denominator.abs() < 1e-9 || sum_length < 1e-9 {
                     [a[0] * distance, a[1] * distance]
                 }
                 else {
@@ -2424,9 +2611,14 @@ fn offset_vertices(points: &[[f64; 2]], normals: &[[f64; 2]], closed: bool, dist
         };
         let moved_point = [point[0] + displacement[0], point[1] + displacement[1]];
         if !finite_point(moved_point) {
-            return Err(argument("the offset produces a non-finite vertex"));
+            return Err(if reject_long_miter {
+                ServiceError::new("offset/invalid-distance", "the offset produces a non-finite vertex")
+            }
+            else {
+                argument("the offset produces a non-finite vertex")
+            });
         }
-        moved.push(moved_point);
+        moved.push(if reject_long_miter { clean_point(moved_point) } else { moved_point });
     }
     Ok(moved)
 }

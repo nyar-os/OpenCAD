@@ -3139,6 +3139,161 @@ fn offset_refuses_a_locked_layer() {
 }
 
 #[test]
+fn offset_by_side_changes_only_the_radius_of_circles_and_arcs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 10.0).expect("circle");
+
+    let grown = offset_by_side(handle, "entity-1", 2.0, OffsetSide::Outside).expect("offset the circle outward");
+    assert_eq!(grown["entity"]["kind"]["radius"], json!(12.0));
+    assert_eq!(grown["entity"]["kind"]["center"], json!([5.0, 0.0]));
+    assert_eq!(grown["entity"]["id"], json!("entity-2"));
+    assert_eq!(grown["entity"]["layer"], json!(DEFAULT_LAYER));
+    assert_eq!(grown["side"], json!("outside"));
+    assert_eq!(grown["distance"], json!(2.0));
+
+    let shrunk = offset_by_side(handle, "entity-1", 4.0, OffsetSide::Inside).expect("offset the circle inward");
+    assert_eq!(shrunk["entity"]["kind"]["radius"], json!(6.0));
+    assert_eq!(shrunk["entity"]["id"], json!("entity-3"));
+    assert_eq!(offset_by_side(handle, "entity-1", 10.0, OffsetSide::Inside).expect_err("collapsing radius").code, "offset/invalid-distance");
+    assert_eq!(offset_by_side(handle, "entity-1", 0.0, OffsetSide::Outside).expect_err("zero distance").code, "offset/invalid-distance");
+    assert_eq!(offset_by_side(handle, "entity-1", -1.0, OffsetSide::Outside).expect_err("negative distance").code, "offset/invalid-distance");
+    assert_eq!(offset_by_side(handle, "entity-1", f64::NAN, OffsetSide::Outside).expect_err("nan distance").code, "offset/invalid-distance");
+    assert_eq!(offset_by_side(handle, "entity-1", 1.0, OffsetSide::Left).expect_err("linear side on a circle").code, "offset/invalid-side");
+
+    add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
+    let arc = offset_by_side(handle, "entity-4", 1.0, OffsetSide::Outside).expect("offset the arc");
+    assert_eq!(arc["entity"]["kind"]["radius"], json!(6.0));
+    assert_eq!(arc["entity"]["kind"]["center"], json!([20.0, 0.0]));
+    assert_eq!(arc["entity"]["kind"]["start_angle"], json!(0.0));
+    assert_eq!(arc["entity"]["kind"]["end_angle"], json!(90.0));
+
+    let inset = offset_by_side(handle, "entity-4", 2.0, OffsetSide::Inside).expect("shrink the arc");
+    assert_eq!(inset["entity"]["kind"]["radius"], json!(3.0));
+    assert_eq!(inset["entity"]["kind"]["start_angle"], json!(0.0));
+    assert_eq!(inset["entity"]["kind"]["end_angle"], json!(90.0));
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Circle { center: [5.0, 0.0], radius: 10.0 });
+    assert_eq!(drawing.entities[3].kind, EntityKind::Arc { center: [20.0, 0.0], radius: 5.0, start_angle: 0.0, end_angle: 90.0 });
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_by_side_moves_lines_and_polylines_perpendicular_to_their_direction() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let left = offset_by_side(handle, "entity-1", 2.0, OffsetSide::Left).expect("offset the line left");
+    assert_eq!(left["entity"]["kind"]["from"], json!([0.0, 2.0]));
+    assert_eq!(left["entity"]["kind"]["to"], json!([10.0, 2.0]));
+    let right = offset_by_side(handle, "entity-1", 3.0, OffsetSide::Right).expect("offset the line right");
+    assert_eq!(right["entity"]["kind"]["from"], json!([0.0, -3.0]));
+    assert_eq!(right["entity"]["kind"]["to"], json!([10.0, -3.0]));
+    assert_eq!(offset_by_side(handle, "entity-1", 1.0, OffsetSide::Outside).expect_err("radial side on a line").code, "offset/invalid-side");
+
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("open polyline");
+    let moved = offset_by_side(handle, "entity-4", 1.0, OffsetSide::Left).expect("offset the open polyline");
+    assert_eq!(moved["entity"]["kind"]["points"], json!([[0.0, 1.0], [9.0, 1.0], [9.0, 10.0]]));
+
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed polyline");
+    let inset = offset_by_side(handle, "entity-6", 1.0, OffsetSide::Left).expect("offset the closed polyline inward");
+    assert_eq!(inset["entity"]["kind"]["points"], json!([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]));
+    assert_eq!(inset["entity"]["kind"]["closed"], json!(true));
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_by_side_refuses_a_miter_beyond_four_times_the_distance() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [0.0, 0.1]], false).expect("sharp polyline");
+    assert_eq!(offset_by_side(handle, "entity-1", 1.0, OffsetSide::Left).expect_err("sharp miter").code, "offset/miter-limit");
+
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [0.0, -10.0]], false).expect("right angle");
+    offset_by_side(handle, "entity-2", 1.0, OffsetSide::Left).expect("a right angle fits under the limit");
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_by_side_reports_unknown_and_unsupported_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+    add_ellipse(handle, DEFAULT_LAYER, [0.0, 0.0], 8.0, 3.0, 0.0, 0.0, 360.0).expect("ellipse");
+    add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 2.0], [8.0, 0.0]], false).expect("spline");
+    add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], 2.0, None).expect("dimension");
+
+    for id in ["entity-1", "entity-2", "entity-3", "entity-4"] {
+        assert_eq!(offset_by_side(handle, id, 1.0, OffsetSide::Left).expect_err("unsupported").code, "offset/unsupported-entity");
+    }
+    assert_eq!(offset_by_side(handle, "entity-404", 1.0, OffsetSide::Left).expect_err("missing").code, "offset/not-found");
+    assert_eq!(drawing_of(handle).entities.len(), 4);
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_by_side_is_deterministic_and_survives_save_and_reopen() {
+    let dir = TempDir::new("offset-side-round-trip");
+    let path = dir.path.join("offset.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let first = offset_by_side(handle, "entity-1", 2.0, OffsetSide::Left).expect("first offset");
+    assert_eq!(first["entity"]["id"], json!("entity-2"));
+    let second = offset_by_side(handle, "entity-1", 2.0, OffsetSide::Left).expect("second offset");
+    assert_eq!(second["entity"]["id"], json!("entity-3"), "ids are deterministic and never reused");
+
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    assert_eq!(drawing.entities.len(), 3);
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [0.0, 2.0], to: [10.0, 2.0] });
+    assert_eq!(drawing.entities[2].kind, EntityKind::Line { from: [0.0, 2.0], to: [10.0, 2.0] });
+    close(reopened).expect("close reopened");
+
+    let again = create(CreateRequest::default()).expect("create again");
+    let again_handle = handle_of(&again);
+    add_line(again_handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line again");
+    let repeated = offset_by_side(again_handle, "entity-1", 2.0, OffsetSide::Left).expect("offset again");
+    assert_eq!(repeated["entity"]["id"], json!("entity-2"), "the same input yields the same id");
+    close(again_handle).expect("close again");
+}
+
+#[test]
+fn signed_and_side_offsets_agree() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 10.0).expect("circle");
+    add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("open polyline");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed polyline");
+
+    let cases = [
+        ("entity-1", 2.0, OffsetSide::Left),
+        ("entity-1", -3.0, OffsetSide::Right),
+        ("entity-2", 4.0, OffsetSide::Outside),
+        ("entity-2", -4.0, OffsetSide::Inside),
+        ("entity-3", 1.0, OffsetSide::Outside),
+        ("entity-3", -1.0, OffsetSide::Inside),
+        ("entity-4", 1.0, OffsetSide::Left),
+        ("entity-4", -1.0, OffsetSide::Right),
+        ("entity-5", 1.0, OffsetSide::Left),
+        ("entity-5", -1.0, OffsetSide::Right),
+    ];
+    for (id, distance, side) in cases {
+        let signed = offset(handle, id, distance).expect("signed offset");
+        let by_side = offset_by_side(handle, id, distance.abs(), side).expect("side offset");
+        assert_eq!(signed["entity"]["kind"], by_side["entity"]["kind"], "{id} with {side:?}");
+        assert_eq!(signed["entity"]["layer"], by_side["entity"]["layer"], "{id} with {side:?}");
+    }
+    close(handle).expect("close");
+}
+
+#[test]
 fn fillet_trims_two_lines_and_adds_a_tangent_arc() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);

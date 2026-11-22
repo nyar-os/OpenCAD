@@ -27,8 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, LayoutRequest, LayoutUpdate, MirrorAxis, OrdinateAxis, ServiceError,
-    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
+    ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -776,6 +776,23 @@ fn drawing_offset(ctx: CallContext) -> Result<JsValue> {
         request.get("entityId").and_then(Value::as_str).ok_or_else(|| Error::new("session/argument-invalid: `entityId` is required"))?;
     let distance = request_number(&request, "distance").map_err(Error::new)?;
     let result = open_cad_drawing::offset(handle, entity, distance).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Offsets a circle, arc, polyline or line by an explicit side.
+#[function]
+fn drawing_offset_by_side(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let entity =
+        request.get("entityId").and_then(Value::as_str).ok_or_else(|| Error::new("session/argument-invalid: `entityId` is required"))?;
+    let distance = request_number(&request, "distance").map_err(Error::new)?;
+    let side = request
+        .get("side")
+        .and_then(Value::as_str)
+        .and_then(OffsetSide::parse)
+        .ok_or_else(|| Error::new("offset/invalid-side: `side` must be left, right, outside or inside"))?;
+    let result = open_cad_drawing::offset_by_side(handle, entity, distance, side).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -1939,6 +1956,31 @@ impl IpcHandler for StudioIpcHandler {
                     Err(error) => failure(id, "offsetError", service_failure(error)),
                 }
             }
+            "drawing.offsetBySide" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "offsetError", "an offset request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                let entity = value
+                    .get("entityId")
+                    .or_else(|| value.get("entity"))
+                    .or_else(|| request.get("entityId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let Some(distance) = request.get("distance").and_then(Value::as_f64)
+                else {
+                    return failure(id, "offsetError", "an offset request needs a numeric `distance`".to_string());
+                };
+                let Some(side) = request.get("side").and_then(Value::as_str).and_then(OffsetSide::parse)
+                else {
+                    return failure(id, "offsetError", "an offset request needs a `side` of left, right, outside or inside".to_string());
+                };
+                match open_cad_drawing::offset_by_side(handle, entity, distance, side) {
+                    Ok(result) => reply(id, "offsetResult", result),
+                    Err(error) => failure(id, "offsetError", service_failure(error)),
+                }
+            }
             "drawing.fillet" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -2332,6 +2374,7 @@ register_module![
     drawing_array,
     drawing_explode,
     drawing_offset,
+    drawing_offset_by_side,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

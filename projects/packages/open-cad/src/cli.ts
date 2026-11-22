@@ -47,7 +47,9 @@ import type {
     Linetype,
     LinetypeChange,
     MeasureResult,
+    OffsetBySideResult,
     OffsetResult,
+    OffsetSide,
     OpenCADCapabilities,
     Point,
     PointMeasurement,
@@ -296,6 +298,10 @@ function describeExplode(result: ExplodeResult): string {
 
 function describeOffset(result: OffsetResult): string {
     return `offset ${result.source} into ${result.entity.id} revision=${result.revision}`;
+}
+
+function describeOffsetBySide(result: OffsetBySideResult): string {
+    return `offset ${result.source} ${result.side} by ${result.distance} into ${result.entity.id} revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1665,6 +1671,7 @@ cli
     .command('offset', 'cli.cmd.offset')
     .option('--id <entity>', 'cli.opt.id')
     .option('--distance <number>', 'cli.opt.distance')
+    .option('--side <side>', 'cli.opt.offset-side', { enum: ['left', 'right', 'outside', 'inside'] })
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
         if (file === undefined) {
@@ -1673,14 +1680,21 @@ cli
         }
         const id = text(options, 'id');
         const distance = number(options, 'distance');
+        const side = text(options, 'side') as OffsetSide | undefined;
         if (id === undefined || distance === undefined) {
             ctx.fail('open-cad.cli.offset-required', { message: '`--id <entity>` and `--distance <number>` are required' });
             return 2;
         }
         const opened = await guard(ctx, () => app.open({ path: file }));
         try {
-            const result = await guard(ctx, () => opened.offset({ entityId: id, distance }));
-            ctx.emitResult(result, describeOffset(result));
+            if (side === undefined) {
+                const result = await guard(ctx, () => opened.offset({ entityId: id, distance }));
+                ctx.emitResult(result, describeOffset(result));
+            }
+            else {
+                const result = await guard(ctx, () => opened.offsetBySide({ entityId: id, distance, side }));
+                ctx.emitResult(result, describeOffsetBySide(result));
+            }
             return 0;
         } finally {
             opened.close();

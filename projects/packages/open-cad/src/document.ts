@@ -75,6 +75,8 @@ import type {
     LinetypeDeletion,
     OffsetRequest,
     OffsetResult,
+    OffsetBySideRequest,
+    OffsetBySideResult,
     MeasureResult,
     Point,
     PointMeasurement,
@@ -737,6 +739,17 @@ export class DrawingDocument {
     /** Offsets a circle, arc, polyline or line into a new entity on the same layer. */
     offset(request: OffsetRequest): OffsetResult {
         return this.edit((handle) => service.offset(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Offsets a circle, arc, polyline or line by an explicit side. `side` is
+     * `left`/`right` for a line or polyline and `outside`/`inside` for a circle
+     * or arc; `distance` must be positive.
+     */
+    offsetBySide(request: OffsetBySideRequest): OffsetBySideResult {
+        return this.edit((handle) => service.offsetBySide(handle, request), (result) => {
             this.state = result.drawing;
         });
     }
