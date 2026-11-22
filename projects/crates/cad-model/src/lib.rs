@@ -4490,12 +4490,13 @@ fn on_segment(a: [f64; 2], b: [f64; 2], point: [f64; 2]) -> bool {
 }
 
 /// Snap modes [`snap_points`] accepts.
-pub const SNAP_MODES: &[&str] = &["endpoint", "midpoint", "center", "quadrant", "nearest", "intersection", "perpendicular"];
+pub const SNAP_MODES: &[&str] = &["endpoint", "midpoint", "center", "quadrant", "nearest", "intersection", "perpendicular", "tangent"];
 
 /// Modes an empty request selects.
 ///
-/// `quadrant`, `nearest` and `perpendicular` are opt-in, so a query that names no
-/// modes keeps the candidates it reported before those modes existed.
+/// `quadrant`, `nearest`, `perpendicular` and `tangent` are opt-in, so a query
+/// that names no modes keeps the candidates it reported before those modes
+/// existed.
 pub const SNAP_DEFAULT_MODES: &[&str] = &["endpoint", "midpoint", "center", "intersection"];
 
 /// Most snap candidates one query returns.
@@ -4670,6 +4671,46 @@ fn arc_perpendicular(center: [f64; 2], radius: f64, start_angle: f64, sweep: f64
         .collect()
 }
 
+/// Directions, in degrees, of the tangent contact points from `probe` to a full
+/// circle. A probe outside gives the two directions at `C -> P` plus and minus
+/// `acos(r / d)`, a probe on the circle gives that one direction, and a probe
+/// inside the circle or at its centre gives none.
+fn circle_tangent_angles(center: [f64; 2], radius: f64, probe: [f64; 2]) -> Vec<f64> {
+    if radius <= 1e-12 {
+        return Vec::new();
+    }
+    let offset = [probe[0] - center[0], probe[1] - center[1]];
+    let distance = offset[0].hypot(offset[1]);
+    if distance < 1e-12 {
+        return Vec::new();
+    }
+    let scale = distance.max(radius);
+    if distance < radius - 1e-9 * scale {
+        return Vec::new();
+    }
+    let base = offset[1].atan2(offset[0]).to_degrees();
+    if distance <= radius + 1e-9 * scale {
+        return vec![base];
+    }
+    let spread = (radius / distance).clamp(-1.0, 1.0).acos().to_degrees();
+    vec![base + spread, base - spread]
+}
+
+/// Tangent points from `probe` to a full circle.
+fn circle_tangent(center: [f64; 2], radius: f64, probe: [f64; 2]) -> Vec<[f64; 2]> {
+    circle_tangent_angles(center, radius, probe).into_iter().map(|angle| arc_point(center, radius, angle)).collect()
+}
+
+/// Tangent points from `probe` to an arc: the circle contact points whose angle
+/// lies on the counter-clockwise sweep.
+fn arc_tangent(center: [f64; 2], radius: f64, start_angle: f64, sweep: f64, probe: [f64; 2]) -> Vec<[f64; 2]> {
+    circle_tangent_angles(center, radius, probe)
+        .into_iter()
+        .filter(|angle| angle_within_sweep(start_angle, sweep, *angle))
+        .map(|angle| arc_point(center, radius, angle))
+        .collect()
+}
+
 /// Circle geometry of an entity, skipping a degenerate radius.
 fn circle_geometry(kind: &EntityKind) -> Option<([f64; 2], f64)> {
     match kind {
@@ -4746,8 +4787,8 @@ fn pair_intersections(first: &EntityKind, second: &EntityKind) -> Vec<[f64; 2]> 
     Vec::new()
 }
 
-/// Collects the endpoints, midpoints, centres, quadrant points, nearest points
-/// and perpendicular points one entity contributes.
+/// Collects the endpoints, midpoints, centres, quadrant points, nearest points,
+/// perpendicular points and tangent points one entity contributes.
 fn entity_snap_points(entity: &Entity, modes: &[&str], probe: Option<[f64; 2]>, out: &mut Vec<SnapCandidate>) {
     let endpoint = modes.contains(&"endpoint");
     let midpoint = modes.contains(&"midpoint");
@@ -4755,6 +4796,7 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], probe: Option<[f64; 2]>, 
     let quadrant = modes.contains(&"quadrant");
     let nearest = modes.contains(&"nearest");
     let perpendicular = modes.contains(&"perpendicular");
+    let tangent = modes.contains(&"tangent");
     match &entity.kind {
         EntityKind::Line { from, to } => {
             if endpoint {
@@ -4795,6 +4837,11 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], probe: Option<[f64; 2]>, 
                     push_snap(out, "perpendicular", &entity.id, point);
                 }
             }
+            if tangent && let Some(probe) = probe {
+                for point in circle_tangent(*at, radius, probe) {
+                    push_snap(out, "tangent", &entity.id, point);
+                }
+            }
         }
         EntityKind::Arc { center: at, radius, start_angle, end_angle } => {
             let sweep = arc_sweep(*start_angle, *end_angle);
@@ -4825,6 +4872,11 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], probe: Option<[f64; 2]>, 
             if perpendicular && let Some(probe) = probe {
                 for point in arc_perpendicular(*at, radius, *start_angle, sweep, probe) {
                     push_snap(out, "perpendicular", &entity.id, point);
+                }
+            }
+            if tangent && let Some(probe) = probe {
+                for point in arc_tangent(*at, radius, *start_angle, sweep, probe) {
+                    push_snap(out, "tangent", &entity.id, point);
                 }
             }
         }
@@ -4929,11 +4981,12 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], probe: Option<[f64; 2]>, 
 /// Computes snap candidates without changing the drawing.
 ///
 /// Modes are `endpoint`, `midpoint`, `center`, `quadrant`, `nearest`,
-/// `intersection` and `perpendicular`. An empty list selects `endpoint`,
-/// `midpoint`, `center` and `intersection`, the modes that predate `quadrant`,
-/// `nearest` and `perpendicular`. `point` sorts candidates by distance and
-/// `tolerance` keeps only candidates within that distance; a tolerance without a
-/// point is refused, and so is `nearest` or `perpendicular` without a point.
+/// `intersection`, `perpendicular` and `tangent`. An empty list selects
+/// `endpoint`, `midpoint`, `center` and `intersection`, the modes that predate
+/// `quadrant`, `nearest`, `perpendicular` and `tangent`. `point` sorts
+/// candidates by distance and `tolerance` keeps only candidates within that
+/// distance; a tolerance without a point is refused, and so is `nearest`,
+/// `perpendicular` or `tangent` without a point.
 /// `ids` and `layer` narrow the entity set, and an unknown id or layer reports
 /// `object/not-found`. The response carries
 /// `{ revision, modes, point, tolerance, count, truncated, points }`, where each
@@ -4949,7 +5002,7 @@ pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceEr
             let Some(mode) = SNAP_MODES.iter().copied().find(|candidate| *candidate == mode)
             else {
                 return Err(argument(format!(
-                    "`{raw}` is not a snap mode; use endpoint, midpoint, center, quadrant, nearest, intersection or perpendicular"
+                    "`{raw}` is not a snap mode; use endpoint, midpoint, center, quadrant, nearest, intersection, perpendicular or tangent"
                 )));
             };
             if !selected_modes.contains(&mode) {
@@ -4967,6 +5020,9 @@ pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceEr
     }
     if selected_modes.contains(&"perpendicular") && request.point.is_none() {
         return Err(argument("a perpendicular snap needs a point to measure from"));
+    }
+    if selected_modes.contains(&"tangent") && request.point.is_none() {
+        return Err(argument("a tangent snap needs a point to measure from"));
     }
     if let Some(tolerance) = request.tolerance {
         if request.point.is_none() {

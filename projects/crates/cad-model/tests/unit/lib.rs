@@ -1131,6 +1131,150 @@ fn snap_perpendicular_ordering_tolerance_and_missing_probe() {
 }
 
 #[test]
+fn snap_tangent_reports_contact_points_and_rejects_inside_probes() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let circle = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
+    let circle_id = circle["entity"]["id"].as_str().expect("circle id").to_string();
+    let line = add_line(handle, DEFAULT_LAYER, [-20.0, 30.0], [20.0, 30.0]).expect("line");
+    let line_id = line["entity"]["id"].as_str().expect("line id").to_string();
+
+    let outside = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["tangent".to_string()],
+            point: Some([20.0, 0.0]),
+            ids: Some(vec![circle_id.clone()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("circle tangent");
+    assert_eq!(outside["count"], json!(2), "a probe outside the circle gives two contact points");
+    assert_eq!(outside["points"][0]["kind"], json!("tangent"));
+    for point in snap_candidate_points(&outside) {
+        let radius = point[0].hypot(point[1]);
+        assert!((radius - 10.0).abs() < 1e-9, "the contact point sits on the circle: {point:?}");
+        let tangent = [20.0 - point[0], 0.0 - point[1]];
+        assert!(
+            (point[0] * tangent[0] + point[1] * tangent[1]).abs() < 1e-9,
+            "the radius at the contact point is perpendicular to the tangent: {point:?}"
+        );
+    }
+    assert!(snap_has_point(&outside, [5.0, 75.0_f64.sqrt()]));
+    assert!(snap_has_point(&outside, [5.0, -75.0_f64.sqrt()]));
+
+    let on_circle = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["tangent".to_string()],
+            point: Some([10.0, 0.0]),
+            ids: Some(vec![circle_id.clone()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("on circle tangent");
+    assert_eq!(on_circle["count"], json!(1), "a probe on the circle gives that point once");
+    assert!(snap_has_point(&on_circle, [10.0, 0.0]));
+
+    let inside = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["tangent".to_string()],
+            point: Some([5.0, 0.0]),
+            ids: Some(vec![circle_id.clone()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("inside tangent");
+    assert_eq!(inside["count"], json!(0), "a probe inside the circle has no tangent");
+
+    let at_center = snap_points(
+        handle,
+        SnapRequest { modes: vec!["tangent".to_string()], point: Some([0.0, 0.0]), ids: Some(vec![circle_id]), ..SnapRequest::default() },
+    )
+    .expect("centre tangent");
+    assert_eq!(at_center["count"], json!(0), "a probe at the centre has no tangent");
+
+    let on_line = snap_points(
+        handle,
+        SnapRequest { modes: vec!["tangent".to_string()], point: Some([0.0, 20.0]), ids: Some(vec![line_id]), ..SnapRequest::default() },
+    )
+    .expect("line tangent");
+    assert_eq!(on_line["count"], json!(0), "a line contributes no tangent candidate");
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_tangent_filters_arcs_and_needs_a_probe() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let arc = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("arc");
+    let arc_id = arc["entity"]["id"].as_str().expect("arc id").to_string();
+
+    let points = snap_points(
+        handle,
+        SnapRequest { modes: vec!["tangent".to_string()], point: Some([20.0, 0.0]), ids: Some(vec![arc_id.clone()]), ..SnapRequest::default() },
+    )
+    .expect("arc tangent");
+    assert_eq!(points["count"], json!(1), "only the contact point inside the sweep is reported");
+    assert_eq!(points["points"][0]["kind"], json!("tangent"));
+    assert!(snap_has_point(&points, [5.0, 75.0_f64.sqrt()]));
+    assert!(!snap_has_point(&points, [5.0, -75.0_f64.sqrt()]), "the opposite contact point lies outside the 0-90 sweep");
+
+    let opposite = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 180.0, 270.0).expect("opposite arc");
+    let opposite_id = opposite["entity"]["id"].as_str().expect("arc id").to_string();
+    let none = snap_points(
+        handle,
+        SnapRequest { modes: vec!["tangent".to_string()], point: Some([20.0, 0.0]), ids: Some(vec![opposite_id]), ..SnapRequest::default() },
+    )
+    .expect("opposite arc tangent");
+    assert_eq!(none["count"], json!(0), "both contact points fall outside the 180-270 sweep");
+
+    assert!(
+        snap_points(handle, SnapRequest { modes: vec!["tangent".to_string()], ..SnapRequest::default() }).is_err(),
+        "tangent needs a probe point"
+    );
+
+    let default = snap_points(handle, SnapRequest::default()).expect("default");
+    let modes = default["modes"].as_array().expect("modes").iter().map(|value| value.as_str().expect("mode").to_string()).collect::<Vec<_>>();
+    assert!(!modes.contains(&"tangent".to_string()), "tangent is opt-in");
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_tangent_tolerance_and_ordering_stay_deterministic() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let first = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("first circle");
+    let second = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("second circle");
+
+    let ordered = snap_points(handle, SnapRequest { modes: vec!["tangent".to_string()], point: Some([20.0, 0.0]), ..SnapRequest::default() })
+        .expect("ordered");
+    assert_eq!(ordered["count"], json!(4));
+    assert_eq!(ordered["points"][0]["entities"][0], first["entity"]["id"], "equal distances sort by entity id");
+    assert_eq!(ordered["points"][1]["entities"][0], first["entity"]["id"]);
+    assert_eq!(ordered["points"][2]["entities"][0], second["entity"]["id"]);
+    assert_eq!(ordered["points"][3]["entities"][0], second["entity"]["id"]);
+    let again = snap_points(handle, SnapRequest { modes: vec!["tangent".to_string()], point: Some([20.0, 0.0]), ..SnapRequest::default() })
+        .expect("again");
+    assert_eq!(ordered["points"], again["points"]);
+
+    let filtered = snap_points(
+        handle,
+        SnapRequest { modes: vec!["tangent".to_string()], point: Some([20.0, 0.0]), tolerance: Some(17.3), ..SnapRequest::default() },
+    )
+    .expect("filtered");
+    assert_eq!(filtered["count"], json!(0), "a tolerance below the nearest contact point drops every candidate");
+    let kept = snap_points(
+        handle,
+        SnapRequest { modes: vec!["tangent".to_string()], point: Some([20.0, 0.0]), tolerance: Some(17.4), ..SnapRequest::default() },
+    )
+    .expect("kept");
+    assert_eq!(kept["count"], json!(4));
+    close(handle).expect("close");
+}
+
+#[test]
 fn drawing_properties_are_read_and_written() {
     let created = create(CreateRequest { title: Some("Site".to_string()), ..CreateRequest::default() }).expect("create");
     let handle = handle_of(&created);

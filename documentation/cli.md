@@ -121,17 +121,19 @@ sheet, it reports drawing-wide totals for that layout. `measure-points` reports
 distance, angle and area for the supplied points. `stats` counts entities,
 layers and each kind. `select` reports ids inside or crossing the box,
 optionally filtered by layer. `snap` reports snap candidates for the requested
-modes — `endpoint`, `midpoint`, `center`, `quadrant`, `nearest`, `intersection`
-and `perpendicular`, defaulting to
+modes — `endpoint`, `midpoint`, `center`, `quadrant`, `nearest`, `intersection`,
+`perpendicular` and `tangent`, defaulting to
 `endpoint,midpoint,center,intersection` — where `--near` supplies the probe
 point, `--tolerance` keeps only candidates within a distance of it, and
-`--layer`/`--ids` limit the source entities. `nearest`, `perpendicular` and
-`--tolerance` all need `--near`. `ucs` converts points or entity positions
-between world and the configured UCS.
+`--layer`/`--ids` limit the source entities. `nearest`, `perpendicular`,
+`tangent` and `--tolerance` all need `--near`. `tangent` reports the contact
+points of the tangents from the probe to a circle or arc. `ucs` converts points
+or entity positions between world and the configured UCS.
 
 ```bash
 open-cad snap plan.ocad --modes quadrant,nearest --near 120,80 --tolerance 15
 open-cad snap plan.ocad --modes perpendicular --near 120,80 --ids entity-3
+open-cad snap plan.ocad --modes tangent --near 120,80 --ids entity-3
 open-cad snap plan.ocad --modes intersection --ids entity-3,entity-4
 ```
 

@@ -129,8 +129,8 @@ codes are listed in [Capabilities](documentation/capabilities.md).
   polylines, dimensions, duplicates, zero-length entities and open contours, plus
   per-entity and drawing-wide measurements.
 - **Object snap.** A probe point resolves to `endpoint`, `midpoint`, `center`,
-  `quadrant`, `nearest`, `intersection` and `perpendicular` candidates, sorted by
-  distance with an optional tolerance.
+  `quadrant`, `nearest`, `intersection`, `perpendicular` and `tangent`
+  candidates, sorted by distance with an optional tolerance.
 - **Exchange.** Declared ASCII DXF import with explicit loss notices, and DXF,
   SVG, PDF, STL, OBJ and STEP export.
 - **Agent authoring.** A skills package with a verified command list, so an agent
