@@ -8,9 +8,9 @@ description: Create, revise, inspect and deliver technical drawings with OpenCAD
 ## Status
 
 Working document core. The installed CLI and SDK can create and open `.ocad`
-drawings, add lines, points, circles, arcs, ellipses, polylines. Rectangles and
-regular polygons are added as closed polylines, as are text, hatches, linear,
-radial or diameter and ordinate dimensions,
+drawings, add lines, points, circles, arcs, ellipses, polylines, text, hatches, linear,
+radial or diameter and ordinate dimensions, add rectangles and regular polygons as
+closed polylines,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline/line, fillet or chamfer two lines and
 measure a drawing, selected entities, the distance between two points or the
