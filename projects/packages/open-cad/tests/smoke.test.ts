@@ -12,10 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { drawingFormats, formatFromPath, formatInfo, OpenCAD, OpenCADError } from './index.js';
-import type { DrawingInput } from './index.js';
-import { nativeBinding } from './native.js';
-import * as service from './service.js';
+import { drawingFormats, formatFromPath, formatInfo, OpenCAD, OpenCADError } from '../src/index.js';
+import type { DrawingInput } from '../src/index.js';
+import { nativeBinding } from '../src/native.js';
+import * as service from '../src/service.js';
 
 const installed = (() => {
     try {
