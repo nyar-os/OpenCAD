@@ -1154,6 +1154,13 @@ export interface LayerMerge {
     readonly moved: number;
 }
 
+/** Result of `deleteLayer()`. */
+export interface LayerDeletion {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly deleted: LayerId;
+}
+
 /** Arguments of `convertUnits()`. */
 export interface ConvertUnitsRequest {
     /** Unit the drawing converts to. */

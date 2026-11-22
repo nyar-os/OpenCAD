@@ -49,6 +49,7 @@
             "layer-freeze": "Set a layer's freeze state and save the file in place",
             "layer-plot": "Set whether a layer is included in plots and save the file in place",
             "layer-merge": "Move every entity of one layer onto another and remove the empty source layer",
+            "layer-delete": "Delete an empty layer and save the file in place",
             "layer-set": "Assign a line type or lineweight to a layer and save the file in place",
             "linetype": "Read and edit the line types of an existing drawing file",
             "linetype-list": "List the line types of a drawing file",

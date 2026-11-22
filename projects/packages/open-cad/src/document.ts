@@ -60,6 +60,7 @@ import type {
     ImportLoss,
     InspectOptions,
     InspectReport,
+    LayerDeletion,
     LayerMerge,
     LayerSummary,
     Layout,
@@ -457,6 +458,13 @@ export class DrawingDocument {
     /** Moves every entity of one layer onto another and removes the empty source. */
     mergeLayer(request: MergeLayerRequest): LayerMerge {
         return this.edit((handle) => service.mergeLayer(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Removes one empty layer. */
+    deleteLayer(layerId: string): LayerDeletion {
+        return this.edit((handle) => service.deleteLayer(handle, layerId), (result) => {
             this.state = result.drawing;
         });
     }

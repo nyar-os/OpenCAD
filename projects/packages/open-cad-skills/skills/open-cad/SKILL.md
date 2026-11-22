@@ -15,7 +15,7 @@ explode a polyline, offset a circle/arc/polyline/line, fillet or chamfer two lin
 measure a drawing, selected entities, the distance between two points or the
 angle at three points, move, update and
 delete entities, undo and redo,
-add, rename, merge, hide, lock, freeze and mark layers as non-plottable, list, add, update and remove
+add, rename, merge, delete, hide, lock, freeze and mark layers as non-plottable, list, add, update and remove
 dimension styles (which round-trip through the DXF `DIMSTYLE` table), list,
 add, update and remove text styles (which round-trip through the DXF `STYLE`
 table), list, add, update and remove line types (which round-trip through the
@@ -95,6 +95,7 @@ open-cad layer lock plan.ocad --name Structure --locked on
 open-cad layer freeze plan.ocad --name Structure --frozen on
 open-cad layer plot plan.ocad --name Structure --plottable off
 open-cad layer set plan.ocad --name Structure --linetype DASHED --lineweight 0.5
+open-cad layer delete plan.ocad --name Structure
 
 open-cad linetype list plan.ocad
 open-cad linetype add plan.ocad --name DASHED --description "Dashed" --pattern 5,2

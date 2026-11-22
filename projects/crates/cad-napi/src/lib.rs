@@ -390,6 +390,15 @@ fn drawing_update_layer(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Removes one empty layer from an open drawing.
+#[function]
+fn drawing_delete_layer(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let layer = text(&ctx, 1)?;
+    let result = open_cad_drawing::delete_layer(handle, &layer).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Converts one open drawing between millimetres and inches.
 #[function]
 fn drawing_convert_units(ctx: CallContext) -> Result<JsValue> {
@@ -2127,6 +2136,7 @@ register_module![
     drawing_update_properties,
     drawing_add_layer,
     drawing_update_layer,
+    drawing_delete_layer,
     drawing_list_dim_styles,
     drawing_add_dim_style,
     drawing_update_dim_style,

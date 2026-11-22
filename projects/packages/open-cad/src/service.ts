@@ -60,6 +60,7 @@ import type {
     InspectCheck,
     InspectReport,
     LayerChange,
+    LayerDeletion,
     LayerMerge,
     DrawingStats,
     LayoutChange,
@@ -461,6 +462,11 @@ export function updateLayer(handle: number, request: UpdateLayerRequest): LayerC
 /** Moves every entity of one layer onto another and drops the empty source. */
 export function mergeLayer(handle: number, request: MergeLayerRequest): LayerMerge {
     return decode<LayerMerge>(() => binding('drawing.mergeLayer').drawing_merge_layer(handle, request.from, request.to));
+}
+
+/** Removes one empty layer. */
+export function deleteLayer(handle: number, layerId: string): LayerDeletion {
+    return decode<LayerDeletion>(() => binding('drawing.deleteLayer').drawing_delete_layer(handle, layerId));
 }
 
 /** Lists the dimension styles of one open drawing. */

@@ -1804,6 +1804,30 @@ layer
         }
     });
 
+layer
+    .command('delete', 'cli.cmd.layer-delete')
+    .option('--name <name>', 'cli.opt.name')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const name = text(options, 'name');
+        if (name === undefined) {
+            ctx.fail('open-cad.cli.layer-delete-required', { message: '`--name <layer>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const deletion = await guard(ctx, () => opened.deleteLayer(name));
+            ctx.emitResult(deletion, `deleted layer ${deletion.deleted} revision=${deletion.revision} layers=${deletion.drawing.layers.length}`);
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 const dimstyle = cli.command('dimstyle', 'cli.cmd.dimstyle');
 
 dimstyle.command('list', 'cli.cmd.dimstyle-list').actionCtx(async (options, _args, ctx) => {
