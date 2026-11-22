@@ -31,6 +31,7 @@ import type {
     AddTextStyleRequest,
     ArrayRequest,
     ArrayResult,
+    AssignEntityLayerRequest,
     CopyRequest,
     CopyResult,
     ConvertUnitsRequest,
@@ -46,6 +47,7 @@ import type {
     EntityDeletion,
     EntityGroup,
     EntityId,
+    EntityLayerChange,
     EntityList,
     EntityMeasureResult,
     DrawingStats,
@@ -658,6 +660,13 @@ export class DrawingDocument {
     /** Updates the radius or sweep angles of one arc. */
     updateArc(request: UpdateArcRequest): Entity {
         return this.adopt(this.edit((handle) => service.updateArc(handle, request)));
+    }
+
+    /** Moves one entity onto another layer without changing its geometry. */
+    assignEntityLayer(request: AssignEntityLayerRequest): EntityLayerChange {
+        return this.edit((handle) => service.assignEntityLayer(handle, request), (result) => {
+            this.state = result.drawing;
+        });
     }
 
     /** Finds text entities whose content contains a pattern. */

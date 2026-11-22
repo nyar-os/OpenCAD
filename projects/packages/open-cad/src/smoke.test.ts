@@ -842,6 +842,41 @@ test('arc radius and sweep angles are editable', { skip: withAddon }, async () =
     }
 });
 
+test('an entity can move to another layer without changing geometry', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Layer assignment' });
+        document.addLayer({ name: 'Walls' });
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const revision = document.revision;
+
+        const moved = document.assignEntityLayer({ entityId: line.id, layer: 'Walls' });
+        assert.equal(moved.from, '0');
+        assert.equal(moved.to, 'Walls');
+        assert.equal(moved.moved, true);
+        assert.equal(moved.entity.layer, 'Walls');
+        assert.deepEqual(moved.entity.kind, line.kind);
+        assert.equal(moved.revision, revision + 1);
+
+        const same = document.assignEntityLayer({ entityId: line.id, layer: 'Walls' });
+        assert.equal(same.moved, false);
+        assert.equal(same.revision, moved.revision);
+
+        assert.throws(
+            () => document.assignEntityLayer({ entityId: line.id, layer: 'missing' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        document.updateLayer({ layerId: 'Walls', locked: true });
+        assert.throws(
+            () => document.assignEntityLayer({ entityId: line.id, layer: 'Walls' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/layer-locked',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',

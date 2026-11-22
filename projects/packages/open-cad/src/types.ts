@@ -1074,6 +1074,24 @@ export interface UpdateArcRequest {
     readonly endAngle?: number;
 }
 
+/** Arguments of `assignEntityLayer()`. */
+export interface AssignEntityLayerRequest {
+    readonly entityId: EntityId;
+    /** Target layer id; it must already exist. */
+    readonly layer: LayerId;
+}
+
+/** Result of `assignEntityLayer()`. Geometry and identity are preserved. */
+export interface EntityLayerChange {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly from: LayerId;
+    readonly to: LayerId;
+    /** False when the entity already belonged to the target layer. */
+    readonly moved: boolean;
+}
+
 /** Arguments of `findText()`. */
 export interface FindTextRequest {
     /** Non-empty substring to look for. */

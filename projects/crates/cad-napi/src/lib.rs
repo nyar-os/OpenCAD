@@ -668,6 +668,15 @@ fn drawing_update_arc(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Moves one entity onto another layer.
+#[function]
+fn drawing_assign_entity_layer(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_assign_entity_layer(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Finds text entities whose content contains a pattern.
 #[function]
 fn drawing_find_text(ctx: CallContext) -> Result<JsValue> {
@@ -1189,6 +1198,12 @@ fn call_update_arc(handle: u64, request: &Value) -> std::result::Result<Value, S
     let start_angle = request.get("startAngle").and_then(Value::as_f64);
     let end_angle = request.get("endAngle").and_then(Value::as_f64);
     open_cad_drawing::update_arc(handle, &entity, radius, start_angle, end_angle).map_err(service_failure)
+}
+
+fn call_assign_entity_layer(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let entity = request_string(request, "entityId")?;
+    let layer = request_string(request, "layer")?;
+    open_cad_drawing::assign_entity_layer(handle, &entity, &layer).map_err(service_failure)
 }
 
 fn text_search_options(request: &Value) -> open_cad_drawing::TextSearchOptions {
@@ -2209,6 +2224,7 @@ register_module![
     drawing_update_entity,
     drawing_update_polyline,
     drawing_update_arc,
+    drawing_assign_entity_layer,
     drawing_find_text,
     drawing_replace_text,
     drawing_transform,

@@ -1136,6 +1136,48 @@ pub fn update_arc(
     })
 }
 
+/// Moves one entity onto another layer without changing its geometry.
+///
+/// The target layer must exist and neither the current nor the target layer may
+/// be locked or frozen. A move onto the current layer is a no-op that keeps the
+/// revision. The response carries `{ revision, drawing, entity, from, to,
+/// moved }`.
+pub fn assign_entity_layer(handle: u64, entity: &str, layer: &str) -> Result<Value, ServiceError> {
+    if layer.trim().is_empty() {
+        return Err(argument("a target layer id is required"));
+    }
+    let (from, moved) = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        if drawing.layer(layer).is_none() {
+            return Err(ServiceError::new("object/not-found", format!("layer `{layer}` does not exist")));
+        }
+        let from = drawing.entities[index].layer.clone();
+        if let Some(error) = locked_layer(drawing, &from) {
+            return Err(error);
+        }
+        if let Some(error) = locked_layer(drawing, layer) {
+            return Err(error);
+        }
+        let moved = from != layer;
+        if moved {
+            drawing.entities[index].layer = layer.to_string();
+            drawing.revision += 1;
+        }
+        Ok((from, moved))
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity).cloned();
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+            "from": from,
+            "to": layer,
+            "moved": moved,
+        })
+    })
+}
+
 /// Options of [`find_text`] and [`replace_text`].
 #[derive(Debug, Clone, Default)]
 pub struct TextSearchOptions {
@@ -5435,6 +5477,45 @@ mod tests {
         assert_eq!(update_arc(handle, "entity-404", Some(2.0), None, None).expect_err("missing entity").code, "object/not-found");
         update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
         assert_eq!(update_arc(handle, "entity-1", Some(2.0), None, None).expect_err("locked layer").code, "drawing/layer-locked");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn entity_layer_assignment_preserves_geometry_and_respects_locks() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_layer(handle, "Walls", None).expect("add layer");
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+        let assigned = assign_entity_layer(handle, "entity-1", "Walls").expect("assign the layer");
+        assert_eq!(assigned["from"], json!(DEFAULT_LAYER));
+        assert_eq!(assigned["to"], json!("Walls"));
+        assert_eq!(assigned["moved"], json!(true));
+        assert_eq!(assigned["entity"]["layer"], json!("Walls"));
+        assert_eq!(assigned["entity"]["kind"]["from"], json!([0.0, 0.0]));
+        assert_eq!(assigned["entity"]["kind"]["to"], json!([10.0, 0.0]));
+        let revision = assigned["revision"].as_u64().expect("revision");
+        let layers = assigned["drawing"]["layers"].as_array().expect("layers");
+        assert_eq!(layers.iter().find(|layer| layer["id"] == json!("Walls")).expect("Walls")["entityCount"], json!(1));
+        assert_eq!(layers.iter().find(|layer| layer["id"] == json!(DEFAULT_LAYER)).expect("default")["entityCount"], json!(0));
+
+        let same = assign_entity_layer(handle, "entity-1", "Walls").expect("assign the same layer");
+        assert_eq!(same["moved"], json!(false));
+        assert_eq!(same["revision"], json!(revision));
+
+        assert_eq!(assign_entity_layer(handle, "entity-1", "missing").expect_err("missing target").code, "object/not-found");
+        assert_eq!(assign_entity_layer(handle, "entity-404", "Walls").expect_err("missing entity").code, "object/not-found");
+        update_layer(handle, "Walls", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock the target");
+        assert_eq!(
+            assign_entity_layer(handle, "entity-1", "Walls").expect_err("the entity is already on the locked layer").code,
+            "drawing/layer-locked"
+        );
+        update_layer(handle, "Walls", LayerUpdate { locked: Some(false), ..LayerUpdate::default() }).expect("unlock the target");
+        update_layer(handle, "Walls", LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze the target");
+        assert_eq!(
+            assign_entity_layer(handle, "entity-1", DEFAULT_LAYER).expect_err("the source layer is frozen").code,
+            "drawing/layer-frozen"
+        );
         close(handle).expect("close");
     }
 

@@ -27,6 +27,7 @@ import type {
     AddTextStyleRequest,
     ArrayRequest,
     ArrayResult,
+    AssignEntityLayerRequest,
     ConvertUnitsRequest,
     CopyRequest,
     CopyResult,
@@ -44,6 +45,7 @@ import type {
     EntityChange,
     EntityDeletion,
     EntityGroup,
+    EntityLayerChange,
     EntityList,
     EntityMeasureResult,
     ExplodeResult,
@@ -724,6 +726,16 @@ export function updateArc(handle: number, request: UpdateArcRequest): EntityChan
                 startAngle: request.startAngle,
                 endAngle: request.endAngle,
             }),
+        ),
+    );
+}
+
+/** Moves one entity onto another layer without changing its geometry. */
+export function assignEntityLayer(handle: number, request: AssignEntityLayerRequest): EntityLayerChange {
+    return decode<EntityLayerChange>(() =>
+        binding('drawing.assignEntityLayer').drawing_assign_entity_layer(
+            handle,
+            JSON.stringify({ entityId: request.entityId, layer: request.layer }),
         ),
     );
 }

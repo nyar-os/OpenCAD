@@ -32,6 +32,7 @@ import type {
     EntityChange,
     EntityDeletion,
     EntityGroup,
+    EntityLayerChange,
     EntityMeasureResult,
     ExplodeResult,
     ExportFormat,
@@ -295,6 +296,12 @@ function describeExplode(result: ExplodeResult): string {
 
 function describeOffset(result: OffsetResult): string {
     return `offset ${result.source} into ${result.entity.id} revision=${result.revision}`;
+}
+
+function describeLayerAssignment(result: EntityLayerChange): string {
+    return result.moved
+        ? `moved ${result.entity.id} from layer ${result.from} to ${result.to} revision=${result.revision}`
+        : `${result.entity.id} is already on layer ${result.to} revision=${result.revision}`;
 }
 
 function describeMeasure(result: MeasureResult): string {
@@ -1030,6 +1037,32 @@ entity
             const entity = await guard(ctx, () => opened.updateEntity({ entityId: id, content, height, radius }));
             const change = entityChange(opened, entity);
             ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
+    .command('set-layer', 'cli.cmd.set-layer')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--to <layer>', 'cli.opt.target-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const layer = text(options, 'to');
+        if (id === undefined || layer === undefined) {
+            ctx.fail('open-cad.cli.set-layer-required', { message: '`--id <entity>` and `--to <layer>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.assignEntityLayer({ entityId: id, layer }));
+            ctx.emitResult(result, describeLayerAssignment(result));
             return 0;
         } finally {
             opened.close();
