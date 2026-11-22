@@ -26,8 +26,10 @@ import type {
     AddOrdinateDimensionRequest,
     AddAngularDimensionRequest,
     AddPointRequest,
+    AddPolygonRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
+    AddRectangleRequest,
     AddTextRequest,
     AddTextStyleRequest,
     ArrayRequest,
@@ -378,6 +380,16 @@ export class DrawingDocument {
     /** Adds a polyline and returns the created entity. */
     addPolyline(request: AddPolylineRequest): Entity {
         return this.adopt(this.edit((handle) => service.addPolyline(handle, request)));
+    }
+
+    /** Adds an axis-aligned rectangle as one closed polyline. */
+    addRectangle(request: AddRectangleRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addRectangle(handle, request)));
+    }
+
+    /** Adds a regular polygon as one closed polyline. */
+    addPolygon(request: AddPolygonRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addPolygon(handle, request)));
     }
 
     /** Adds single-line text and returns the created entity. */

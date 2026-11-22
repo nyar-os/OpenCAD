@@ -778,6 +778,77 @@ entity
     });
 
 entity
+    .command('add-rectangle', 'cli.cmd.add-rectangle')
+    .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
+    .option('--from <x,y>', 'cli.opt.rectangle-from')
+    .option('--to <x,y>', 'cli.opt.rectangle-to')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const from = point(options, 'from');
+        const to = point(options, 'to');
+        if (from === undefined || to === undefined) {
+            ctx.fail('open-cad.cli.point-required', { message: '`--from x,y` and `--to x,y` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addRectangle({ layer: text(options, 'layer') ?? '0', from, to }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
+    .command('add-polygon', 'cli.cmd.add-polygon')
+    .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
+    .option('--center <x,y>', 'cli.opt.polygon-center')
+    .option('--radius <number>', 'cli.opt.polygon-radius')
+    .option('--sides <n>', 'cli.opt.sides')
+    .option('--rotation <deg>', 'cli.opt.polygon-rotation')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const center = point(options, 'center');
+        const radius = number(options, 'radius');
+        const sides = number(options, 'sides');
+        if (center === undefined || radius === undefined || sides === undefined) {
+            ctx.fail('open-cad.cli.polygon-required', {
+                message: '`--center x,y`, `--radius <number>` and `--sides <n>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addPolygon({
+                    layer: text(options, 'layer') ?? '0',
+                    center,
+                    radius,
+                    sides,
+                    rotation: number(options, 'rotation'),
+                }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
     .command('add-text', 'cli.cmd.add-text')
     .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
     .option('--at <x,y>', 'cli.opt.at')

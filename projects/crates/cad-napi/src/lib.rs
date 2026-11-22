@@ -197,6 +197,24 @@ fn drawing_add_polyline(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Adds an axis-aligned rectangle as one closed polyline to an open drawing.
+#[function]
+fn drawing_add_rectangle(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_rectangle(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Adds a regular polygon as one closed polyline to an open drawing.
+#[function]
+fn drawing_add_polygon(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_polygon(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Adds single-line text to one layer of an open drawing.
 #[function]
 fn drawing_add_text(ctx: CallContext) -> Result<JsValue> {
@@ -982,6 +1000,22 @@ fn call_add_polyline(handle: u64, request: &Value) -> std::result::Result<Value,
     let points = request_points(request)?;
     let closed = request.get("closed").and_then(Value::as_bool).unwrap_or(false);
     open_cad_drawing::add_polyline(handle, &layer, points, closed).map_err(service_failure)
+}
+
+fn call_add_rectangle(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let from = request_point(request, "from")?;
+    let to = request_point(request, "to")?;
+    open_cad_drawing::add_rectangle(handle, &layer, from, to).map_err(service_failure)
+}
+
+fn call_add_polygon(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let center = request_point(request, "center")?;
+    let radius = request_number(request, "radius")?;
+    let sides = request_u32(request, "sides")?;
+    let rotation = request.get("rotation").and_then(Value::as_f64).unwrap_or(0.0);
+    open_cad_drawing::add_polygon(handle, &layer, center, radius, sides, rotation).map_err(service_failure)
 }
 
 fn call_add_text(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -2210,6 +2244,8 @@ register_module![
     drawing_add_arc,
     drawing_add_ellipse,
     drawing_add_polyline,
+    drawing_add_rectangle,
+    drawing_add_polygon,
     drawing_add_text,
     drawing_add_dimension,
     drawing_add_radial_dimension,

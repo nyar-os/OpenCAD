@@ -679,6 +679,57 @@ pub fn add_polyline(handle: u64, layer: &str, points: Vec<[f64; 2]>, closed: boo
     push_entity(handle, layer, EntityKind::Polyline { points, closed })
 }
 
+/// Largest polygon side count [`add_polygon`] accepts.
+const MAX_POLYGON_SIDES: u32 = 1024;
+
+/// Adds an axis-aligned rectangle as one closed polyline.
+///
+/// `from` and `to` are opposite corners; both coordinates must be finite and
+/// `to` must lie right of and above `from`, so the width and height are
+/// positive. The four vertices run counter-clockwise and the shape is stored as
+/// a closed polyline, so it shares polyline history, measurement and export
+/// behaviour in a single revision and undo step. A non-positive width or height
+/// reports `session/argument-invalid`.
+pub fn add_rectangle(handle: u64, layer: &str, from: [f64; 2], to: [f64; 2]) -> Result<Value, ServiceError> {
+    require_finite(&[from, to], "from/to")?;
+    if to[0] <= from[0] || to[1] <= from[1] {
+        return Err(argument("`to` must be to the right of and above `from` so the width and height are positive"));
+    }
+    let points = vec![[from[0], from[1]], [to[0], from[1]], [to[0], to[1]], [from[0], to[1]]];
+    add_polyline(handle, layer, points, true)
+}
+
+/// Adds a regular polygon as one closed polyline.
+///
+/// `sides` counts the vertices and must be an integer from 3 to 1024.
+/// `rotation` is the angle of the first vertex in degrees; the remaining
+/// vertices follow counter-clockwise at equal angles and the shape closes back
+/// to the first one. The result is one closed polyline, so it shares polyline
+/// history, measurement and export behaviour in a single revision and undo
+/// step. A side count outside 3-1024, a non-positive radius or a non-finite
+/// value reports `session/argument-invalid`.
+pub fn add_polygon(handle: u64, layer: &str, center: [f64; 2], radius: f64, sides: u32, rotation: f64) -> Result<Value, ServiceError> {
+    require_finite(&[center], "center")?;
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(argument("`radius` must be a positive finite number"));
+    }
+    if !(3..=MAX_POLYGON_SIDES).contains(&sides) {
+        return Err(argument(format!("`sides` must be an integer from 3 to {MAX_POLYGON_SIDES}")));
+    }
+    if !rotation.is_finite() {
+        return Err(argument("`rotation` must be finite"));
+    }
+    let step = std::f64::consts::TAU / f64::from(sides);
+    let start = rotation.to_radians();
+    let points = (0..sides)
+        .map(|index| {
+            let (sin, cos) = (start + step * f64::from(index)).sin_cos();
+            [center[0] + radius * cos, center[1] + radius * sin]
+        })
+        .collect();
+    add_polyline(handle, layer, points, true)
+}
+
 /// Adds single-line text to one layer.
 pub fn add_text(handle: u64, layer: &str, at: [f64; 2], height: f64, content: &str) -> Result<Value, ServiceError> {
     require_finite(&[at], "at")?;
@@ -5507,6 +5558,97 @@ mod tests {
                 .code,
             "drawing/layer-locked"
         );
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn rectangle_builds_a_closed_counter_clockwise_polyline() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let before = drawing_of(handle).revision;
+
+        let rectangle = add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 5.0]).expect("rectangle");
+        assert_eq!(rectangle["entity"]["kind"]["type"], json!("polyline"));
+        assert_eq!(rectangle["entity"]["kind"]["closed"], json!(true));
+        assert_eq!(rectangle["entity"]["kind"]["points"], json!([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]]));
+        assert_eq!(drawing_of(handle).revision, before + 1, "one revision for the whole rectangle");
+
+        let measured = measure_entities(handle, &["entity-1".to_string()]).expect("measure");
+        assert_eq!(measured["entities"][0]["closed"], json!(true));
+        assert_eq!(measured["entities"][0]["area"], json!(50.0));
+        assert_eq!(measured["entities"][0]["length"], json!(30.0));
+
+        undo(handle).expect("undo the rectangle");
+        assert_eq!(list_entities(handle).expect("list")["entities"].as_array().map(Vec::len), Some(0), "one undo step removes it");
+
+        assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [5.0, 0.0], [5.0, 5.0]).expect_err("zero width").code, "session/argument-invalid");
+        assert_eq!(
+            add_rectangle(handle, DEFAULT_LAYER, [10.0, 10.0], [0.0, 0.0]).expect_err("inverted corners").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [f64::NAN, 5.0]).expect_err("non-finite corner").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(add_rectangle(handle, "missing", [0.0, 0.0], [5.0, 5.0]).expect_err("missing layer").code, "object/not-found");
+
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 5.0]).expect_err("locked layer").code, "drawing/layer-locked");
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn polygon_builds_a_closed_regular_polyline() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let before = drawing_of(handle).revision;
+
+        let triangle = add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 3, 0.0).expect("triangle");
+        assert_eq!(triangle["entity"]["kind"]["type"], json!("polyline"));
+        assert_eq!(triangle["entity"]["kind"]["closed"], json!(true));
+        assert_eq!(drawing_of(handle).revision, before + 1, "one revision for the whole polygon");
+        let points = triangle["entity"]["kind"]["points"].as_array().expect("points").clone();
+        assert_eq!(points.len(), 3);
+        let vertex = |index: usize| (points[index][0].as_f64().expect("x"), points[index][1].as_f64().expect("y"));
+        assert!((vertex(0).0 - 10.0).abs() < 1e-9 && vertex(0).1.abs() < 1e-9, "the first vertex starts at rotation 0: {:?}", vertex(0));
+        assert!((vertex(1).0 + 5.0).abs() < 1e-9, "the second vertex sits at 120 degrees: {:?}", vertex(1));
+        assert!((vertex(1).1 - 8.660_254_037_844_387).abs() < 1e-9, "the second vertex sits at 120 degrees: {:?}", vertex(1));
+        for point in &points {
+            let x = point[0].as_f64().expect("x");
+            let y = point[1].as_f64().expect("y");
+            assert!(((x * x + y * y).sqrt() - 10.0).abs() < 1e-9, "every vertex sits on the radius: {point:?}");
+        }
+
+        let rotated = add_polygon(handle, DEFAULT_LAYER, [5.0, 5.0], 4.0, 4, 90.0).expect("rotated square");
+        let corners = rotated["entity"]["kind"]["points"].as_array().expect("points").clone();
+        assert_eq!(corners.len(), 4);
+        let start = (corners[0][0].as_f64().expect("x"), corners[0][1].as_f64().expect("y"));
+        assert!((start.0 - 5.0).abs() < 1e-9 && (start.1 - 9.0).abs() < 1e-9, "rotation places the first vertex: {start:?}");
+
+        undo(handle).expect("undo the square");
+        undo(handle).expect("undo the triangle");
+        assert_eq!(list_entities(handle).expect("list")["entities"].as_array().map(Vec::len), Some(0), "each polygon is one undo step");
+
+        assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 2, 0.0).expect_err("too few sides").code, "session/argument-invalid");
+        assert_eq!(
+            add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, MAX_POLYGON_SIDES + 1, 0.0).expect_err("too many sides").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0, 4, 0.0).expect_err("non-positive radius").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 4, f64::INFINITY).expect_err("non-finite rotation").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_polygon(handle, DEFAULT_LAYER, [f64::NAN, 0.0], 5.0, 4, 0.0).expect_err("non-finite centre").code,
+            "session/argument-invalid"
+        );
+
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+        assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 4, 0.0).expect_err("frozen layer").code, "drawing/layer-frozen");
         close(handle).expect("close");
     }
 

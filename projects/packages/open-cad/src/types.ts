@@ -701,6 +701,27 @@ export interface AddPolylineRequest {
     readonly closed?: boolean;
 }
 
+/** Arguments of `addRectangle()`. */
+export interface AddRectangleRequest {
+    readonly layer: LayerId;
+    /** First corner `[x, y]`; `to` must lie right of and above it. */
+    readonly from: Point;
+    /** Opposite corner `[x, y]`; the width and height must be positive. */
+    readonly to: Point;
+}
+
+/** Arguments of `addPolygon()`. */
+export interface AddPolygonRequest {
+    readonly layer: LayerId;
+    readonly center: Point;
+    /** Circumradius in drawing units; must be positive. */
+    readonly radius: number;
+    /** Vertex count, 3-1024. */
+    readonly sides: number;
+    /** Angle of the first vertex in degrees; defaults to `0`. */
+    readonly rotation?: number;
+}
+
 /** Arguments of `addText()`. */
 export interface AddTextRequest {
     readonly layer: LayerId;

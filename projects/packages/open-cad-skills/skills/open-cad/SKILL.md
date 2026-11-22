@@ -8,7 +8,8 @@ description: Create, revise, inspect and deliver technical drawings with OpenCAD
 ## Status
 
 Working document core. The installed CLI and SDK can create and open `.ocad`
-drawings, add lines, points, circles, arcs, ellipses, polylines, text, hatches, linear,
+drawings, add lines, points, circles, arcs, ellipses, polylines. Rectangles and
+regular polygons are added as closed polylines, as are text, hatches, linear,
 radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline/line, fillet or chamfer two lines and
@@ -55,6 +56,8 @@ open-cad entity add-circle plan.ocad --layer 0 --center 50,50 --radius 20
 open-cad arc add plan.ocad --layer 0 --center 50,50 --radius 20 --start 0 --end 90
 open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotation 15
 open-cad entity add-polyline plan.ocad --layer 0 --points "0,0 100,0 100,60" --closed
+open-cad entity add-rectangle plan.ocad --layer 0 --from 0,0 --to 100,60
+open-cad entity add-polygon plan.ocad --layer 0 --center 50,50 --radius 20 --sides 6 --rotation 0
 open-cad entity add-text plan.ocad --layer 0 --at 5,5 --height 2.5 --text "Site plan"
 open-cad entity add-dimension plan.ocad --layer dimensions --from 0,0 --to 100,0 --offset 10
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 45 --offset 3
@@ -160,6 +163,18 @@ refuses add, move, update, transform, copy, array, explode, offset and delete
 with `drawing/layer-locked`; a frozen layer refuses the same writes with
 `drawing/layer-frozen`.
 
+`entity add-rectangle` takes the two opposite corners `--from x,y` and
+`--to x,y`; both coordinate pairs must be finite and `to` must lie right of and
+above `from`, so the width and height are positive. It stores four
+counter-clockwise vertices as one closed polyline. `entity add-polygon` takes
+`--center x,y`, a positive finite `--radius` and an integer `--sides` from 3 to
+1024, plus an optional `--rotation` in degrees (default `0`). Vertices start at
+the rotation angle and follow counter-clockwise at equal angles. Both commands
+are one revision and one undo step, return the same entity shape as
+`add-polyline`, and stay plain polylines for measurement and every exporter; an
+invalid width, height, radius, side count or angle reports
+`session/argument-invalid`.
+
 `transform` needs exactly one selection (`--ids a,b`, `--layer id` or `--all`)
 and exactly one operation (`--translate dx,dy`, `--rotate degrees --center x,y`,
 `--scale factor --center x,y`, or `--mirror x|y --mirror-at <number>`). Mirror
@@ -255,6 +270,8 @@ start a new document.
   not a rendered pattern definition. Arcs store centre, radius and
   counter-clockwise start/end degrees. Ellipses store centre, `rx`/`ry`, a
   major-axis rotation and start/end parameters measured from that axis.
+  Rectangles and regular polygons are stored as ordinary closed polylines, so
+  they carry no extra entity type and need no separate export path.
 - The revision increments on every mutation. Save does not change it, so a
   reopened file keeps the revision it was written with.
 - Each handle keeps up to 32 snapshots. Every mutation adds one step; open and

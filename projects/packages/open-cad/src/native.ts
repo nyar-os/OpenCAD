@@ -28,6 +28,8 @@ export interface NativeBinding {
     drawing_add_arc(handle: number, requestJson: string): string;
     drawing_add_ellipse(handle: number, requestJson: string): string;
     drawing_add_polyline(handle: number, requestJson: string): string;
+    drawing_add_rectangle(handle: number, requestJson: string): string;
+    drawing_add_polygon(handle: number, requestJson: string): string;
     drawing_add_text(handle: number, requestJson: string): string;
     drawing_add_dimension(handle: number, requestJson: string): string;
     drawing_add_radial_dimension(handle: number, requestJson: string): string;

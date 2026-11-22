@@ -550,6 +550,49 @@ test('a hatch keeps its closed boundary and pattern name', { skip: withAddon }, 
     }
 });
 
+test('rectangles and regular polygons become closed polylines', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Shapes' });
+        const rectangle = document.addRectangle({ layer: '0', from: [0, 0], to: [40, 20] });
+        assert.equal(rectangle.kind.type, 'polyline');
+        if (rectangle.kind.type === 'polyline') {
+            assert.equal(rectangle.kind.closed, true);
+            assert.deepEqual(rectangle.kind.points, [[0, 0], [40, 0], [40, 20], [0, 20]]);
+        }
+
+        const hexagon = document.addPolygon({ layer: '0', center: [100, 50], radius: 10, sides: 6, rotation: 0 });
+        assert.equal(hexagon.kind.type, 'polyline');
+        if (hexagon.kind.type === 'polyline') {
+            assert.equal(hexagon.kind.closed, true);
+            assert.equal(hexagon.kind.points.length, 6);
+            assert.ok(Math.abs(hexagon.kind.points[0][0] - 110) < 1e-9);
+            assert.ok(Math.abs(hexagon.kind.points[0][1] - 50) < 1e-9);
+        }
+
+        const listed = document.listEntities();
+        assert.equal(listed.length, 2);
+        assert.deepEqual(listed.map((entity) => entity.kind.type), ['polyline', 'polyline']);
+
+        const measured = document.measureEntities([rectangle.id, hexagon.id]);
+        assert.deepEqual(measured.entities.map((entity) => entity.closed), [true, true]);
+        assert.ok(Math.abs(measured.entities[0].area - 800) < 1e-9);
+        assert.ok(Math.abs(measured.entities[1].area - (3 * Math.sqrt(3) / 2) * 100) < 1e-9);
+
+        assert.throws(
+            () => document.addRectangle({ layer: '0', from: [10, 10], to: [0, 0] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.throws(
+            () => document.addPolygon({ layer: '0', center: [0, 0], radius: 5, sides: 2 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('offset copies circle and polyline geometry as new entities', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

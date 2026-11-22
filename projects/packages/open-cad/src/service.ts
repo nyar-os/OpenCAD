@@ -22,8 +22,10 @@ import type {
     AddOrdinateDimensionRequest,
     AddAngularDimensionRequest,
     AddPointRequest,
+    AddPolygonRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
+    AddRectangleRequest,
     AddTextRequest,
     AddTextStyleRequest,
     ArrayRequest,
@@ -251,6 +253,32 @@ export function addPolyline(handle: number, request: AddPolylineRequest): Entity
         binding('drawing.addPolyline').drawing_add_polyline(
             handle,
             JSON.stringify({ layer: request.layer, points: request.points, closed: request.closed ?? false }),
+        ),
+    );
+}
+
+/** Adds an axis-aligned rectangle as one closed polyline. */
+export function addRectangle(handle: number, request: AddRectangleRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addRectangle').drawing_add_rectangle(
+            handle,
+            JSON.stringify({ layer: request.layer, from: request.from, to: request.to }),
+        ),
+    );
+}
+
+/** Adds a regular polygon as one closed polyline. */
+export function addPolygon(handle: number, request: AddPolygonRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addPolygon').drawing_add_polygon(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                center: request.center,
+                radius: request.radius,
+                sides: request.sides,
+                rotation: request.rotation ?? 0,
+            }),
         ),
     );
 }
