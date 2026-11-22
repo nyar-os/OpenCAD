@@ -85,7 +85,7 @@ exactly one transform.
 | `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
 | `trim` | `--id <line\|arc\|circle>`, `--cutter <entity>` (a line, circle or arc) |
 | `extend` | `--id <line>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
-| `break` | `--id <line>`, `--at x,y` (strictly inside the segment) |
+| `break` | `--id <line\|arc>`, `--at x,y` (strictly inside the segment or arc sweep) |
 | `join` | `--a <line>`, `--b <line>` (collinear and sharing one endpoint) |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
@@ -128,12 +128,15 @@ the `from` endpoint instead. Only crossings ahead of the moving endpoint count
 and the nearest one becomes the new endpoint. A boundary the ray never reaches
 reports `extend/no-intersection`.
 
-`break` splits the `--id` line into two lines at `--at x,y` and saves the file.
-The point must lie strictly inside the segment, away from both endpoints; a point
-close to the line is projected onto it so both pieces stay collinear. The source
-is removed and replaced by two lines with fresh ids on the same layer. A point on
-an endpoint or outside the segment reports `break/not-on-entity`; a non-line
-reports `object/unsupported`.
+`break` splits the `--id` line or arc into two pieces at `--at x,y` and saves the
+file. For a line the point must lie strictly inside the segment, away from both
+endpoints; a point close to the line is projected onto it so both pieces stay
+collinear. The source is removed and replaced by two lines with fresh ids on the
+same layer. For an arc the point must lie on the arc, away from both endpoints:
+the source keeps the part from its start angle to the cut angle and a new arc
+with the next id covers the rest, both sharing the centre and radius. A point on
+an endpoint or off the entity reports `break/not-on-entity`; a circle or another
+kind reports `object/unsupported`.
 
 `join` merges the `--a` and `--b` lines and saves the file. Both must be lines
 on the same layer, one endpoint of each must coincide, and the lines must be

@@ -294,37 +294,51 @@ the same id for target and boundary reports `session/argument-invalid`.
 
 ## Break
 
-`breakEntity(id, at)` splits one line into two lines at `at` and replaces the
-source in place. The point must lie on the segment and strictly between its
-endpoints: the tolerance is `1e-9` scaled by the segment length, and a point
-inside that band but off the line is projected onto it. The two pieces therefore
-stay collinear and their lengths add up to the original.
+`breakEntity(id, at)` splits one line or arc at `at`, and the edit is one
+history step and one revision.
+
+A line point must lie on the segment and strictly between its endpoints: the
+tolerance is `1e-9` scaled by the segment length, and a point inside that band
+but off the line is projected onto it. The two pieces therefore stay collinear
+and their lengths add up to the original. The source is replaced in place by two
+lines with fresh deterministic ids.
+
+An arc point must lie on the arc's circle within `1e-9` scaled by the radius, and
+its angle must fall inside the counter-clockwise sweep away from both endpoints,
+using the same degree tolerance as `trim`. The source keeps the part from its
+start angle to the cut angle, and a new arc with the next deterministic id covers
+the cut angle to the original end angle. Both share the centre, radius and layer.
 
 The response carries `{ revision, drawing, removed, created }`, where `removed`
-is the source id and `created` holds the two new lines, from the original `from`
-endpoint to the break point and from the break point to the original `to`
-endpoint. Both keep the source layer and receive fresh deterministic ids
-(`entity-N`). The edit is one history step and one revision, and the source is
-removed from draw order and entity groups.
+is the source id and `created` holds the two pieces in order. For a line, the
+pieces run from the original `from` endpoint to the break point and from the
+break point to the original `to` endpoint, both with fresh ids and on the source
+layer. For an arc, the first piece reuses the source id. The source line is
+removed from draw order and entity groups; the appended arc keeps its place.
 
-A point on an endpoint or outside the segment, and a zero-length line, report
-`break/not-on-entity`. A target that is not a line reports `object/unsupported`;
-an unknown id reports `object/not-found`; a locked or frozen layer reports
-`drawing/layer-locked` or `drawing/layer-frozen`; non-finite coordinates report
-`session/argument-invalid`.
+A point on an endpoint or off the entity, a zero-length line and a zero-radius
+arc report `break/not-on-entity`. A circle or another kind reports
+`object/unsupported`; an unknown id reports `object/not-found`; a locked or
+frozen layer reports `drawing/layer-locked` or `drawing/layer-frozen`; non-finite
+coordinates report `session/argument-invalid`.
 
 | Code | Cause |
 | :--- | :--- |
-| `break/not-on-entity` | The point is on an endpoint, outside the segment, or the line has zero length. |
-| `object/unsupported` | The target is not a line. |
+| `break/not-on-entity` | The point is on an endpoint, off the segment or arc, or the line has zero length or the arc zero radius. |
+| `object/unsupported` | The target is not a line or arc. |
 | `object/not-found` | The id does not name an entity. |
-| `drawing/layer-locked` | The line's layer is locked. |
-| `drawing/layer-frozen` | The line's layer is frozen. |
+| `drawing/layer-locked` | The entity's layer is locked. |
+| `drawing/layer-frozen` | The entity's layer is frozen. |
 | `session/argument-invalid` | The coordinates are not finite. |
 
-The model tests cover the midpoint split (`break_line_at_midpoint_creates_two_collinear_lines`),
-rejected points (`break_rejects_endpoints_outside_points_and_off_line_points`),
-non-line and locked-layer refusals (`break_rejects_non_line_entities_and_locked_layers`),
+The model tests cover the line midpoint split (`break_line_at_midpoint_creates_two_collinear_lines`),
+the arc split with exact angles (`break_arc_at_interior_point_splits_into_two_arcs`),
+the wrapped arc sweep (`break_arc_keeps_the_wrapped_sweep_convention`),
+rejected points (`break_rejects_endpoints_outside_points_and_off_line_points` and
+`break_arc_rejects_endpoints_and_points_off_the_arc`),
+non-line, zero-radius and locked-layer refusals
+(`break_rejects_non_line_entities_and_locked_layers` and
+`break_arc_rejects_zero_radius_and_locked_layers`),
 and repeatability (`break_is_deterministic`).
 
 ## Join
@@ -395,8 +409,9 @@ layers (`join_refuses_a_locked_layer`) and repeatability (`join_is_deterministic
 - Extend lengthens a line only, and its boundary must be a line, circle or arc.
   It does not extend polylines, arcs, circles, ellipses or splines, and it does
   not follow a boundary past its drawn extent.
-- Break splits a line only; it does not break polylines, arcs, circles,
-  ellipses, splines, text, hatches or dimensions.
+- Break splits a line or an arc only; it does not break polylines, circles,
+  ellipses, splines, text, hatches or dimensions, and it never turns a circle
+  into an arc.
 - Join merges two lines only, and only when they are collinear, share one
   endpoint and sit on the same layer. It does not join polylines, arcs, circles,
   ellipses, splines or chains of more than two lines, does not close a gap

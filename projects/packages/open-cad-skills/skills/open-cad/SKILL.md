@@ -12,8 +12,8 @@ drawings, add lines, points, circles, arcs, ellipses, polylines, text, hatches, 
 radial or diameter and ordinate dimensions, add rectangles and regular polygons as
 closed polylines,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
-explode a polyline, offset a circle/arc/polyline/line, break a line at an interior
-point, join two collinear lines that share an endpoint, fillet or chamfer two lines and
+explode a polyline, offset a circle/arc/polyline/line, break a line or arc at an
+interior point, join two collinear lines that share an endpoint, fillet or chamfer two lines and
 measure a drawing, selected entities, the distance between two points or the
 angle at three points, move, update and
 delete entities, undo and redo,
@@ -203,11 +203,14 @@ entities with `offset/unsupported-entity`, an unknown id with
 `offset/not-found`, a non-positive resulting radius with
 `offset/invalid-distance`, and a mismatched side with `offset/invalid-side`.
 The signed form keeps its original `session/argument-invalid` and
-`object/unsupported` codes. `break` takes `--id` of one line and `--at x,y`;
-the point must lie strictly inside the segment, away from both endpoints, and is
+`object/unsupported` codes. `break` takes `--id` of one line or arc and `--at x,y`;
+a line point must lie strictly inside the segment, away from both endpoints, and is
 projected onto the line so the two pieces stay collinear. The source is replaced
-by two lines with fresh ids on the same layer; a point on an endpoint or outside
-the segment reports `break/not-on-entity`, and another entity type reports
+by two lines with fresh ids on the same layer. An arc point must lie on the arc,
+away from both endpoints: the source keeps the part from its start angle to the
+cut angle and a new arc with the next id covers the rest, both sharing the centre
+and radius. A point on an endpoint or off the entity reports
+`break/not-on-entity`; a circle or another entity type reports
 `object/unsupported`. `join` takes `--a` and `--b`, two lines on the same layer
 that share one endpoint. They must be collinear and continue in opposite
 directions from that point within `1e-9` scaled by the longer segment; the two

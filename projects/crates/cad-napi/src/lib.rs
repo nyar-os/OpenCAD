@@ -860,7 +860,7 @@ fn drawing_extend(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
-/// Splits one line into two lines at an interior point.
+/// Splits one line or arc at an interior point.
 #[function]
 fn drawing_break(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;

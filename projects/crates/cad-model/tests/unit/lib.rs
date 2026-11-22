@@ -4243,6 +4243,108 @@ fn break_is_deterministic() {
 }
 
 #[test]
+fn break_arc_at_interior_point_splits_into_two_arcs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 180.0).expect("arc");
+
+    let result = break_entity(handle, BreakRequest { id: "entity-1".to_string(), at: [0.0, 5.0] }).expect("break arc");
+    assert_eq!(result["removed"], json!("entity-1"));
+    assert_eq!(result["revision"], json!(3));
+    let arcs = result["created"].as_array().expect("created arcs");
+    assert_eq!(arcs.len(), 2);
+    assert_eq!(arcs[0]["id"], json!("entity-1"), "the source keeps the first part");
+    assert_eq!(arcs[1]["id"], json!("entity-2"));
+    for arc in arcs {
+        assert_eq!(arc["kind"]["type"], json!("arc"));
+        assert_eq!(arc["layer"], json!(DEFAULT_LAYER));
+        assert_point(&arc["kind"]["center"], [0.0, 0.0]);
+        assert_eq!(arc["kind"]["radius"], json!(5.0));
+    }
+    assert_eq!(arcs[0]["kind"]["start_angle"], json!(0.0));
+    assert_eq!(arcs[0]["kind"]["end_angle"], json!(90.0));
+    assert_eq!(arcs[1]["kind"]["start_angle"], json!(90.0));
+    assert_eq!(arcs[1]["kind"]["end_angle"], json!(180.0));
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.iter().map(|entity| entity.id.as_str()).collect::<Vec<_>>(), ["entity-1", "entity-2"]);
+    assert_eq!(drawing.revision, 3);
+
+    let appended = add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 180.0, 270.0).expect("append");
+    assert_eq!(appended["entity"]["id"], json!("entity-3"), "ids continue after the split arc");
+    assert_eq!(appended["revision"], json!(4));
+    close(handle).expect("close");
+}
+
+#[test]
+fn break_arc_keeps_the_wrapped_sweep_convention() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 350.0, 20.0).expect("arc");
+
+    let at = arc_point([0.0, 0.0], 5.0, 5.0);
+    let result = break_entity(handle, BreakRequest { id: "entity-1".to_string(), at }).expect("break arc");
+    let arcs = result["created"].as_array().expect("created arcs");
+    let first_start = arcs[0]["kind"]["start_angle"].as_f64().expect("start");
+    let first_end = arcs[0]["kind"]["end_angle"].as_f64().expect("end");
+    let second_start = arcs[1]["kind"]["start_angle"].as_f64().expect("start");
+    let second_end = arcs[1]["kind"]["end_angle"].as_f64().expect("end");
+    assert!((first_start - 350.0).abs() < 1e-9, "the first part keeps the source start angle, got {first_start}");
+    assert!((first_end - 5.0).abs() < 1e-9, "the first part ends at the cut angle, got {first_end}");
+    assert!((second_start - 5.0).abs() < 1e-9, "the second part starts at the cut angle, got {second_start}");
+    assert!((second_end - 20.0).abs() < 1e-9, "the second part keeps the source end angle, got {second_end}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn break_arc_rejects_endpoints_and_points_off_the_arc() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 180.0).expect("arc");
+
+    for at in [[5.0, 0.0], [-5.0, 0.0], [0.0, 4.9], [0.0, 5.1], [0.0, -5.0]] {
+        assert_eq!(
+            break_entity(handle, BreakRequest { id: "entity-1".to_string(), at }).expect_err("point off the interior").code,
+            "break/not-on-entity",
+            "point {at:?}"
+        );
+    }
+    assert_eq!(
+        break_entity(handle, BreakRequest { id: "entity-404".to_string(), at: [0.0, 5.0] }).expect_err("missing arc").code,
+        "object/not-found"
+    );
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 1, "a rejected break leaves the arc untouched");
+    assert_eq!(drawing.revision, 2);
+    close(handle).expect("close");
+}
+
+#[test]
+fn break_arc_rejects_zero_radius_and_locked_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 180.0).expect("arc");
+    store::edit(handle, |drawing| {
+        drawing.entities[0].kind = EntityKind::Arc { center: [0.0, 0.0], radius: 0.0, start_angle: 0.0, end_angle: 180.0 };
+        Ok(())
+    })
+    .expect("force a zero-radius arc");
+    assert_eq!(
+        break_entity(handle, BreakRequest { id: "entity-1".to_string(), at: [0.0, 0.0] }).expect_err("zero radius").code,
+        "break/not-on-entity"
+    );
+
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_arc(handle, "Structure", [0.0, 0.0], 5.0, 0.0, 180.0).expect("arc");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        break_entity(handle, BreakRequest { id: "entity-2".to_string(), at: [0.0, 5.0] }).expect_err("locked break").code,
+        "drawing/layer-locked"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
 fn join_horizontal_lines_into_one_segment() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);

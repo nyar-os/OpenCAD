@@ -1039,10 +1039,13 @@ export interface ExtendResult {
 /**
  * Result of `breakEntity()`.
  *
- * `removed` is the source line id and `created` holds the two lines that replace
- * it: the piece from the original `from` endpoint to the break point, then the
- * piece from the break point to the original `to` endpoint. Both keep the
- * source layer and receive fresh deterministic ids.
+ * `removed` is the source entity id and `created` holds the two pieces in order.
+ * A line is removed and replaced by the piece from its original `from` endpoint
+ * to the break point and the piece from the break point to its original `to`
+ * endpoint, both with fresh deterministic ids. An arc keeps its id for the part
+ * from its original start angle to the cut angle, and a new arc with the next
+ * deterministic id covers the cut angle to the original end angle. All pieces
+ * keep the source layer.
  */
 export interface BreakResult {
     readonly revision: number;

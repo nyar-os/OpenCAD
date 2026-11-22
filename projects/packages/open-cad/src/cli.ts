@@ -1782,7 +1782,7 @@ cli
 
 cli
     .command('break', 'cli.cmd.break')
-    .option('--id <line>', 'cli.opt.id')
+    .option('--id <line|arc>', 'cli.opt.id')
     .option('--at <x,y>', 'cli.opt.break-at')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
@@ -1793,7 +1793,7 @@ cli
         const id = text(options, 'id');
         const at = point(options, 'at');
         if (id === undefined || at === undefined) {
-            ctx.fail('open-cad.cli.break-required', { message: '`--id <line>` and `--at x,y` are required' });
+            ctx.fail('open-cad.cli.break-required', { message: '`--id <line|arc>` and `--at x,y` are required' });
             return 2;
         }
         const opened = await guard(ctx, () => app.open({ path: file }));

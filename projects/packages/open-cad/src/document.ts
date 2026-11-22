@@ -784,11 +784,13 @@ export class DrawingDocument {
     }
 
     /**
-     * Splits a line into two lines at a point strictly inside the segment. The
-     * point is projected onto the line, so both pieces stay collinear and their
-     * lengths add up to the original. Both pieces keep the source layer and
-     * receive fresh ids; a point on an endpoint or outside reports
-     * `break/not-on-entity`, and a non-line reports `object/unsupported`.
+     * Splits a line or arc at a point strictly inside it. A line point is
+     * projected onto the segment, so both pieces stay collinear and their
+     * lengths add up to the original. An arc point must lie on the arc away from
+     * both endpoints and splits it at that angle into two arcs sharing the
+     * centre and radius. Every piece stays on the source layer; a point on an
+     * endpoint or off the entity reports `break/not-on-entity`, and a circle or
+     * another kind reports `object/unsupported`.
      */
     breakEntity(id: EntityId, at: Point): BreakResult {
         return this.edit((handle) => service.breakEntity(handle, id, at), (result) => {

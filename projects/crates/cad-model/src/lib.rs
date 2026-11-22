@@ -3074,28 +3074,74 @@ pub fn extend(handle: u64, target_id: &str, boundary_id: &str, side: ExtendSide)
 /// Arguments of [`break_entity`].
 #[derive(Debug, Clone)]
 pub struct BreakRequest {
-    /// Identifier of the line to split.
+    /// Identifier of the line or arc to split.
     pub id: String,
-    /// Point where the line is split; it must lie strictly inside the segment.
+    /// Point where the entity is split; it must lie strictly inside the segment
+    /// or the arc sweep.
     pub at: [f64; 2],
 }
 
-/// Splits one line into two lines at an interior point.
+/// Splits an arc at an interior point and returns the two parts in order.
 ///
-/// The point must lie on the segment, away from both endpoints: the tolerance is
-/// `1e-9` scaled by the segment length. A point that is close but not exactly on
-/// the segment is projected onto it, so the two pieces stay collinear and their
-/// lengths add up to the original. The source line is removed and replaced, at
-/// the same list position, by two lines that keep its layer and receive fresh
-/// deterministic ids. The edit is one history step and one revision.
+/// The point must lie on the arc's circle within `1e-9` scaled by the radius
+/// (and at least 1), and its angle must fall inside the counter-clockwise sweep
+/// away from both endpoints, using the same degree tolerance as the arc trim.
+fn break_arc(
+    center: [f64; 2],
+    radius: f64,
+    start_angle: f64,
+    end_angle: f64,
+    id: &str,
+    at: [f64; 2],
+) -> Result<(EntityKind, EntityKind), ServiceError> {
+    let radius_abs = radius.abs();
+    if radius_abs <= 1e-12 {
+        return Err(ServiceError::new("break/not-on-entity", format!("arc `{id}` has zero radius and cannot be broken")));
+    }
+    let offset = [at[0] - center[0], at[1] - center[1]];
+    let radial = offset[0].hypot(offset[1]) - radius_abs;
+    if radial.abs() > 1e-9 * radius_abs.max(1.0) {
+        return Err(ServiceError::new("break/not-on-entity", format!("the break point must lie on arc `{id}`")));
+    }
+    let sweep = arc_sweep(start_angle, end_angle);
+    let angle = normalize_angle(offset[1].atan2(offset[0]).to_degrees());
+    let travelled = normalize_angle(angle - start_angle);
+    let endpoint_tolerance = 1e-9 * sweep.max(1.0);
+    if !angle_within_sweep(start_angle, sweep, angle) || travelled <= endpoint_tolerance || travelled >= sweep - endpoint_tolerance {
+        return Err(ServiceError::new(
+            "break/not-on-entity",
+            format!("the break point must lie strictly inside arc `{id}`, away from its endpoints"),
+        ));
+    }
+    Ok((EntityKind::Arc { center, radius, start_angle, end_angle: angle }, EntityKind::Arc { center, radius, start_angle: angle, end_angle }))
+}
+
+/// Splits one line or arc at an interior point.
 ///
-/// The response carries `{ revision, drawing, removed, created }`, where
-/// `removed` is the source id and `created` holds the two new lines from `from`
-/// to `at` and from `at` to `to`. A point on an endpoint or outside the segment
-/// reports `break/not-on-entity`; a non-line reports `object/unsupported`; an
-/// unknown id reports `object/not-found`; a locked or frozen layer reports
-/// `drawing/layer-locked` or `drawing/layer-frozen`; non-finite coordinates
-/// report `session/argument-invalid`.
+/// A line point must lie on the segment, away from both endpoints: the tolerance
+/// is `1e-9` scaled by the segment length. A point that is close but not exactly
+/// on the segment is projected onto it, so the two pieces stay collinear and
+/// their lengths add up to the original. The source line is removed and
+/// replaced, at the same list position, by two lines that keep its layer and
+/// receive fresh deterministic ids.
+///
+/// An arc point must lie on the arc, away from both endpoints: the radial
+/// tolerance is `1e-9` scaled by the radius and the angular endpoint tolerance
+/// matches the arc trim. The source keeps the part from its start angle to the
+/// cut angle, and a new arc appended with the next deterministic id covers the
+/// cut angle to the original end angle. Both share the centre, radius and layer.
+///
+/// Either way the edit is one history step and one revision. The response
+/// carries `{ revision, drawing, removed, created }`, where `removed` is the
+/// source id and `created` holds the two resulting entities in order: for a line
+/// from `from` to `at` and `at` to `to`, both with fresh ids, and for an arc the
+/// two pieces, where the first reuses the source id.
+///
+/// A point on an endpoint or off the entity, a zero-length line and a zero-radius
+/// arc report `break/not-on-entity`; a circle or another kind reports
+/// `object/unsupported`; an unknown id reports `object/not-found`; a locked or
+/// frozen layer reports `drawing/layer-locked` or `drawing/layer-frozen`;
+/// non-finite coordinates report `session/argument-invalid`.
 pub fn break_entity(handle: u64, request: BreakRequest) -> Result<Value, ServiceError> {
     require_finite(&[request.at], "at")?;
     let BreakRequest { id, at } = request;
@@ -3104,6 +3150,17 @@ pub fn break_entity(handle: u64, request: BreakRequest) -> Result<Value, Service
         let source = drawing.entities[index].clone();
         if let Some(error) = locked_layer(drawing, &source.layer) {
             return Err(error);
+        }
+        if let EntityKind::Arc { center, radius, start_angle, end_angle } = source.kind {
+            let (first, second) = break_arc(center, radius, start_angle, end_angle, &id, at)?;
+            drawing.entities[index].kind = first;
+            let second = Entity { id: drawing.take_entity_id(), layer: source.layer.clone(), kind: second };
+            if let Some(position) = drawing.draw_order.iter().position(|candidate| candidate == &id) {
+                drawing.draw_order.insert(position + 1, second.id.clone());
+            }
+            drawing.entities.push(second.clone());
+            drawing.revision += 1;
+            return Ok(vec![drawing.entities[index].clone(), second]);
         }
         let EntityKind::Line { from, to } = source.kind
         else {
