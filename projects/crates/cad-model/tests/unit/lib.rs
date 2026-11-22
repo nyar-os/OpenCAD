@@ -989,6 +989,148 @@ fn snap_ordering_tolerance_and_defaults_stay_deterministic() {
 }
 
 #[test]
+fn snap_perpendicular_projects_lines_and_closed_polyline_edges() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let line = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let line_id = line["entity"]["id"].as_str().expect("line id").to_string();
+
+    let foot = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["perpendicular".to_string()],
+            point: Some([5.0, 5.0]),
+            ids: Some(vec![line_id.clone()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("foot");
+    assert_eq!(foot["count"], json!(1));
+    assert_eq!(foot["points"][0]["kind"], json!("perpendicular"));
+    assert!(snap_has_point(&foot, [5.0, 0.0]));
+
+    let outside = snap_points(
+        handle,
+        SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([15.0, 5.0]), ids: Some(vec![line_id]), ..SnapRequest::default() },
+    )
+    .expect("outside");
+    assert_eq!(outside["count"], json!(0), "a projection outside the segment gives no candidate");
+
+    let chain = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 20.0], [10.0, 20.0], [10.0, 30.0]], true).expect("polyline");
+    let chain_id = chain["entity"]["id"].as_str().expect("polyline id").to_string();
+    let closing = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["perpendicular".to_string()],
+            point: Some([12.0, 22.0]),
+            ids: Some(vec![chain_id]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("closing edge");
+    assert!(snap_has_point(&closing, [7.0, 27.0]), "the closing edge of a closed polyline contributes a perpendicular foot");
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_perpendicular_covers_circles_and_filters_arcs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let circle = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
+    let circle_id = circle["entity"]["id"].as_str().expect("circle id").to_string();
+
+    let points = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["perpendicular".to_string()],
+            point: Some([20.0, 0.0]),
+            ids: Some(vec![circle_id.clone()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("circle perpendicular");
+    assert_eq!(points["count"], json!(2));
+    assert!(snap_has_point(&points, [10.0, 0.0]));
+    assert!(snap_has_point(&points, [-10.0, 0.0]));
+
+    let at_center = snap_points(
+        handle,
+        SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([0.0, 0.0]), ids: Some(vec![circle_id]), ..SnapRequest::default() },
+    )
+    .expect("centre probe");
+    assert_eq!(at_center["count"], json!(0), "a probe at the centre gives no perpendicular line");
+
+    let arc = add_arc(handle, DEFAULT_LAYER, [0.0, 50.0], 10.0, 0.0, 90.0).expect("arc");
+    let arc_id = arc["entity"]["id"].as_str().expect("arc id").to_string();
+    let arc_points = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["perpendicular".to_string()],
+            point: Some([20.0, 50.0]),
+            ids: Some(vec![arc_id.clone()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("arc perpendicular");
+    assert_eq!(arc_points["count"], json!(1), "only the point inside the counter-clockwise sweep is reported");
+    assert_eq!(arc_points["points"][0]["kind"], json!("perpendicular"));
+    assert!(snap_has_point(&arc_points, [10.0, 50.0]));
+    assert!(!snap_has_point(&arc_points, [-10.0, 50.0]), "the opposite point lies outside the 0-90 sweep");
+
+    let arc_center = snap_points(
+        handle,
+        SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([0.0, 50.0]), ids: Some(vec![arc_id]), ..SnapRequest::default() },
+    )
+    .expect("arc centre probe");
+    assert_eq!(arc_center["count"], json!(0));
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_perpendicular_ordering_tolerance_and_missing_probe() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let below = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("below");
+    let above = add_line(handle, DEFAULT_LAYER, [0.0, 10.0], [10.0, 10.0]).expect("above");
+
+    let ordered =
+        snap_points(handle, SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([5.0, 5.0]), ..SnapRequest::default() })
+            .expect("ordered");
+    assert_eq!(ordered["count"], json!(2));
+    assert_eq!(ordered["points"][0]["point"], json!([5.0, 0.0]));
+    assert_eq!(ordered["points"][1]["point"], json!([5.0, 10.0]));
+    assert_eq!(ordered["points"][0]["entities"][0], below["entity"]["id"], "equal distances sort by entity id");
+    assert_eq!(ordered["points"][1]["entities"][0], above["entity"]["id"]);
+    let again =
+        snap_points(handle, SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([5.0, 5.0]), ..SnapRequest::default() })
+            .expect("again");
+    assert_eq!(ordered["points"], again["points"]);
+
+    let filtered = snap_points(
+        handle,
+        SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([5.0, 5.0]), tolerance: Some(4.9), ..SnapRequest::default() },
+    )
+    .expect("filtered");
+    assert_eq!(filtered["count"], json!(0), "a tolerance below the nearest candidate drops every point");
+    let kept = snap_points(
+        handle,
+        SnapRequest { modes: vec!["perpendicular".to_string()], point: Some([5.0, 5.0]), tolerance: Some(5.1), ..SnapRequest::default() },
+    )
+    .expect("kept");
+    assert_eq!(kept["count"], json!(2));
+
+    assert!(
+        snap_points(handle, SnapRequest { modes: vec!["perpendicular".to_string()], ..SnapRequest::default() }).is_err(),
+        "perpendicular needs a probe point"
+    );
+
+    let default = snap_points(handle, SnapRequest::default()).expect("default");
+    let modes = default["modes"].as_array().expect("modes").iter().map(|value| value.as_str().expect("mode").to_string()).collect::<Vec<_>>();
+    assert!(!modes.contains(&"perpendicular".to_string()), "perpendicular is opt-in");
+    close(handle).expect("close");
+}
+
+#[test]
 fn drawing_properties_are_read_and_written() {
     let created = create(CreateRequest { title: Some("Site".to_string()), ..CreateRequest::default() }).expect("create");
     let handle = handle_of(&created);

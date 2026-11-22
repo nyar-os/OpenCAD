@@ -612,7 +612,7 @@ export interface SelectionResult {
 }
 
 /** One computed object snap candidate. */
-export type SnapMode = 'endpoint' | 'midpoint' | 'center' | 'quadrant' | 'nearest' | 'intersection';
+export type SnapMode = 'endpoint' | 'midpoint' | 'center' | 'quadrant' | 'nearest' | 'intersection' | 'perpendicular';
 
 /** One snap candidate returned by `snap()`. */
 export interface SnapPoint {
@@ -628,10 +628,10 @@ export interface SnapPoint {
 export interface SnapRequest {
     /**
      * Modes to compute. Defaults to `endpoint`, `midpoint`, `center` and
-     * `intersection`; `quadrant` and `nearest` are opt-in.
+     * `intersection`; `quadrant`, `nearest` and `perpendicular` are opt-in.
      */
     readonly modes?: readonly SnapMode[];
-    /** Probe point; candidates are sorted by distance to it. Required by `nearest`. */
+    /** Probe point; candidates are sorted by distance to it. Required by `nearest` and `perpendicular`. */
     readonly point?: Point;
     /** Keep only candidates within this distance; requires `point`. */
     readonly tolerance?: number;

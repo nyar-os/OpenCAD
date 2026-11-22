@@ -166,9 +166,10 @@ available without a sheet name.
 ## Object snap
 
 `snap` computes candidates without changing the drawing. Modes are `endpoint`,
-`midpoint`, `center`, `quadrant`, `nearest` and `intersection`. A request that
-names no modes keeps the original set — `endpoint`, `midpoint`, `center` and
-`intersection` — so `quadrant` and `nearest` are opt-in.
+`midpoint`, `center`, `quadrant`, `nearest`, `intersection` and
+`perpendicular`. A request that names no modes keeps the original set —
+`endpoint`, `midpoint`, `center` and `intersection` — so `quadrant`, `nearest`
+and `perpendicular` are opt-in.
 
 - `center` covers circles, arcs and ellipses.
 - `quadrant` covers circles and arcs at 0, 90, 180 and 270 degrees. An arc only
@@ -176,6 +177,13 @@ names no modes keeps the original set — `endpoint`, `midpoint`, `center` and
 - `nearest` projects the probe point onto a line, one polyline segment, a circle
   or an arc. It needs a probe point; an arc result is clamped to the start and
   end angles.
+- `perpendicular` needs a probe point too. On a line or one polyline segment it
+  reports the foot of the perpendicular only when that foot lies on the bounded
+  segment, including the closing edge of a closed polyline. On a circle it
+  reports both points where the line through the centre and the probe meets the
+  circle, and on an arc only the points inside its counter-clockwise sweep. A
+  probe at a circle or arc centre yields no candidate. Ellipses, splines, points,
+  text, hatches and dimensions contribute none.
 - `intersection` covers bounded line-to-line, line-to-circle and
   circle-to-circle pairs. Tangency, parallel lines, concentric circles and
   separated pairs produce no candidate.
@@ -183,11 +191,11 @@ names no modes keeps the original set — `endpoint`, `midpoint`, `center` and
 Candidates sort by distance to the probe point, then by entity id, then by mode,
 so equal-distance results are deterministic. A tolerance keeps only candidates
 within that distance and needs a probe point. A degenerate circle with radius 0
-contributes no quadrant, nearest or intersection candidate, and polyline nearest
-points are computed segment by segment, including the closing edge of a closed
-polyline. Ellipses and splines offer `endpoint`, `midpoint` and `center` only;
-quadrants and nearest points are analytic for lines, polylines, circles and
-arcs.
+contributes no quadrant, nearest, perpendicular or intersection candidate, and
+polyline nearest and perpendicular points are computed segment by segment,
+including the closing edge of a closed polyline. Ellipses and splines offer
+`endpoint`, `midpoint` and `center` only; quadrants, nearest and perpendicular
+points are analytic for lines, polylines, circles and arcs.
 
 ## Offset
 
@@ -235,9 +243,10 @@ point, text, hatch and dimension entities stay unsupported.
   dimensions.
 - No 3D primitives, solids or booleans; STEP/STL/OBJ are faceted projections.
 - No paper-space layout export to DXF, SVG or PDF.
-- Snap quadrants and nearest points are analytic for lines, polylines, circles
-  and arcs only; ellipses and splines stay endpoint, midpoint and centre snaps.
-  Intersections cover lines and full circles, not arcs, ellipses or splines.
+- Snap quadrants, nearest points and perpendicular points are analytic for
+  lines, polylines, circles and arcs only; ellipses and splines stay endpoint,
+  midpoint and centre snaps. Intersections cover lines and full circles, not
+  arcs, ellipses or splines.
 - `text find`/`replace` covers `TEXT` entities only, not text inside dimensions
   or hatches.
 - Named UCS entities are not modelled; the UCS is a coordinate query, not a
