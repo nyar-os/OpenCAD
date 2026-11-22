@@ -24,56 +24,39 @@
                 </div>
             </div>
 
-            <div class="studio-frame" aria-hidden="true">
-                <div class="sf-titlebar">
-                    <span class="sf-mark">C</span>
-                    <span class="sf-name">OpenCAD Studio</span>
-                    <span class="sf-doc">No drawing open</span>
-                    <span class="sf-rev">preview</span>
+            <div class="sheet" aria-hidden="true">
+                <div class="sheet__head">
+                    <span class="sheet__no">SHEET 01 / 01</span>
+                    <span class="sheet__file">demo-drawing.svg</span>
+                    <span class="sheet__rev">EXPORT</span>
                 </div>
-                <div class="sf-toolbar">
-                    <span class="sf-block sf-block--wide"></span>
-                    <span class="sf-block"></span>
-                    <span class="sf-block"></span>
-                    <span class="sf-block"></span>
-                    <span class="sf-block sf-block--wide"></span>
-                    <span class="sf-block"></span>
+                <div class="sheet__draw">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 145.2 105.2" role="img" aria-label="Exported OpenCAD drawing">
+                        <title>Mounting plate</title>
+                        <line x1="6.6" y1="86.6" x2="6.6" y2="98.6" stroke="#0b7285" stroke-width="0.5"></line>
+                        <line x1="126.6" y1="86.6" x2="126.6" y2="98.6" stroke="#0b7285" stroke-width="0.5"></line>
+                        <line x1="6.6" y1="98.6" x2="126.6" y2="98.6" stroke="#0b7285" stroke-width="0.5"></line>
+                        <text x="66.6" y="97.6" font-size="1.75" text-anchor="start" fill="#0b7285">120</text>
+                        <line x1="126.6" y1="86.6" x2="138.6" y2="86.6" stroke="#0b7285" stroke-width="0.5"></line>
+                        <line x1="126.6" y1="6.6" x2="138.6" y2="6.6" stroke="#0b7285" stroke-width="0.5"></line>
+                        <line x1="138.6" y1="86.6" x2="138.6" y2="6.6" stroke="#0b7285" stroke-width="0.5"></line>
+                        <text x="138.6" y="45.6" font-size="1.75" text-anchor="start" fill="#0b7285">80</text>
+                        <line x1="52.457864" y1="60.742136" x2="80.742136" y2="32.457864" stroke="#0b7285" stroke-width="0.5"></line>
+                        <text x="90.641631" y="22.558369" font-size="1.75" text-anchor="start" fill="#0b7285">DIA40</text>
+                        <path d="M6.6 86.6 L126.6 86.6 L126.6 6.6 L6.6 6.6 Z" fill="none" stroke="#1f2937" stroke-width="0.5"></path>
+                        <ellipse cx="21.6" cy="71.6" rx="5" ry="5" fill="none" stroke="#1f2937" stroke-width="0.5"></ellipse>
+                        <ellipse cx="111.6" cy="71.6" rx="5" ry="5" fill="none" stroke="#1f2937" stroke-width="0.5"></ellipse>
+                        <ellipse cx="21.6" cy="21.6" rx="5" ry="5" fill="none" stroke="#1f2937" stroke-width="0.5"></ellipse>
+                        <ellipse cx="111.6" cy="21.6" rx="5" ry="5" fill="none" stroke="#1f2937" stroke-width="0.5"></ellipse>
+                        <ellipse cx="66.6" cy="46.6" rx="20" ry="20" fill="none" stroke="#1f2937" stroke-width="0.5"></ellipse>
+                        <ellipse cx="66.6" cy="46.6" rx="12" ry="12" fill="none" stroke="#1f2937" stroke-width="0.5"></ellipse>
+                        <line x1="41.6" y1="46.6" x2="91.6" y2="46.6" stroke="#1f2937" stroke-width="0.5"></line>
+                        <text x="46.6" y="14.6" font-size="6" text-anchor="start" fill="#1f2937">MOUNTING PLATE</text>
+                    </svg>
                 </div>
-                <div class="sf-body">
-                    <div class="sf-rail">
-                        <span class="sf-rail-head">Layers</span>
-                        <span class="sf-rail-empty"></span>
-                        <span class="sf-rail-empty"></span>
-                        <span class="sf-rail-head">Export</span>
-                        <span class="sf-rail-empty"></span>
-                    </div>
-                    <div class="sf-canvas">
-                        <div class="sf-ruler-x">
-                            <span>0</span>
-                            <span>200</span>
-                            <span>400</span>
-                            <span>600</span>
-                        </div>
-                        <div class="sf-ruler-y">
-                            <span>0</span>
-                            <span>200</span>
-                            <span>400</span>
-                        </div>
-                        <div class="sf-grid">
-                            <span class="sf-axis sf-axis--x"></span>
-                            <span class="sf-axis sf-axis--y"></span>
-                            <div class="sf-empty">
-                                <span class="sf-empty-mark">C</span>
-                                <b>No drawing open</b>
-                                <span>The renderer is not implemented.</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="sf-status">
-                    <span>ready · no drawing</span>
-                    <span>native host</span>
-                    <span class="sf-chip">viewport not implemented</span>
+                <div class="sheet__foot">
+                    <span>open-cad export demo.ocad --format svg</span>
+                    <span>120 × 80 mm · Ø40 · 4 × Ø10</span>
                 </div>
             </div>
         </section>
@@ -257,10 +240,14 @@
 <style>
 .hero {
     display: grid;
-    grid-template-columns: 1.1fr 0.9fr;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
     gap: 48px;
     align-items: center;
     padding: 40px 0 8px;
+}
+
+.hero > * {
+    min-width: 0;
 }
 
 .hero h1 {
@@ -281,8 +268,8 @@
     flex-wrap: wrap;
 }
 
-.studio-frame {
-    position: relative;
+.sheet {
+    min-width: 0;
     border: 1px solid var(--ocd-line);
     border-radius: calc(var(--ocd-radius) + 2px);
     background: var(--ocd-surface);
@@ -290,224 +277,69 @@
     overflow: hidden;
 }
 
-.sf-titlebar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--ocd-line);
-    background: var(--ocd-surface-2);
-}
-
-.sf-mark {
-    display: grid;
-    place-items: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    background: var(--ocd-accent);
-    color: var(--ocd-on-accent);
-    font-family: var(--ocd-mono);
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.sf-name {
-    font-family: var(--ocd-mono);
-    font-size: 10px;
-    font-weight: 600;
-}
-
-.sf-doc {
-    margin-left: auto;
-    overflow: hidden;
-    color: var(--ocd-muted);
-    font-family: var(--ocd-mono);
-    font-size: 8px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.sf-rev {
-    padding: 1px 6px;
-    border: 1px solid var(--ocd-line);
-    border-radius: 999px;
-    background: var(--ocd-surface);
-    color: var(--ocd-muted);
-    font-family: var(--ocd-mono);
-    font-size: 7px;
-    text-transform: uppercase;
-}
-
-.sf-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--ocd-line);
-    background: var(--ocd-surface);
-}
-
-.sf-block {
-    width: 24px;
-    height: 13px;
-    border: 1px solid var(--ocd-line);
-    border-radius: 3px;
-    background: var(--ocd-surface-2);
-}
-
-.sf-block--wide {
-    width: 46px;
-}
-
-.sf-body {
-    display: grid;
-    grid-template-columns: 88px minmax(0, 1fr);
-    min-height: 188px;
-}
-
-.sf-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 8px;
-    border-right: 1px solid var(--ocd-line);
-    background: var(--ocd-surface-2);
-}
-
-.sf-rail-head {
-    color: var(--ocd-muted);
-    font-family: var(--ocd-mono);
-    font-size: 6px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-}
-
-.sf-rail-empty {
-    height: 13px;
-    border: 1px dashed var(--ocd-line);
-    border-radius: 3px;
-}
-
-.sf-canvas {
-    position: relative;
-    padding: 14px 0 0 14px;
-    background: var(--ocd-surface);
-}
-
-.sf-ruler-x {
-    position: absolute;
-    top: 0;
-    left: 14px;
-    right: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 14px;
-    padding: 0 6px;
-    border-bottom: 1px solid var(--ocd-line);
-    background: var(--ocd-surface);
-    color: var(--ocd-muted);
-    font-family: var(--ocd-mono);
-    font-size: 6px;
-}
-
-.sf-ruler-y {
-    position: absolute;
-    top: 14px;
-    left: 0;
-    bottom: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    width: 14px;
-    padding: 6px 0;
-    border-right: 1px solid var(--ocd-line);
-    background: var(--ocd-surface);
-    color: var(--ocd-muted);
-    font-family: var(--ocd-mono);
-    font-size: 6px;
-    text-align: center;
-}
-
-.sf-grid {
-    position: absolute;
-    inset: 14px 0 0 14px;
-    background:
-        linear-gradient(90deg, rgba(204, 212, 220, 0.5) 1px, transparent 1px) 0 0 / 16px 16px,
-        linear-gradient(rgba(204, 212, 220, 0.5) 1px, transparent 1px) 0 0 / 16px 16px;
-}
-
-.sf-axis {
-    position: absolute;
-    background: var(--ocd-accent);
-    opacity: 0.28;
-}
-
-.sf-axis--x {
-    top: 50%;
-    left: 0;
-    right: 0;
-    height: 1px;
-}
-
-.sf-axis--y {
-    top: 0;
-    bottom: 0;
-    left: 50%;
-    width: 1px;
-}
-
-.sf-empty {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    text-align: center;
-    transform: translate(-50%, -50%);
-}
-
-.sf-empty-mark {
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 24px;
-    margin: 0 auto 6px;
-    border: 1px solid var(--ocd-line);
-    border-radius: 50%;
-    background: var(--ocd-surface);
-    color: var(--ocd-accent);
-    font-family: var(--ocd-mono);
-    font-size: 10px;
-}
-
-.sf-empty b {
-    display: block;
-    font-family: var(--ocd-mono);
-    font-size: 9px;
-}
-
-.sf-empty span {
-    color: var(--ocd-muted);
-    font-size: 7px;
-}
-
-.sf-status {
+.sheet__head {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 4px 8px;
-    border-top: 1px solid var(--ocd-line);
-    background: var(--ocd-surface);
+    padding: 7px 11px;
+    border-bottom: 1px solid var(--ocd-line);
+    background: var(--ocd-surface-2);
     color: var(--ocd-muted);
     font-family: var(--ocd-mono);
-    font-size: 7px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
-.sf-chip {
+.sheet__no {
+    color: var(--ocd-ink);
+    font-weight: 600;
+}
+
+.sheet__file {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+    text-transform: none;
+}
+
+.sheet__rev {
     margin-left: auto;
-    padding: 1px 6px;
+    padding: 1px 7px;
     border: 1px solid var(--ocd-line);
     border-radius: 999px;
+    background: var(--ocd-surface);
+    color: var(--ocd-ink);
+    white-space: nowrap;
+}
+
+.sheet__draw {
+    padding: 12px;
+    background: #fff;
+}
+
+.sheet__draw svg {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.sheet__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 11px;
+    border-top: 1px solid var(--ocd-line);
+    background: var(--ocd-surface-2);
+    color: var(--ocd-muted);
+    font-family: var(--ocd-mono);
+    font-size: 9.5px;
+}
+
+.sheet__foot span:last-child {
+    white-space: nowrap;
 }
 
 .work-card {
@@ -646,12 +478,8 @@
         grid-template-columns: 1fr;
     }
 
-    .studio-frame {
-        max-width: 100%;
-    }
-
-    .sf-body {
-        grid-template-columns: 64px minmax(0, 1fr);
+    .sheet__foot span:last-child {
+        display: none;
     }
 }
 </style>
