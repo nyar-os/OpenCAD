@@ -681,7 +681,7 @@ export class DrawingDocument {
         });
     }
 
-    /** Offsets a circle, arc or polyline into a new entity on the same layer. */
+    /** Offsets a circle, arc, polyline or line into a new entity on the same layer. */
     offset(request: OffsetRequest): OffsetResult {
         return this.edit((handle) => service.offset(handle, request), (result) => {
             this.state = result.drawing;

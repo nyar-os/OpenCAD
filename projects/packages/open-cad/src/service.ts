@@ -762,7 +762,7 @@ export function explode(handle: number, entityId: string): ExplodeResult {
     return decode<ExplodeResult>(() => binding('drawing.explode').drawing_explode(handle, entityId));
 }
 
-/** Offsets a circle, arc or polyline into a new entity on the same layer. */
+/** Offsets a circle, arc, polyline or line into a new entity on the same layer. */
 export function offset(handle: number, request: OffsetRequest): OffsetResult {
     return decode<OffsetResult>(() =>
         binding('drawing.offset').drawing_offset(handle, JSON.stringify({ entityId: request.entityId, distance: request.distance })),

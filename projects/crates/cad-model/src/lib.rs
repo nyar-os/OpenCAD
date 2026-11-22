@@ -1707,15 +1707,17 @@ pub fn explode(handle: u64, entity: &str) -> Result<Value, ServiceError> {
     })
 }
 
-/// Offsets a circle, arc or polyline into a new entity on the same layer.
+/// Offsets a circle, arc, polyline or straight line into a new entity on the
+/// same layer.
 ///
-/// A positive `distance` grows circles and arcs and offsets an open polyline to
-/// the left of its travel direction; a negative distance shrinks or offsets to
-/// the right. Closed polylines offset around every vertex with mitered joins.
-/// Text, point, ellipse and dimension entities report `object/unsupported`; a
-/// resulting non-positive radius or a collapsed polyline reports
-/// `session/argument-invalid`; a locked layer reports `drawing/layer-locked`.
-/// The response carries `{ revision, drawing, entity, source }`.
+/// A positive `distance` grows circles and arcs and offsets an open polyline or
+/// line to the left of its travel direction; a negative distance shrinks or
+/// offsets to the right. Closed polylines offset around every vertex with
+/// mitered joins. Text, point, ellipse and dimension entities report
+/// `object/unsupported`; a resulting non-positive radius, a collapsed polyline
+/// or a zero-length line reports `session/argument-invalid`; a locked layer
+/// reports `drawing/layer-locked`. The response carries
+/// `{ revision, drawing, entity, source }`.
 pub fn offset(handle: u64, entity_id: &str, distance: f64) -> Result<Value, ServiceError> {
     if !distance.is_finite() || distance == 0.0 {
         return Err(argument("`distance` must be a non-zero finite number"));
@@ -1743,6 +1745,12 @@ pub fn offset(handle: u64, entity_id: &str, distance: f64) -> Result<Value, Serv
             }
             EntityKind::Polyline { points, closed } => {
                 EntityKind::Polyline { points: offset_polyline(points, *closed, distance)?, closed: *closed }
+            }
+            EntityKind::Line { from, to } => {
+                let normal =
+                    segment_normal(*from, *to).ok_or_else(|| argument(format!("line `{entity_id}` has zero length and cannot be offset")))?;
+                let shift = [normal[0] * distance, normal[1] * distance];
+                EntityKind::Line { from: [from[0] + shift[0], from[1] + shift[1]], to: [to[0] + shift[0], to[1] + shift[1]] }
             }
             other => {
                 return Err(ServiceError::new(
@@ -6772,6 +6780,27 @@ mod tests {
         assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
         let inset = offset(handle, "entity-3", 1.0).expect("offset the closed polyline inward");
         assert_eq!(inset["entity"]["kind"]["points"], json!([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn offset_lines_move_perpendicular_to_their_direction() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+        let left = offset(handle, "entity-1", 2.0).expect("offset the line left");
+        assert_eq!(left["entity"]["kind"]["type"], json!("line"));
+        assert_eq!(left["entity"]["kind"]["from"], json!([0.0, 2.0]));
+        assert_eq!(left["entity"]["kind"]["to"], json!([10.0, 2.0]));
+        assert_eq!(left["source"], json!("entity-1"));
+
+        let right = offset(handle, "entity-1", -3.0).expect("offset the line right");
+        assert_eq!(right["entity"]["kind"]["from"], json!([0.0, -3.0]));
+        assert_eq!(right["entity"]["kind"]["to"], json!([10.0, -3.0]));
+
+        let zero = add_line(handle, DEFAULT_LAYER, [5.0, 5.0], [5.0, 5.0]).expect("zero-length line");
+        let zero_id = zero["entity"]["id"].as_str().expect("id");
+        assert_eq!(offset(handle, zero_id, 1.0).expect_err("zero-length").code, "session/argument-invalid");
         close(handle).expect("close");
     }
 

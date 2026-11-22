@@ -695,7 +695,7 @@ fn drawing_explode(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
-/// Offsets a circle, arc or polyline into a new entity.
+/// Offsets a circle, arc, polyline or line into a new entity.
 #[function]
 fn drawing_offset(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;

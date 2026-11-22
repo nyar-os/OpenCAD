@@ -11,7 +11,7 @@ Working document core. The installed CLI and SDK can create and open `.ocad`
 drawings, add lines, points, circles, arcs, ellipses, polylines, text, hatches, linear,
 radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
-explode a polyline, offset a circle/arc/polyline, fillet or chamfer two lines and
+explode a polyline, offset a circle/arc/polyline/line, fillet or chamfer two lines and
 measure a drawing, selected entities, the distance between two points or the
 angle at three points, move, update and
 delete entities, undo and redo,
@@ -171,12 +171,13 @@ a rectangular grid creates `rows * columns - 1` copies and a polar array
 `count - 1` copies; both return the fresh ids. `explode` takes `--id` of one
 polyline and replaces it, at the same list position, with one line per edge
 (closed polylines gain the closing edge). `offset` takes `--id` of one circle,
-arc or polyline and `--distance`; it appends a new entity on the same layer
+arc, polyline or line and `--distance`; it appends a new entity on the same layer
 without moving the source. A positive distance grows a radius or offsets an
-open polyline to the left of its travel direction; a negative distance shrinks
-or offsets right. Closed polylines miter every vertex. Text, point, ellipse and
-dimension entities are refused with `object/unsupported`, and a non-positive
-resulting radius with `session/argument-invalid`. `fillet` takes `--first`,
+open polyline or line to the left of its travel direction; a negative distance
+shrinks or offsets right. Closed polylines miter every vertex. Text, point,
+ellipse and dimension entities are refused with `object/unsupported`, and a
+non-positive resulting radius or a zero-length line with
+`session/argument-invalid`. `fillet` takes `--first`,
 `--second` and `--radius`; `chamfer` takes `--first`, `--second`,
 `--distance-a` and optional `--distance-b` (which defaults to the first
 distance). Both require two different line entities, use the closest endpoint

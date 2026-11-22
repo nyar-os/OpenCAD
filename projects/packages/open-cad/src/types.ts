@@ -885,14 +885,14 @@ export interface ExplodeResult {
 /** Arguments of `offset()`. */
 export interface OffsetRequest {
     readonly entityId: EntityId;
-    /** Positive grows a circle or arc and offsets left; negative shrinks or offsets right. */
+    /** Positive grows a circle or arc and offsets a polyline or line left; negative shrinks or offsets right. */
     readonly distance: number;
 }
 
 /**
  * Result of `offset()`.
  *
- * The source entity stays in place and a new circle, arc or polyline is
+ * The source entity stays in place and a new circle, arc, polyline or line is
  * appended on the same layer.
  */
 export interface OffsetResult {
