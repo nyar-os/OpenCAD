@@ -1,28 +1,29 @@
 # @wae/open-cad-skills
 
-Agent skills for OpenCAD. The package ships skill documents only; it is not a
-runtime library and contains no DWG, DXF, STEP, IGES or mesh code.
+Agent skill documents for OpenCAD. The package ships
+`skills/open-cad/SKILL.md` and no runtime code.
 
-## Status
+Use it when an agent should build, edit, audit or export a drawing through the
+`open-cad` command line. The skill fixes the order of operations and names the
+checks to run before export, so the agent follows a verified workflow instead of
+guessing one.
 
-Executable document routes. `skills/open-cad/SKILL.md` lists the commands that
-work today: create/open `.ocad` drawings, add, move, update and delete entities,
-transform, copy, array, explode and measure, undo/redo, add and edit layers,
-inspect the document, import the declared ASCII DXF subset, and export SVG, DXF,
-PDF, STL or STEP. The skill states the limits of the build: no viewport
-renderer, no DWG/STEP importer, no full DXF reader, no STL reader and no
-constraint solver.
+## Install
 
-## Layout
-
-```text
-packages/open-cad-skills/
-├── package.json
-├── README.md
-└── skills/
-    └── open-cad/
-        └── SKILL.md
+```bash
+pnpm add @wae/open-cad-skills
 ```
 
-The skill must never be shipped claiming methods, commands or flags that the
-installed SDK/CLI does not expose.
+## Use
+
+Point the agent at
+`node_modules/@wae/open-cad-skills/skills/open-cad/SKILL.md`, then ask:
+
+> Use OpenCAD to create `plan.ocad` in millimetres with a 6,000 × 4,000 room on a
+> `Walls` layer, add an overall dimension on the `dimensions` layer, inspect it,
+> and export `plan.svg`.
+
+The skill must never claim a method, command or flag that the installed SDK and
+CLI do not expose. Support is defined by
+[Capabilities](../../../documentation/capabilities.md); the product overview is
+the [root README](../../../README.md).
