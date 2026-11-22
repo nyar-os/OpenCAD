@@ -13,7 +13,7 @@ radial or diameter and ordinate dimensions, add rectangles and regular polygons 
 closed polylines,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline/line, break a line at an interior
-point, fillet or chamfer two lines and
+point, join two collinear lines that share an endpoint, fillet or chamfer two lines and
 measure a drawing, selected entities, the distance between two points or the
 angle at three points, move, update and
 delete entities, undo and redo,
@@ -82,6 +82,7 @@ open-cad explode plan.ocad --id entity-2
 open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad offset plan.ocad --id entity-2 --distance 2 --side left
 open-cad break plan.ocad --id entity-1 --at 5,0
+open-cad join plan.ocad --a entity-1 --b entity-2
 open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
@@ -207,7 +208,13 @@ the point must lie strictly inside the segment, away from both endpoints, and is
 projected onto the line so the two pieces stay collinear. The source is replaced
 by two lines with fresh ids on the same layer; a point on an endpoint or outside
 the segment reports `break/not-on-entity`, and another entity type reports
-`object/unsupported`. `fillet` takes `--first`,
+`object/unsupported`. `join` takes `--a` and `--b`, two lines on the same layer
+that share one endpoint. They must be collinear and continue in opposite
+directions from that point within `1e-9` scaled by the longer segment; the two
+sources are replaced by one line from `a`'s free endpoint to `b`'s free endpoint
+with a fresh id. Endpoints that do not meet, lines that are not collinear, and a
+folded-back overlap report `join/not-adjacent`; a non-line or a cross-layer pair
+reports `object/unsupported`. `fillet` takes `--first`,
 `--second` and `--radius`; `chamfer` takes `--first`, `--second`,
 `--distance-a` and optional `--distance-b` (which defaults to the first
 distance). Both require two different line entities, use the closest endpoint

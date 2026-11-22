@@ -61,6 +61,7 @@ export type OperationName =
     | 'trim'
     | 'extend'
     | 'break'
+    | 'join'
     | 'measure'
     | 'measure-entity'
     | 'stats'
@@ -1047,6 +1048,20 @@ export interface BreakResult {
     readonly revision: number;
     readonly drawing: Drawing;
     readonly removed: EntityId;
+    readonly created: readonly Entity[];
+}
+
+/**
+ * Result of `joinEntities()`.
+ *
+ * `removed` holds both source line ids in `[a, b]` order and `created` holds the
+ * merged line, which runs from `a`'s free endpoint to `b`'s free endpoint on the
+ * shared layer with a fresh deterministic id.
+ */
+export interface JoinResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly removed: readonly EntityId[];
     readonly created: readonly Entity[];
 }
 

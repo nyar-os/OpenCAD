@@ -34,7 +34,7 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 `ordinate-dimension`, `angular-dimension`, `hatch`.
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
-`offset`, `trim`, `extend`, `break`, `fillet`, `chamfer`, `measure`,
+`offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `measure`,
 `measure-entity`, `measure-points`, `stats`, `dimension-style`, `text-style`,
 `text-search`, `group`, `select`, `properties`, `snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
@@ -319,6 +319,47 @@ rejected points (`break_rejects_endpoints_outside_points_and_off_line_points`),
 non-line and locked-layer refusals (`break_rejects_non_line_entities_and_locked_layers`),
 and repeatability (`break_is_deterministic`).
 
+## Join
+
+`joinEntities(a, b)` merges two collinear lines that share one endpoint into a
+single line. Both entities must be lines on the same layer, so colour, line type
+and lineweight stay consistent. One endpoint of `a` must coincide with one
+endpoint of `b` within a tolerance of `1e-9` scaled by the longer segment length
+(and at least 1), and the two lines must be collinear within the same tolerance
+and continue in opposite directions from that shared point, so the union is one
+longer segment rather than an overlap.
+
+The two sources are removed and replaced, at `a`'s list position, by one line
+from `a`'s free endpoint to `b`'s free endpoint. The merged line keeps the shared
+layer and receives a fresh deterministic id (`entity-N`); both sources leave
+draw order and entity groups. The edit is one history step and one revision.
+
+The response carries `{ revision, drawing, removed, created }`, where `removed`
+holds both source ids in `[a, b]` order and `created` holds the merged line.
+
+Endpoints that do not meet, lines that are not collinear, and a folded-back
+overlap where both free endpoints lie on the same side of the shared point report
+`join/not-adjacent`. A non-line or a pair on different layers reports
+`object/unsupported`; an unknown id reports `object/not-found`; a locked or
+frozen layer reports `drawing/layer-locked` or `drawing/layer-frozen`; the same
+id twice or a zero-length line reports `session/argument-invalid`.
+
+| Code | Cause |
+| :--- | :--- |
+| `join/not-adjacent` | The endpoints do not meet, the lines are not collinear, or they fold back over each other. |
+| `object/unsupported` | An entity is not a line, or the two lines are on different layers. |
+| `object/not-found` | An id does not name an entity. |
+| `drawing/layer-locked` | The shared layer is locked. |
+| `drawing/layer-frozen` | The shared layer is frozen. |
+| `session/argument-invalid` | Both ids are the same, or a line has zero length. |
+
+The model tests cover horizontal and slanted merges
+(`join_horizontal_lines_into_one_segment`, `join_slanted_lines_keeps_the_free_endpoints`),
+reversed endpoints (`join_accepts_a_reversed_second_line`), rejected pairs
+(`join_rejects_lines_that_do_not_meet_or_are_not_collinear`), non-line and
+cross-layer refusals (`join_rejects_non_lines_and_cross_layer_pairs`), locked
+layers (`join_refuses_a_locked_layer`) and repeatability (`join_is_deterministic`).
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -347,6 +388,10 @@ and repeatability (`break_is_deterministic`).
   not follow a boundary past its drawn extent.
 - Break splits a line only; it does not break polylines, arcs, circles,
   ellipses, splines, text, hatches or dimensions.
+- Join merges two lines only, and only when they are collinear, share one
+  endpoint and sit on the same layer. It does not join polylines, arcs, circles,
+  ellipses, splines or chains of more than two lines, does not close a gap
+  between separate endpoints, and does not move geometry.
 - Offset covers lines, straight-segment polylines, circles and arcs only. It
   does not clip self-intersections, miter arc or bulge segments (polylines have
   none) or offset ellipses, splines, points, text, hatches and dimensions.

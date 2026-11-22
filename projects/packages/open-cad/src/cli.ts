@@ -44,6 +44,7 @@ import type {
     ImportLoss,
     InspectCheck,
     InspectReport,
+    JoinResult,
     LayerChange,
     LayerMerge,
     LayerSummary,
@@ -322,6 +323,10 @@ function describeExtend(result: ExtendResult): string {
 
 function describeBreak(result: BreakResult): string {
     return `broke ${result.removed} into ${result.created.map((entity) => entity.id).join(',')} revision=${result.revision}`;
+}
+
+function describeJoin(result: JoinResult): string {
+    return `joined ${result.removed.join(',')} into ${result.created.map((entity) => entity.id).join(',')} revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1795,6 +1800,32 @@ cli
         try {
             const result = await guard(ctx, () => opened.breakEntity(id, at));
             ctx.emitResult(result, describeBreak(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('join', 'cli.cmd.join')
+    .option('--a <line>', 'cli.opt.join-a')
+    .option('--b <line>', 'cli.opt.join-b')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const a = text(options, 'a');
+        const b = text(options, 'b');
+        if (a === undefined || b === undefined) {
+            ctx.fail('open-cad.cli.join-required', { message: '`--a <line>` and `--b <line>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.joinEntities(a, b));
+            ctx.emitResult(result, describeJoin(result));
             return 0;
         } finally {
             opened.close();

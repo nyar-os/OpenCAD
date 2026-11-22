@@ -37,6 +37,7 @@ export const errorCodes = [
     'trim/no-intersection',
     'extend/no-intersection',
     'break/not-on-entity',
+    'join/not-adjacent',
     'format/unsupported',
     'format/unsupported-version',
     'format/invalid',

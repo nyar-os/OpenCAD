@@ -116,8 +116,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
-/// offset, trim, extend, break, fillet, chamfer and measure); constraint solving
-/// and a 3D kernel stay unsupported.
+/// offset, trim, extend, break, join, fillet, chamfer and measure); constraint
+/// solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -186,6 +186,7 @@ pub fn capabilities() -> Value {
                 "trim",
                 "extend",
                 "break",
+                "join",
                 "fillet",
                 "chamfer",
                 "measure",
@@ -205,9 +206,9 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "fillet" | "chamfer" | "measure"
-                | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select"
-                | "properties" | "snap" | "linetype" | "ucs" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer"
+                | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group"
+                | "select" | "properties" | "snap" | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -2943,6 +2944,127 @@ pub fn break_entity(handle: u64, request: BreakRequest) -> Result<Value, Service
             "drawing": session.summary(),
             "removed": id,
             "created": created,
+        })
+    })
+}
+
+/// Arguments of [`join_entities`].
+#[derive(Debug, Clone)]
+pub struct JoinRequest {
+    /// Identifier of the first line.
+    pub a: String,
+    /// Identifier of the second line; one of its endpoints must meet `a`.
+    pub b: String,
+}
+
+/// Merges two collinear lines that share one endpoint into a single line.
+///
+/// Both entities must be lines on the same layer, so colour, line type and
+/// lineweight stay consistent. One endpoint of `a` must coincide with one
+/// endpoint of `b`, and the two lines must be collinear and continue in opposite
+/// directions from that shared point, so the union is one longer segment rather
+/// than an overlap. Both tests use a tolerance of `1e-9` scaled by the longer
+/// segment length, and at least 1.
+///
+/// The two sources are removed and replaced, at `a`'s list position, by one line
+/// from `a`'s free endpoint to `b`'s free endpoint. The merged line keeps the
+/// shared layer and receives a fresh deterministic id; both sources leave draw
+/// order and entity groups. The edit is one history step and one revision.
+///
+/// The response carries `{ revision, drawing, removed, created }`, where
+/// `removed` holds both source ids in `[a, b]` order and `created` holds the
+/// merged line. Endpoints that do not meet, lines that are not collinear, or a
+/// folded-back overlap report `join/not-adjacent`; a non-line or a layer
+/// mismatch reports `object/unsupported`; an unknown id reports
+/// `object/not-found`; a locked or frozen layer reports `drawing/layer-locked` or
+/// `drawing/layer-frozen`; the same id twice or a zero-length line reports
+/// `session/argument-invalid`.
+pub fn join_entities(handle: u64, request: JoinRequest) -> Result<Value, ServiceError> {
+    let JoinRequest { a, b } = request;
+    if a == b {
+        return Err(argument("a join needs two different lines"));
+    }
+    let created = store::edit(handle, |drawing| {
+        let a_index = entity_index(drawing, &a)?;
+        let b_index = entity_index(drawing, &b)?;
+        let first = drawing.entities[a_index].clone();
+        let second = drawing.entities[b_index].clone();
+        let (a_from, a_to) = line_endpoints(&first.kind).ok_or_else(|| {
+            ServiceError::new("object/unsupported", format!("entity `{a}` is a {} and cannot be joined", kind_name(&first.kind)))
+        })?;
+        let (b_from, b_to) = line_endpoints(&second.kind).ok_or_else(|| {
+            ServiceError::new("object/unsupported", format!("entity `{b}` is a {} and cannot be joined", kind_name(&second.kind)))
+        })?;
+        if first.layer != second.layer {
+            return Err(ServiceError::new("object/unsupported", format!("lines `{a}` and `{b}` are on different layers and cannot be joined")));
+        }
+        for entity in [&first, &second] {
+            if let Some(error) = locked_layer(drawing, &entity.layer) {
+                return Err(error);
+            }
+        }
+        let a_length = distance(a_from, a_to);
+        let b_length = distance(b_from, b_to);
+        if a_length <= 1e-12 || b_length <= 1e-12 {
+            return Err(argument("a zero-length line cannot be joined"));
+        }
+        let tolerance = 1e-9 * a_length.max(b_length).max(1.0);
+        let a_points = [a_from, a_to];
+        let b_points = [b_from, b_to];
+        let mut shared: Option<(usize, usize)> = None;
+        let mut best = f64::INFINITY;
+        for (a_side, a_point) in a_points.iter().enumerate() {
+            for (b_side, b_point) in b_points.iter().enumerate() {
+                let gap = distance(*a_point, *b_point);
+                if gap <= tolerance && gap < best {
+                    best = gap;
+                    shared = Some((a_side, b_side));
+                }
+            }
+        }
+        let Some((a_side, b_side)) = shared
+        else {
+            return Err(ServiceError::new("join/not-adjacent", format!("lines `{a}` and `{b}` do not meet at a shared endpoint")));
+        };
+        let point = a_points[a_side];
+        let free_a = a_points[1 - a_side];
+        let free_b = b_points[1 - b_side];
+        let direction = unit_direction(point, free_a).ok_or_else(|| argument("a zero-length line cannot be joined"))?;
+        if cross(direction, [free_b[0] - point[0], free_b[1] - point[1]]).abs() > tolerance {
+            return Err(ServiceError::new("join/not-adjacent", format!("lines `{a}` and `{b}` are not collinear")));
+        }
+        let left = [free_a[0] - point[0], free_a[1] - point[1]];
+        let right = [free_b[0] - point[0], free_b[1] - point[1]];
+        if left[0] * right[0] + left[1] * right[1] >= 0.0 {
+            return Err(ServiceError::new(
+                "join/not-adjacent",
+                format!("lines `{a}` and `{b}` fold back over each other at their shared endpoint"),
+            ));
+        }
+        let id = drawing.take_entity_id();
+        let merged = Entity { id: id.clone(), layer: first.layer.clone(), kind: EntityKind::Line { from: free_a, to: free_b } };
+        drawing.entities.remove(b_index);
+        let position = if b_index < a_index { a_index - 1 } else { a_index };
+        drawing.entities[position] = merged.clone();
+        if let Some(slot) = drawing.draw_order.iter().position(|candidate| candidate == &a) {
+            drawing.draw_order.remove(slot);
+            drawing.draw_order.insert(slot.min(drawing.draw_order.len()), id);
+            drawing.draw_order.retain(|candidate| candidate != &b);
+        }
+        else if let Some(slot) = drawing.draw_order.iter().position(|candidate| candidate == &b) {
+            drawing.draw_order[slot] = id;
+        }
+        detach_entity_from_groups(drawing, &a);
+        detach_entity_from_groups(drawing, &b);
+        drawing.revision += 1;
+        Ok(merged)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "removed": [a, b],
+            "created": [created],
         })
     })
 }

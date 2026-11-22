@@ -68,6 +68,7 @@ import type {
     ImportDxfResult,
     InspectCheck,
     InspectReport,
+    JoinResult,
     LayerChange,
     LayerDeletion,
     LayerMerge,
@@ -911,6 +912,11 @@ export function extend(handle: number, id: string, boundary: string, side: Exten
 /** Splits one line into two lines at an interior point. */
 export function breakEntity(handle: number, id: string, at: Point): BreakResult {
     return decode<BreakResult>(() => binding('drawing.break').drawing_break(handle, JSON.stringify({ id, at })));
+}
+
+/** Merges two collinear lines that share an endpoint into one line. */
+export function joinEntities(handle: number, a: string, b: string): JoinResult {
+    return decode<JoinResult>(() => binding('drawing.join').drawing_join(handle, JSON.stringify({ a, b })));
 }
 
 /** Measures bounds, path length and enclosed area. */

@@ -27,8 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DrawOrderAction, ExtendSide, LayoutRequest, LayoutUpdate, MirrorAxis,
-    OffsetSide, OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DrawOrderAction, ExtendSide, JoinRequest, LayoutRequest, LayoutUpdate,
+    MirrorAxis, OffsetSide, OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -871,6 +871,20 @@ fn drawing_break(ctx: CallContext) -> Result<JsValue> {
     }
     let at = request_point(&request, "at").map_err(Error::new)?;
     let result = open_cad_drawing::break_entity(handle, BreakRequest { id, at }).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Merges two collinear lines that share an endpoint into one line.
+#[function]
+fn drawing_join(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let a = request.get("a").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let b = request.get("b").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    if a.is_empty() || b.is_empty() {
+        return Err(Error::new("session/argument-invalid: `a` and `b` entity ids are required"));
+    }
+    let result = open_cad_drawing::join_entities(handle, JoinRequest { a, b }).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2424,6 +2438,7 @@ register_module![
     drawing_trim,
     drawing_extend,
     drawing_break,
+    drawing_join,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

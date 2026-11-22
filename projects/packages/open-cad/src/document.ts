@@ -69,6 +69,7 @@ import type {
     ImportLoss,
     InspectOptions,
     InspectReport,
+    JoinResult,
     LayerDeletion,
     LayerMerge,
     LayerSummary,
@@ -791,6 +792,20 @@ export class DrawingDocument {
      */
     breakEntity(id: EntityId, at: Point): BreakResult {
         return this.edit((handle) => service.breakEntity(handle, id, at), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Merges two collinear lines that share an endpoint into one line. Both must
+     * be lines on the same layer, one endpoint of each must coincide, and the
+     * lines must continue in opposite directions from that point. The two
+     * sources are removed and replaced by one line from `a`'s free endpoint to
+     * `b`'s free endpoint with a fresh id; endpoints that do not meet, lines that
+     * are not collinear, or a folded-back overlap report `join/not-adjacent`.
+     */
+    joinEntities(a: EntityId, b: EntityId): JoinResult {
+        return this.edit((handle) => service.joinEntities(handle, a, b), (result) => {
             this.state = result.drawing;
         });
     }

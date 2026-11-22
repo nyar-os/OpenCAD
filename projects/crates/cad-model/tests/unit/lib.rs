@@ -66,6 +66,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "trim",
         "extend",
         "break",
+        "join",
         "fillet",
         "chamfer",
         "measure",
@@ -4105,6 +4106,151 @@ fn break_is_deterministic() {
     let first = run();
     let second = run();
     assert_eq!(first["created"], second["created"]);
+    assert_eq!(first["revision"], second["revision"]);
+}
+
+#[test]
+fn join_horizontal_lines_into_one_segment() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [5.0, 0.0], [10.0, 0.0]).expect("second");
+
+    let result = join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-2".to_string() }).expect("join");
+    assert_eq!(result["removed"], json!(["entity-1", "entity-2"]));
+    assert_eq!(result["revision"], json!(4), "a join is one revision bump");
+    let merged = &result["created"][0];
+    assert_eq!(merged["id"], json!("entity-3"));
+    assert_eq!(merged["layer"], json!(DEFAULT_LAYER));
+    assert_point(&merged["kind"]["from"], [0.0, 0.0]);
+    assert_point(&merged["kind"]["to"], [10.0, 0.0]);
+    assert_eq!(result["created"].as_array().expect("created").len(), 1);
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 1, "both sources are removed");
+    assert_eq!(drawing.entities[0].id, "entity-3");
+    assert_eq!(drawing.revision, 4);
+
+    let appended = add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [30.0, 0.0]).expect("append");
+    assert_eq!(appended["entity"]["id"], json!("entity-4"), "ids continue after the merged line");
+    assert_eq!(appended["revision"], json!(5));
+    close(handle).expect("close");
+}
+
+#[test]
+fn join_slanted_lines_keeps_the_free_endpoints() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [3.0, 4.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [3.0, 4.0], [6.0, 8.0]).expect("second");
+
+    let result = join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-2".to_string() }).expect("join");
+    let merged = &result["created"][0];
+    assert_point(&merged["kind"]["from"], [0.0, 0.0]);
+    assert_point(&merged["kind"]["to"], [6.0, 8.0]);
+    let EntityKind::Line { from, to } = drawing_of(handle).entities[0].kind.clone()
+    else {
+        panic!("join must create a line");
+    };
+    assert!((distance(from, to) - 10.0).abs() < 1e-9, "the merged line keeps the summed length");
+    close(handle).expect("close");
+}
+
+#[test]
+fn join_accepts_a_reversed_second_line() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [5.0, 0.0]).expect("second");
+
+    let result = join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-2".to_string() }).expect("join");
+    let merged = &result["created"][0];
+    assert_point(&merged["kind"]["from"], [0.0, 0.0]);
+    assert_point(&merged["kind"]["to"], [10.0, 0.0]);
+    close(handle).expect("close");
+}
+
+#[test]
+fn join_rejects_lines_that_do_not_meet_or_are_not_collinear() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [6.0, 0.0], [10.0, 0.0]).expect("gap");
+    add_line(handle, DEFAULT_LAYER, [5.0, 0.0], [10.0, 5.0]).expect("bent");
+    add_line(handle, DEFAULT_LAYER, [5.0, 0.0], [2.0, 0.0]).expect("folded");
+
+    for b in ["entity-2", "entity-3", "entity-4"] {
+        assert_eq!(
+            join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: b.to_string() }).expect_err("not adjacent").code,
+            "join/not-adjacent",
+            "second line {b}"
+        );
+    }
+    assert_eq!(
+        join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-404".to_string() }).expect_err("missing line").code,
+        "object/not-found"
+    );
+    assert_eq!(
+        join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-1".to_string() }).expect_err("same id").code,
+        "session/argument-invalid"
+    );
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 4, "a rejected join leaves the lines untouched");
+    assert_eq!(drawing.revision, 5, "a rejected join does not bump the revision");
+    close(handle).expect("close");
+}
+
+#[test]
+fn join_rejects_non_lines_and_cross_layer_pairs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 2.0).expect("circle");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    assert_eq!(
+        join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-2".to_string() }).expect_err("circle").code,
+        "object/unsupported"
+    );
+
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [5.0, 0.0], [10.0, 0.0]).expect("second");
+    assert_eq!(
+        join_entities(handle, JoinRequest { a: "entity-2".to_string(), b: "entity-3".to_string() }).expect_err("layers").code,
+        "object/unsupported"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn join_refuses_a_locked_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, "Structure", [5.0, 0.0], [10.0, 0.0]).expect("second");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-2".to_string() }).expect_err("locked join").code,
+        "drawing/layer-locked"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn join_is_deterministic() {
+    let run = || {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [3.0, 4.0]).expect("first");
+        add_line(handle, DEFAULT_LAYER, [3.0, 4.0], [6.0, 8.0]).expect("second");
+        let result = join_entities(handle, JoinRequest { a: "entity-1".to_string(), b: "entity-2".to_string() }).expect("join");
+        close(handle).expect("close");
+        result
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(first["created"], second["created"]);
+    assert_eq!(first["removed"], second["removed"]);
     assert_eq!(first["revision"], second["revision"]);
 }
 

@@ -86,6 +86,7 @@ exactly one transform.
 | `trim` | `--id <line>`, `--cutter <entity>` (a line, circle or arc) |
 | `extend` | `--id <line>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
 | `break` | `--id <line>`, `--at x,y` (strictly inside the segment) |
+| `join` | `--a <line>`, `--b <line>` (collinear and sharing one endpoint) |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -99,6 +100,7 @@ open-cad trim plan.ocad --id entity-3 --cutter entity-4
 open-cad extend plan.ocad --id entity-3 --to entity-4
 open-cad extend plan.ocad --id entity-3 --to entity-4 --side start
 open-cad break plan.ocad --id entity-3 --at 50,0
+open-cad join plan.ocad --a entity-3 --b entity-4
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
 
@@ -130,6 +132,15 @@ close to the line is projected onto it so both pieces stay collinear. The source
 is removed and replaced by two lines with fresh ids on the same layer. A point on
 an endpoint or outside the segment reports `break/not-on-entity`; a non-line
 reports `object/unsupported`.
+
+`join` merges the `--a` and `--b` lines and saves the file. Both must be lines
+on the same layer, one endpoint of each must coincide, and the lines must be
+collinear and continue in opposite directions from that shared point; the
+tolerance is `1e-9` scaled by the longer segment. The two sources are removed and
+replaced by one line from `a`'s free endpoint to `b`'s free endpoint with a fresh
+id. Endpoints that do not meet, lines that are not collinear, and a folded-back
+overlap report `join/not-adjacent`; a non-line or a cross-layer pair reports
+`object/unsupported`.
 
 ## Measure and select
 
