@@ -171,6 +171,56 @@ fn visible_extents(drawing: &Drawing) -> Option<Rect> {
     extents
 }
 
+/// Compact palette used when a layer colour is written as an ACI index.
+///
+/// Each entry pairs the ACI number with the `#rrggbb` value the reader maps it
+/// back to, so a layer colour that lands on one of these values round-trips.
+const ACI_PALETTE: [(i64, [u8; 3]); 9] = [
+    (1, [255, 0, 0]),
+    (2, [255, 255, 0]),
+    (3, [0, 255, 0]),
+    (4, [0, 255, 255]),
+    (5, [0, 0, 255]),
+    (6, [255, 0, 255]),
+    (7, [208, 215, 222]),
+    (8, [128, 128, 128]),
+    (9, [192, 192, 192]),
+];
+
+/// Parses a `#rrggbb` colour into its RGB channels.
+fn rgb_of(value: &str) -> Option<[u8; 3]> {
+    let digits = value.trim().trim_start_matches('#');
+    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&digits[range], 16).ok();
+    Some([channel(0..2)?, channel(2..4)?, channel(4..6)?])
+}
+
+/// Maps a `#rrggbb` colour to the nearest ACI index in the compact palette.
+///
+/// The nearest index uses the squared Euclidean distance in RGB space. `None`
+/// means the value is not a valid `#rrggbb` colour, which is the only case the
+/// writer cannot represent.
+fn nearest_aci(value: &str) -> Option<i64> {
+    let rgb = rgb_of(value)?;
+    ACI_PALETTE
+        .iter()
+        .map(|(index, color)| {
+            let distance = color
+                .iter()
+                .zip(rgb)
+                .map(|(left, right)| {
+                    let delta = i32::from(*left) - i32::from(right);
+                    delta * delta
+                })
+                .sum::<i32>();
+            (*index, distance)
+        })
+        .min_by_key(|(_, distance)| *distance)
+        .map(|(index, _)| index)
+}
+
 /// Parses a CSS colour used by a layer; malformed values keep the previous
 /// default ink.
 fn color_of(value: &str) -> Color {
@@ -580,7 +630,10 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
     let version = if r12 {
         "AC1009"
     }
-    else if custom_lines || layer_flags || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. } | EntityKind::Spline { .. })) {
+    else if custom_lines
+        || layer_flags
+        || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. } | EntityKind::Spline { .. }))
+    {
         "AC1015"
     }
     else {
@@ -634,7 +687,8 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
             flags |= 4;
         }
         dxf_pair(&mut out, 70, flags);
-        dxf_pair(&mut out, 62, 7);
+        let aci = nearest_aci(&layer.color);
+        dxf_pair(&mut out, 62, aci.unwrap_or(7));
         dxf_pair(&mut out, 6, dxf_text(&layer.linetype));
         if r12 {
             if layer.lineweight > 0.0 {
@@ -658,12 +712,12 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
             dxf_pair(&mut out, 370, (layer.lineweight * 100.0).round() as i64);
             dxf_pair(&mut out, 290, i64::from(layer.plottable));
         }
-        if layer.color != "#ffffff" {
+        if aci.is_none() {
             losses.push(Loss::warning(
                 "dxf/layer-color",
                 Some(&layer.id),
                 None,
-                format!("layer colour `{}` is written as the default R12 colour 7", layer.color),
+                format!("layer colour `{}` is not a valid `#rrggbb` value and is written as ACI 7", layer.color),
             ));
         }
     }

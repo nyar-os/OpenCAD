@@ -59,6 +59,8 @@ scale, and the `ATTRIB` values that follow an insert.
 - A `HATCH` becomes a closed filled polygon with its pattern name and one
   boundary path. A hatch with a curved boundary edge is skipped.
 - Polyline bulge arcs are flattened to line segments.
+- A layer colour is read from code `62` and mapped through the ACI palette; a
+  `420` true-colour value takes precedence when both are present.
 - Unitless files assume millimetres and report it.
 
 Losses are returned in `losses` as `{ code, severity, detail }`. `notice` means
@@ -69,7 +71,7 @@ dropped silently.
 | Code | Severity | Meaning |
 | :--- | :--- | :--- |
 | `dxf/assumed-units` | notice | No `$INSUNITS`; millimetres assumed. |
-| `dxf/layer-color` | warning | A true-colour layer colour was replaced. |
+| `dxf/layer-color` | warning | A layer colour was not a valid `#rrggbb` value and was written as ACI 7. |
 | `dxf/implicit-layer` | warning | An entity referenced an undeclared layer and a layer was created. |
 | `dxf/expanded-block` | notice | An `INSERT` was expanded into the current space. |
 | `dxf/block-recursion` | warning | Recursive block nesting stopped at depth 8. |
@@ -100,10 +102,17 @@ linear/radial/ordinate/angular DIMENSION, and a HATCH that uses its boundary
 polygon with the pattern name only. `dxf-r12` always declares `AC1009` and always
 reports omissions.
 
+Each layer colour is approximated by the nearest of nine standard ACI indices
+(1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white, 8 grey, 9 light
+grey) and written on code `62`. The mapping round-trips at the palette values and
+is only a warning for a value that is not valid `#rrggbb`, which is written as
+ACI 7.
+
 Reported losses: `dxf/r12-units`, `dxf/r12-lineweight`, `dxf/r12-plottable`,
-`dxf/layer-color`, `dxf/r12-ellipse`, `dxf/r12-spline`,
-`dxf/dimension-lines`, `dxf/hatch-boundary`, `dxf/r12-hatch`,
-`dxf/hatch-pattern`. Hatch pattern geometry is never written, only its name.
+`dxf/r12-ellipse`, `dxf/r12-spline`, `dxf/dimension-lines`,
+`dxf/hatch-boundary`, `dxf/r12-hatch`, `dxf/hatch-pattern`, and
+`dxf/layer-color` only for an invalid colour. Hatch pattern geometry is never
+written, only its name.
 
 Not written: `DWG`, blocks, `XREF`, images, layouts and paper space, proprietary
 or proxy objects, text styles beyond the declared table fields, and any

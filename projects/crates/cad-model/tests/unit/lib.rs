@@ -1,179 +1,180 @@
-    use std::{
-        env, fs,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
 
-    use super::*;
+use std::{
+    env, fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+use super::*;
 
-    struct TempDir {
-        path: PathBuf,
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(name: &str) -> Self {
+        let path = env::temp_dir().join(format!("open-cad-{name}-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst)));
+        fs::create_dir_all(&path).expect("create temp dir");
+        Self { path }
     }
+}
 
-    impl TempDir {
-        fn new(name: &str) -> Self {
-            let path = env::temp_dir().join(format!("open-cad-{name}-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst)));
-            fs::create_dir_all(&path).expect("create temp dir");
-            Self { path }
-        }
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
     }
+}
 
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
+fn handle_of(value: &Value) -> u64 {
+    value["handle"].as_u64().expect("handle")
+}
+
+fn drawing_of(handle: u64) -> Drawing {
+    store::read(handle, |session| session.drawing.clone()).expect("read drawing")
+}
+
+#[test]
+fn capability_matrix_matches_the_implemented_surface() {
+    let matrix = capabilities();
+
+    assert_eq!(matrix["project"], json!("partial"));
+    assert_eq!(matrix["formats"]["svg"], json!("supported"));
+    assert_eq!(matrix["formats"]["pdf"], json!("supported"));
+    assert_eq!(matrix["formats"]["dxf"], json!("partial"));
+    assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
+    assert_eq!(matrix["formats"]["obj"], json!("partial"), "OBJ is export-only, so the format is partial");
+    assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
+    for check in ["units", "layers", "empty-layer", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
+        assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
     }
-
-    fn handle_of(value: &Value) -> u64 {
-        value["handle"].as_u64().expect("handle")
+    for check in ["constraints", "references"] {
+        assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
     }
-
-    fn drawing_of(handle: u64) -> Drawing {
-        store::read(handle, |session| session.drawing.clone()).expect("read drawing")
+    for operation in [
+        "transform",
+        "copy",
+        "array",
+        "explode",
+        "offset",
+        "fillet",
+        "chamfer",
+        "measure",
+        "measure-points",
+        "stats",
+        "dimension-style",
+        "text-style",
+        "select",
+        "ucs",
+    ] {
+        assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
     }
-
-    #[test]
-    fn capability_matrix_matches_the_implemented_surface() {
-        let matrix = capabilities();
-
-        assert_eq!(matrix["project"], json!("partial"));
-        assert_eq!(matrix["formats"]["svg"], json!("supported"));
-        assert_eq!(matrix["formats"]["pdf"], json!("supported"));
-        assert_eq!(matrix["formats"]["dxf"], json!("partial"));
-        assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
-        assert_eq!(matrix["formats"]["obj"], json!("partial"), "OBJ is export-only, so the format is partial");
-        assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
-        for check in ["units", "layers", "empty-layer", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
-            assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
-        }
-        for check in ["constraints", "references"] {
-            assert_eq!(matrix["checks"][check], json!("unsupported"), "check `{check}`");
-        }
-        for operation in [
-            "transform",
-            "copy",
-            "array",
-            "explode",
-            "offset",
-            "fillet",
-            "chamfer",
-            "measure",
-            "measure-points",
-            "stats",
-            "dimension-style",
-            "text-style",
-            "select",
-            "ucs",
-        ] {
-            assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
-        }
-        for operation in ["constraints", "kernel3d"] {
-            assert_eq!(matrix["operations"][operation], json!("unsupported"), "operation `{operation}`");
-        }
-        for entity in ["radial-dimension", "ordinate-dimension", "angular-dimension", "hatch"] {
-            assert_eq!(matrix["entities"][entity], json!("supported"), "entity `{entity}`");
-        }
-        assert_eq!(matrix["renderers"]["svg"], json!("supported"));
-        for renderer in ["png", "pdf"] {
-            assert_eq!(matrix["renderers"][renderer], json!("unsupported"), "renderer `{renderer}`");
-        }
-        assert_eq!(matrix["exportTargets"]["svg"], json!("supported"));
-        assert_eq!(matrix["exportTargets"]["dxf"], json!("supported"));
-        assert_eq!(matrix["exportTargets"]["pdf"], json!("supported"));
-        assert_eq!(matrix["exportTargets"]["stl"], json!("supported"));
-        assert_eq!(matrix["exportTargets"]["obj"], json!("supported"));
-        assert_eq!(matrix["exportTargets"]["step"], json!("supported"));
-        assert_eq!(matrix["formats"]["stl"], json!("unsupported"), "the STL reader stays unsupported");
-        assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
+    for operation in ["constraints", "kernel3d"] {
+        assert_eq!(matrix["operations"][operation], json!("unsupported"), "operation `{operation}`");
     }
-
-    #[test]
-    fn create_add_save_open_round_trip() {
-        let dir = TempDir::new("round-trip");
-        let path = dir.path.join("plan.ocad");
-
-        let created = create(CreateRequest { title: Some("Site plan".to_string()), units: Some("mm".to_string()), ..CreateRequest::default() })
-            .expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(created["drawing"]["units"], json!("mm"));
-        assert_eq!(created["drawing"]["layers"].as_array().map(Vec::len), Some(2));
-
-        let line = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 40.0]).expect("add line");
-        assert_eq!(line["entity"]["id"], json!("entity-1"));
-        let circle = add_circle(handle, DEFAULT_LAYER, [50.0, 50.0], 20.0).expect("add circle");
-        assert_eq!(circle["entity"]["id"], json!("entity-2"));
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], true).expect("add polyline");
-        add_text(handle, DEFAULT_LAYER, [5.0, 5.0], 2.5, "Site").expect("add text");
-        add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, None).expect("add dimension");
-
-        let listed = list_entities(handle).expect("list");
-        assert_eq!(listed["entities"].as_array().map(Vec::len), Some(5));
-
-        let before = summary(handle).expect("summary");
-        let bytes = save(handle, &path, true).expect("save");
-        assert!(bytes > 0);
-        assert!(path.is_file());
-        let saved_text = fs::read_to_string(&path).expect("read saved");
-        assert!(saved_text.contains("\"format\": \"open-cad-drawing\""));
-        assert!(saved_text.contains("\"version\": 1"));
-        assert!(saved_text.contains("\"next_entity\""));
-        close(handle).expect("close");
-
-        let opened = open(&path).expect("open");
-        assert_eq!(opened["drawing"]["revision"], before["revision"]);
-        assert_eq!(opened["drawing"]["entities"], json!(5));
-        let reopened = handle_of(&opened);
-
-        let report = inspect(reopened, None).expect("inspect");
-        assert_eq!(report["passed"], json!(true));
-        assert_eq!(report["issues"].as_array().map(Vec::len), Some(0));
-        assert!(report["checkerVersion"].is_string());
-
-        let svg_path = dir.path.join("plan.svg");
-        let svg_report = export(reopened, "svg", &svg_path).expect("export svg");
-        assert_eq!(svg_report["format"], json!("svg"));
-        assert_eq!(svg_report["editable"], json!(false));
-        let svg = fs::read_to_string(&svg_path).expect("read svg");
-        assert!(svg.contains("<svg"));
-        assert!(svg.contains("viewBox="));
-        assert!(svg.contains("data-revision="));
-
-        let dxf_path = dir.path.join("plan.dxf");
-        let dxf_report = export(reopened, "dxf", &dxf_path).expect("export dxf");
-        assert_eq!(dxf_report["format"], json!("dxf"));
-        assert!(dxf_report["losses"].as_array().is_some_and(|losses| !losses.is_empty()));
-        let dxf = fs::read_to_string(&dxf_path).expect("read dxf");
-        assert!(dxf.contains("HEADER"));
-        assert!(dxf.contains("$INSUNITS"));
-        assert!(dxf.contains("ENTITIES"));
-        assert!(dxf.trim_end().ends_with("EOF"));
-
-        let deleted = delete_entity(reopened, "entity-1").expect("delete");
-        assert_eq!(deleted["deleted"], json!("entity-1"));
-        assert_eq!(deleted["drawing"]["entities"], json!(4));
-        assert!(delete_entity(reopened, "entity-1").is_err());
-
-        close(reopened).expect("close reopened");
+    for entity in ["radial-dimension", "ordinate-dimension", "angular-dimension", "hatch"] {
+        assert_eq!(matrix["entities"][entity], json!("supported"), "entity `{entity}`");
     }
-
-    #[test]
-    fn save_refuses_to_overwrite_without_the_flag() {
-        let dir = TempDir::new("overwrite");
-        let path = dir.path.join("plan.ocad");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        save(handle, &path, false).expect("first save");
-        let error = save(handle, &path, false).expect_err("second save without overwrite");
-        assert_eq!(error.code, "drawing/overwrite-refused");
-        save(handle, &path, true).expect("overwrite");
-        close(handle).expect("close");
+    assert_eq!(matrix["renderers"]["svg"], json!("supported"));
+    for renderer in ["png", "pdf"] {
+        assert_eq!(matrix["renderers"][renderer], json!("unsupported"), "renderer `{renderer}`");
     }
+    assert_eq!(matrix["exportTargets"]["svg"], json!("supported"));
+    assert_eq!(matrix["exportTargets"]["dxf"], json!("supported"));
+    assert_eq!(matrix["exportTargets"]["pdf"], json!("supported"));
+    assert_eq!(matrix["exportTargets"]["stl"], json!("supported"));
+    assert_eq!(matrix["exportTargets"]["obj"], json!("supported"));
+    assert_eq!(matrix["exportTargets"]["step"], json!("supported"));
+    assert_eq!(matrix["formats"]["stl"], json!("unsupported"), "the STL reader stays unsupported");
+    assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
+}
 
-    #[test]
-    fn inspection_reports_real_findings() {
-        let drawing: Drawing = serde_json::from_value(json!({
+#[test]
+fn create_add_save_open_round_trip() {
+    let dir = TempDir::new("round-trip");
+    let path = dir.path.join("plan.ocad");
+
+    let created = create(CreateRequest { title: Some("Site plan".to_string()), units: Some("mm".to_string()), ..CreateRequest::default() })
+        .expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(created["drawing"]["units"], json!("mm"));
+    assert_eq!(created["drawing"]["layers"].as_array().map(Vec::len), Some(2));
+
+    let line = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 40.0]).expect("add line");
+    assert_eq!(line["entity"]["id"], json!("entity-1"));
+    let circle = add_circle(handle, DEFAULT_LAYER, [50.0, 50.0], 20.0).expect("add circle");
+    assert_eq!(circle["entity"]["id"], json!("entity-2"));
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], true).expect("add polyline");
+    add_text(handle, DEFAULT_LAYER, [5.0, 5.0], 2.5, "Site").expect("add text");
+    add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, None).expect("add dimension");
+
+    let listed = list_entities(handle).expect("list");
+    assert_eq!(listed["entities"].as_array().map(Vec::len), Some(5));
+
+    let before = summary(handle).expect("summary");
+    let bytes = save(handle, &path, true).expect("save");
+    assert!(bytes > 0);
+    assert!(path.is_file());
+    let saved_text = fs::read_to_string(&path).expect("read saved");
+    assert!(saved_text.contains("\"format\": \"open-cad-drawing\""));
+    assert!(saved_text.contains("\"version\": 1"));
+    assert!(saved_text.contains("\"next_entity\""));
+    close(handle).expect("close");
+
+    let opened = open(&path).expect("open");
+    assert_eq!(opened["drawing"]["revision"], before["revision"]);
+    assert_eq!(opened["drawing"]["entities"], json!(5));
+    let reopened = handle_of(&opened);
+
+    let report = inspect(reopened, None).expect("inspect");
+    assert_eq!(report["passed"], json!(true));
+    assert_eq!(report["issues"].as_array().map(Vec::len), Some(0));
+    assert!(report["checkerVersion"].is_string());
+
+    let svg_path = dir.path.join("plan.svg");
+    let svg_report = export(reopened, "svg", &svg_path).expect("export svg");
+    assert_eq!(svg_report["format"], json!("svg"));
+    assert_eq!(svg_report["editable"], json!(false));
+    let svg = fs::read_to_string(&svg_path).expect("read svg");
+    assert!(svg.contains("<svg"));
+    assert!(svg.contains("viewBox="));
+    assert!(svg.contains("data-revision="));
+
+    let dxf_path = dir.path.join("plan.dxf");
+    let dxf_report = export(reopened, "dxf", &dxf_path).expect("export dxf");
+    assert_eq!(dxf_report["format"], json!("dxf"));
+    assert!(dxf_report["losses"].as_array().is_some_and(|losses| !losses.is_empty()));
+    let dxf = fs::read_to_string(&dxf_path).expect("read dxf");
+    assert!(dxf.contains("HEADER"));
+    assert!(dxf.contains("$INSUNITS"));
+    assert!(dxf.contains("ENTITIES"));
+    assert!(dxf.trim_end().ends_with("EOF"));
+
+    let deleted = delete_entity(reopened, "entity-1").expect("delete");
+    assert_eq!(deleted["deleted"], json!("entity-1"));
+    assert_eq!(deleted["drawing"]["entities"], json!(4));
+    assert!(delete_entity(reopened, "entity-1").is_err());
+
+    close(reopened).expect("close reopened");
+}
+
+#[test]
+fn save_refuses_to_overwrite_without_the_flag() {
+    let dir = TempDir::new("overwrite");
+    let path = dir.path.join("plan.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    save(handle, &path, false).expect("first save");
+    let error = save(handle, &path, false).expect_err("second save without overwrite");
+    assert_eq!(error.code, "drawing/overwrite-refused");
+    save(handle, &path, true).expect("overwrite");
+    close(handle).expect("close");
+}
+
+#[test]
+fn inspection_reports_real_findings() {
+    let drawing: Drawing = serde_json::from_value(json!({
             "id": "drawing-1",
             "title": null,
             "revision": 3,
@@ -193,2032 +194,2008 @@
         }))
         .expect("parse drawing");
 
-        let report = inspection::run(&drawing, inspection::SUPPORTED_CHECKS);
-        let codes = report.to_json()["issues"]
-            .as_array()
-            .expect("issues")
-            .iter()
-            .map(|issue| issue["code"].as_str().unwrap_or_default().to_string())
-            .collect::<Vec<_>>();
+    let report = inspection::run(&drawing, inspection::SUPPORTED_CHECKS);
+    let codes = report.to_json()["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>();
 
-        for expected in [
-            "geometry/duplicate-id",
-            "layers/missing-layer",
-            "geometry/zero-length-line",
-            "geometry/invalid-radius",
-            "geometry/insufficient-points",
-            "dimensions/degenerate",
-            "layers/locked",
-        ] {
-            assert!(codes.iter().any(|code| code == expected), "expected `{expected}` in {codes:?}");
+    for expected in [
+        "geometry/duplicate-id",
+        "layers/missing-layer",
+        "geometry/zero-length-line",
+        "geometry/invalid-radius",
+        "geometry/insufficient-points",
+        "dimensions/degenerate",
+        "layers/locked",
+    ] {
+        assert!(codes.iter().any(|code| code == expected), "expected `{expected}` in {codes:?}");
+    }
+    assert_eq!(report.to_json()["passed"], json!(false));
+    let locked = report.to_json()["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .find(|issue| issue["code"] == json!("layers/locked"))
+        .cloned()
+        .expect("locked finding");
+    assert_eq!(locked["severity"], json!("warning"));
+    assert_eq!(locked["recoverable"], json!(true));
+    assert_eq!(locked["layerId"], json!("locked"));
+    assert_eq!(locked["objectId"], json!("entity-5"));
+
+    let dimension_only = inspection::run(&drawing, &["dimensions"]).to_json();
+    let dimension_codes =
+        dimension_only["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(dimension_codes, vec!["dimensions/degenerate"]);
+
+    let mut non_finite = Drawing::empty(None, Units::Mm);
+    non_finite.entities.push(Entity {
+        id: "entity-nan".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Line { from: [f64::NAN, 0.0], to: [1.0, 1.0] },
+    });
+    let report = inspection::run(&non_finite, inspection::SUPPORTED_CHECKS).to_json();
+    assert!(report["issues"].as_array().expect("issues").iter().any(|issue| issue["code"] == json!("geometry/non-finite")));
+}
+
+#[test]
+fn open_validates_tag_version_and_document() {
+    let dir = TempDir::new("invalid");
+    let malformed = dir.path.join("malformed.ocad");
+    fs::write(&malformed, "not json").expect("write");
+    assert_eq!(open(&malformed).expect_err("malformed").code, "format/invalid");
+
+    let future = dir.path.join("future.ocad");
+    fs::write(&future, json!({ "format": FILE_FORMAT, "version": 2, "document": {} }).to_string()).expect("write");
+    assert_eq!(open(&future).expect_err("future version").code, "format/unsupported-version");
+
+    let duplicate = dir.path.join("duplicate.ocad");
+    let document = json!({
+        "format": FILE_FORMAT,
+        "version": 1,
+        "document": {
+            "id": "drawing-1", "title": null, "revision": 1, "units": "mm",
+            "layers": [{ "id": "0", "name": "0", "color": "#d0d7de", "visible": true, "locked": false }],
+            "entities": [
+                { "id": "entity-1", "layer": "0", "kind": { "type": "line", "from": [0.0, 0.0], "to": [1.0, 1.0] } },
+                { "id": "entity-1", "layer": "0", "kind": { "type": "line", "from": [0.0, 0.0], "to": [2.0, 2.0] } }
+            ],
+            "next_entity": 2
         }
-        assert_eq!(report.to_json()["passed"], json!(false));
-        let locked = report.to_json()["issues"]
-            .as_array()
-            .expect("issues")
-            .iter()
-            .find(|issue| issue["code"] == json!("layers/locked"))
-            .cloned()
-            .expect("locked finding");
-        assert_eq!(locked["severity"], json!("warning"));
-        assert_eq!(locked["recoverable"], json!(true));
-        assert_eq!(locked["layerId"], json!("locked"));
-        assert_eq!(locked["objectId"], json!("entity-5"));
+    });
+    fs::write(&duplicate, document.to_string()).expect("write");
+    assert_eq!(open(&duplicate).expect_err("duplicate ids").code, "format/invalid");
 
-        let dimension_only = inspection::run(&drawing, &["dimensions"]).to_json();
-        let dimension_codes = dimension_only["issues"]
-            .as_array()
-            .expect("issues")
-            .iter()
-            .map(|issue| issue["code"].as_str().unwrap_or_default())
-            .collect::<Vec<_>>();
-        assert_eq!(dimension_codes, vec!["dimensions/degenerate"]);
+    assert_eq!(open(&dir.path.join("missing.ocad")).expect_err("missing").code, "drawing/not-found");
+}
 
-        let mut non_finite = Drawing::empty(None, Units::Mm);
-        non_finite.entities.push(Entity {
-            id: "entity-nan".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Line { from: [f64::NAN, 0.0], to: [1.0, 1.0] },
-        });
-        let report = inspection::run(&non_finite, inspection::SUPPORTED_CHECKS).to_json();
-        assert!(report["issues"].as_array().expect("issues").iter().any(|issue| issue["code"] == json!("geometry/non-finite")));
+#[test]
+fn unimplemented_routes_keep_the_stable_code() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(render(handle, "png").expect_err("png preview").code, NOT_IMPLEMENTED);
+    assert_eq!(export(handle, "dwg", Path::new("plan.dwg")).expect_err("unknown").code, "format/unsupported");
+    assert_eq!(inspect(handle, Some(vec!["constraints".to_string()])).expect_err("constraints").code, NOT_IMPLEMENTED);
+    assert_eq!(inspect(handle, Some(vec!["references".to_string()])).expect_err("references").code, NOT_IMPLEMENTED);
+    assert_eq!(summary(u64::MAX).expect_err("unknown handle").code, "drawing/not-found");
+    close(handle).expect("close");
+    assert_eq!(close(handle).expect_err("already closed").code, "drawing/not-found");
+}
+
+#[test]
+fn empty_drawing_exports_the_fallback_sheet() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let report = inspect(handle, None).expect("inspect");
+    assert_eq!(report["passed"], json!(true));
+    let svg = exchange::svg(&store::read(handle, |session| session.drawing.clone()).expect("drawing"));
+    assert!(svg.contains("viewBox=\"0 0 297 210\""));
+    close(handle).expect("close");
+}
+
+#[test]
+fn undo_and_redo_restore_snapshots_and_bump_the_revision() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(created["drawing"]["canUndo"], json!(false));
+    assert_eq!(created["drawing"]["canRedo"], json!(false));
+
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let second = add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
+    let revision = second["revision"].as_u64().expect("revision");
+    assert_eq!(second["drawing"]["canUndo"], json!(true));
+
+    let undone = undo(handle).expect("undo");
+    assert_eq!(undone["drawing"]["entities"], json!(1));
+    assert_eq!(undone["revision"], json!(revision + 1));
+    assert_eq!(undone["canUndo"], json!(true));
+    assert_eq!(undone["canRedo"], json!(true));
+
+    let empty = undo(handle).expect("undo to empty");
+    assert_eq!(empty["drawing"]["entities"], json!(0));
+    assert_eq!(empty["canUndo"], json!(false));
+    assert_eq!(undo(handle).expect_err("nothing to undo").code, "drawing/nothing-to-undo");
+
+    let first = redo(handle).expect("redo");
+    assert_eq!(first["drawing"]["entities"], json!(1));
+    assert_eq!(first["canRedo"], json!(true));
+    let restored = redo(handle).expect("redo circle");
+    assert_eq!(restored["drawing"]["entities"], json!(2));
+    assert_eq!(restored["canRedo"], json!(false));
+    assert_eq!(redo(handle).expect_err("nothing to redo").code, "drawing/nothing-to-redo");
+
+    close(handle).expect("close");
+}
+
+#[test]
+fn save_is_not_an_undo_step_and_history_is_bounded() {
+    let dir = TempDir::new("history");
+    let path = dir.path.join("plan.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 1.0]).expect("line");
+    let before = summary(handle).expect("summary");
+    save(handle, &path, true).expect("save");
+    let after = summary(handle).expect("summary");
+    assert_eq!(before["revision"], after["revision"]);
+    assert_eq!(after["canUndo"], json!(true));
+    undo(handle).expect("undo after save");
+    assert_eq!(summary(handle).expect("summary")["entities"], json!(0));
+    close(handle).expect("close");
+
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    for index in 0..40 {
+        add_line(handle, DEFAULT_LAYER, [f64::from(index), 0.0], [f64::from(index), 1.0]).expect("line");
     }
-
-    #[test]
-    fn open_validates_tag_version_and_document() {
-        let dir = TempDir::new("invalid");
-        let malformed = dir.path.join("malformed.ocad");
-        fs::write(&malformed, "not json").expect("write");
-        assert_eq!(open(&malformed).expect_err("malformed").code, "format/invalid");
-
-        let future = dir.path.join("future.ocad");
-        fs::write(&future, json!({ "format": FILE_FORMAT, "version": 2, "document": {} }).to_string()).expect("write");
-        assert_eq!(open(&future).expect_err("future version").code, "format/unsupported-version");
-
-        let duplicate = dir.path.join("duplicate.ocad");
-        let document = json!({
-            "format": FILE_FORMAT,
-            "version": 1,
-            "document": {
-                "id": "drawing-1", "title": null, "revision": 1, "units": "mm",
-                "layers": [{ "id": "0", "name": "0", "color": "#d0d7de", "visible": true, "locked": false }],
-                "entities": [
-                    { "id": "entity-1", "layer": "0", "kind": { "type": "line", "from": [0.0, 0.0], "to": [1.0, 1.0] } },
-                    { "id": "entity-1", "layer": "0", "kind": { "type": "line", "from": [0.0, 0.0], "to": [2.0, 2.0] } }
-                ],
-                "next_entity": 2
-            }
-        });
-        fs::write(&duplicate, document.to_string()).expect("write");
-        assert_eq!(open(&duplicate).expect_err("duplicate ids").code, "format/invalid");
-
-        assert_eq!(open(&dir.path.join("missing.ocad")).expect_err("missing").code, "drawing/not-found");
+    for _ in 0..store::HISTORY_LIMIT {
+        undo(handle).expect("undo within the history bound");
     }
+    assert_eq!(summary(handle).expect("summary")["entities"], json!(8));
+    assert_eq!(undo(handle).expect_err("history exhausted").code, "drawing/nothing-to-undo");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn unimplemented_routes_keep_the_stable_code() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(render(handle, "png").expect_err("png preview").code, NOT_IMPLEMENTED);
-        assert_eq!(export(handle, "dwg", Path::new("plan.dwg")).expect_err("unknown").code, "format/unsupported");
-        assert_eq!(inspect(handle, Some(vec!["constraints".to_string()])).expect_err("constraints").code, NOT_IMPLEMENTED);
-        assert_eq!(inspect(handle, Some(vec!["references".to_string()])).expect_err("references").code, NOT_IMPLEMENTED);
-        assert_eq!(summary(u64::MAX).expect_err("unknown handle").code, "drawing/not-found");
-        close(handle).expect("close");
-        assert_eq!(close(handle).expect_err("already closed").code, "drawing/not-found");
-    }
+#[test]
+fn layer_colours_round_trip_through_dxf_aci() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", Some("#a4262c")).expect("add layer");
 
-    #[test]
-    fn empty_drawing_exports_the_fallback_sheet() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let report = inspect(handle, None).expect("inspect");
-        assert_eq!(report["passed"], json!(true));
-        let svg = exchange::svg(&store::read(handle, |session| session.drawing.clone()).expect("drawing"));
-        assert!(svg.contains("viewBox=\"0 0 297 210\""));
-        close(handle).expect("close");
-    }
+    let (text, losses) = store::read(handle, |session| exchange::dxf(&session.drawing)).expect("export dxf");
+    assert!(losses.is_empty(), "every layer colour maps to an ACI: {:?}", losses.iter().map(|loss| loss.code.clone()).collect::<Vec<_>>());
+    assert!(text.contains("0\nLAYER\n2\nWalls\n70\n0\n62\n1\n"), "the custom colour is written as ACI 1: {text}");
+    assert!(text.contains("0\nLAYER\n2\n0\n70\n0\n62\n7\n"), "the near-white default layer is ACI 7: {text}");
 
-    #[test]
-    fn undo_and_redo_restore_snapshots_and_bump_the_revision() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(created["drawing"]["canUndo"], json!(false));
-        assert_eq!(created["drawing"]["canRedo"], json!(false));
+    let (imported, import_losses) = import::dxf(&text, None).expect("import dxf");
+    assert_eq!(imported.layer("Walls").expect("imported layer").color, "#ff0000", "ACI 1 maps back to the palette hex");
+    assert!(
+        import_losses.iter().all(|loss| loss.code != "dxf/layer-color"),
+        "an ACI colour is not a loss: {:?}",
+        import_losses.iter().map(|loss| loss.code.clone()).collect::<Vec<_>>()
+    );
+    close(handle).expect("close");
+}
 
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        let second = add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
-        let revision = second["revision"].as_u64().expect("revision");
-        assert_eq!(second["drawing"]["canUndo"], json!(true));
+#[test]
+fn layer_crud_renames_references_and_locks_editing() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
 
-        let undone = undo(handle).expect("undo");
-        assert_eq!(undone["drawing"]["entities"], json!(1));
-        assert_eq!(undone["revision"], json!(revision + 1));
-        assert_eq!(undone["canUndo"], json!(true));
-        assert_eq!(undone["canRedo"], json!(true));
+    let added = add_layer(handle, "Walls", Some("#a4262c")).expect("add layer");
+    assert_eq!(added["layer"]["name"], json!("Walls"));
+    assert_eq!(added["layer"]["color"], json!("#a4262c"));
+    assert_eq!(add_layer(handle, "walls", None).expect_err("duplicate").code, "drawing/layer-exists");
+    assert_eq!(add_layer(handle, "bad colour", Some("red")).expect_err("colour").code, "session/argument-invalid");
 
-        let empty = undo(handle).expect("undo to empty");
-        assert_eq!(empty["drawing"]["entities"], json!(0));
-        assert_eq!(empty["canUndo"], json!(false));
-        assert_eq!(undo(handle).expect_err("nothing to undo").code, "drawing/nothing-to-undo");
+    let change = add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line on the new layer");
+    assert_eq!(change["entity"]["layer"], json!("Walls"));
 
-        let first = redo(handle).expect("redo");
-        assert_eq!(first["drawing"]["entities"], json!(1));
-        assert_eq!(first["canRedo"], json!(true));
-        let restored = redo(handle).expect("redo circle");
-        assert_eq!(restored["drawing"]["entities"], json!(2));
-        assert_eq!(restored["canRedo"], json!(false));
-        assert_eq!(redo(handle).expect_err("nothing to redo").code, "drawing/nothing-to-redo");
+    let renamed = update_layer(handle, "Walls", LayerUpdate { name: Some("Structure".to_string()), ..LayerUpdate::default() }).expect("rename");
+    assert_eq!(renamed["layer"]["id"], json!("Structure"));
+    let listed = list_entities(handle).expect("list");
+    assert_eq!(listed["entities"][0]["layer"], json!("Structure"));
+    assert_eq!(summary(handle).expect("summary")["layers"][2]["name"], json!("Structure"));
 
-        close(handle).expect("close");
-    }
+    let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(add_line(handle, "Structure", [0.0, 0.0], [1.0, 1.0]).expect_err("locked add").code, "drawing/layer-locked");
+    assert_eq!(move_entity(handle, "entity-1", Some([1.0, 0.0]), None).expect_err("locked move").code, "drawing/layer-locked");
+    assert_eq!(delete_entity(handle, "entity-1").expect_err("locked delete").code, "drawing/layer-locked");
+    assert!(summary(handle).expect("summary")["revision"].as_u64().expect("revision") > revision);
 
-    #[test]
-    fn save_is_not_an_undo_step_and_history_is_bounded() {
-        let dir = TempDir::new("history");
-        let path = dir.path.join("plan.ocad");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 1.0]).expect("line");
-        let before = summary(handle).expect("summary");
-        save(handle, &path, true).expect("save");
-        let after = summary(handle).expect("summary");
-        assert_eq!(before["revision"], after["revision"]);
-        assert_eq!(after["canUndo"], json!(true));
-        undo(handle).expect("undo after save");
-        assert_eq!(summary(handle).expect("summary")["entities"], json!(0));
-        close(handle).expect("close");
+    update_layer(handle, "Structure", LayerUpdate { visible: Some(false), ..LayerUpdate::default() }).expect("hide");
+    let layer = &summary(handle).expect("summary")["layers"][2];
+    assert_eq!(layer["visible"], json!(false));
+    assert_eq!(layer["locked"], json!(true));
+    let report = inspect(handle, Some(vec!["layers".to_string()])).expect("inspect layers");
+    let codes = report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(codes.contains(&"layers/hidden"), "{codes:?}");
+    assert!(codes.contains(&"layers/locked"), "{codes:?}");
 
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        for index in 0..40 {
-            add_line(handle, DEFAULT_LAYER, [f64::from(index), 0.0], [f64::from(index), 1.0]).expect("line");
-        }
-        for _ in 0..store::HISTORY_LIMIT {
-            undo(handle).expect("undo within the history bound");
-        }
-        assert_eq!(summary(handle).expect("summary")["entities"], json!(8));
-        assert_eq!(undo(handle).expect_err("history exhausted").code, "drawing/nothing-to-undo");
-        close(handle).expect("close");
-    }
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn layer_crud_renames_references_and_locks_editing() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
+#[test]
+fn layer_freeze_and_plot_flags_gate_writes_and_reach_dxf() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", None).expect("add layer");
+    add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line on the new layer");
 
-        let added = add_layer(handle, "Walls", Some("#a4262c")).expect("add layer");
-        assert_eq!(added["layer"]["name"], json!("Walls"));
-        assert_eq!(added["layer"]["color"], json!("#a4262c"));
-        assert_eq!(add_layer(handle, "walls", None).expect_err("duplicate").code, "drawing/layer-exists");
-        assert_eq!(add_layer(handle, "bad colour", Some("red")).expect_err("colour").code, "session/argument-invalid");
+    let updated =
+        update_layer(handle, "Walls", LayerUpdate { frozen: Some(true), plottable: Some(false), ..LayerUpdate::default() }).expect("flags");
+    assert_eq!(updated["layer"]["frozen"], json!(true));
+    assert_eq!(updated["layer"]["plottable"], json!(false));
+    assert_eq!(add_line(handle, "Walls", [0.0, 0.0], [1.0, 1.0]).expect_err("frozen add").code, "drawing/layer-frozen");
+    assert_eq!(update_layer(handle, "Walls", LayerUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
 
-        let change = add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line on the new layer");
-        assert_eq!(change["entity"]["layer"], json!("Walls"));
+    let (text, _losses) = exchange::dxf(&drawing_of(handle));
+    assert!(text.contains("AC1015"), "a non-plottable layer needs DXF 2000 flags");
+    assert!(text.contains("2\nWalls\n70\n1\n"), "frozen layers carry DXF flag 1");
+    assert!(text.contains("290\n0\n"), "non-plottable layers carry plot flag 0");
 
-        let renamed =
-            update_layer(handle, "Walls", LayerUpdate { name: Some("Structure".to_string()), ..LayerUpdate::default() }).expect("rename");
-        assert_eq!(renamed["layer"]["id"], json!("Structure"));
-        let listed = list_entities(handle).expect("list");
-        assert_eq!(listed["entities"][0]["layer"], json!("Structure"));
-        assert_eq!(summary(handle).expect("summary")["layers"][2]["name"], json!("Structure"));
+    update_layer(handle, "Walls", LayerUpdate { frozen: Some(false), plottable: Some(true), ..LayerUpdate::default() }).expect("clear flags");
+    let layer = &summary(handle).expect("summary")["layers"][2];
+    assert_eq!(layer["frozen"], json!(false));
+    assert_eq!(layer["plottable"], json!(true));
+    close(handle).expect("close");
+}
 
-        let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
-        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(add_line(handle, "Structure", [0.0, 0.0], [1.0, 1.0]).expect_err("locked add").code, "drawing/layer-locked");
-        assert_eq!(move_entity(handle, "entity-1", Some([1.0, 0.0]), None).expect_err("locked move").code, "drawing/layer-locked");
-        assert_eq!(delete_entity(handle, "entity-1").expect_err("locked delete").code, "drawing/layer-locked");
-        assert!(summary(handle).expect("summary")["revision"].as_u64().expect("revision") > revision);
+#[test]
+fn ucs_converts_points_and_rotates_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
 
-        update_layer(handle, "Structure", LayerUpdate { visible: Some(false), ..LayerUpdate::default() }).expect("hide");
-        let layer = &summary(handle).expect("summary")["layers"][2];
-        assert_eq!(layer["visible"], json!(false));
-        assert_eq!(layer["locked"], json!(true));
-        let report = inspect(handle, Some(vec!["layers".to_string()])).expect("inspect layers");
-        let codes =
-            report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        assert!(codes.contains(&"layers/hidden"), "{codes:?}");
-        assert!(codes.contains(&"layers/locked"), "{codes:?}");
+    let points = ucs(
+        handle,
+        UcsRequest { origin: [10.0, 0.0], rotation: 90.0, direction: UcsDirection::ToUcs, points: vec![[10.0, 10.0]], ids: Vec::new() },
+    )
+    .expect("point conversion");
+    assert_eq!(points["direction"], json!("to-ucs"));
+    let converted = &points["points"][0]["to"];
+    assert!((converted[0].as_f64().expect("x") - 10.0).abs() < 1e-9);
+    assert!(converted[1].as_f64().expect("y").abs() < 1e-9);
 
-        close(handle).expect("close");
-    }
+    let mutated = ucs(
+        handle,
+        UcsRequest {
+            origin: [10.0, 0.0],
+            rotation: 90.0,
+            direction: UcsDirection::ToWorld,
+            points: Vec::new(),
+            ids: vec!["entity-1".to_string(), "entity-1".to_string()],
+        },
+    )
+    .expect("entity conversion");
+    assert_eq!(mutated["entities"], json!(["entity-1"]));
+    assert_eq!(mutated["revision"], json!(3));
+    let drawing = drawing_of(handle);
+    let EntityKind::Line { from, to } = drawing.entities[0].kind
+    else {
+        panic!("expected a line");
+    };
+    assert!((from[0] - 10.0).abs() < 1e-9 && from[1].abs() < 1e-9, "{from:?}");
+    assert!((to[0] - 10.0).abs() < 1e-9 && (to[1] - 10.0).abs() < 1e-9, "{to:?}");
 
-    #[test]
-    fn layer_freeze_and_plot_flags_gate_writes_and_reach_dxf() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Walls", None).expect("add layer");
-        add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line on the new layer");
-
-        let updated =
-            update_layer(handle, "Walls", LayerUpdate { frozen: Some(true), plottable: Some(false), ..LayerUpdate::default() }).expect("flags");
-        assert_eq!(updated["layer"]["frozen"], json!(true));
-        assert_eq!(updated["layer"]["plottable"], json!(false));
-        assert_eq!(add_line(handle, "Walls", [0.0, 0.0], [1.0, 1.0]).expect_err("frozen add").code, "drawing/layer-frozen");
-        assert_eq!(update_layer(handle, "Walls", LayerUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
-
-        let (text, _losses) = exchange::dxf(&drawing_of(handle));
-        assert!(text.contains("AC1015"), "a non-plottable layer needs DXF 2000 flags");
-        assert!(text.contains("2\nWalls\n70\n1\n"), "frozen layers carry DXF flag 1");
-        assert!(text.contains("290\n0\n"), "non-plottable layers carry plot flag 0");
-
-        update_layer(handle, "Walls", LayerUpdate { frozen: Some(false), plottable: Some(true), ..LayerUpdate::default() })
-            .expect("clear flags");
-        let layer = &summary(handle).expect("summary")["layers"][2];
-        assert_eq!(layer["frozen"], json!(false));
-        assert_eq!(layer["plottable"], json!(true));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn ucs_converts_points_and_rotates_entities() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-
-        let points = ucs(
-            handle,
-            UcsRequest { origin: [10.0, 0.0], rotation: 90.0, direction: UcsDirection::ToUcs, points: vec![[10.0, 10.0]], ids: Vec::new() },
-        )
-        .expect("point conversion");
-        assert_eq!(points["direction"], json!("to-ucs"));
-        let converted = &points["points"][0]["to"];
-        assert!((converted[0].as_f64().expect("x") - 10.0).abs() < 1e-9);
-        assert!(converted[1].as_f64().expect("y").abs() < 1e-9);
-
-        let mutated = ucs(
+    assert_eq!(
+        ucs(handle, UcsRequest { origin: [0.0, 0.0], rotation: 0.0, direction: UcsDirection::ToWorld, points: vec![], ids: vec![] })
+            .expect_err("empty request")
+            .code,
+        "session/argument-invalid"
+    );
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        ucs(
             handle,
             UcsRequest {
-                origin: [10.0, 0.0],
-                rotation: 90.0,
+                origin: [0.0, 0.0],
+                rotation: 0.0,
                 direction: UcsDirection::ToWorld,
-                points: Vec::new(),
-                ids: vec!["entity-1".to_string(), "entity-1".to_string()],
-            },
+                points: vec![],
+                ids: vec!["entity-1".to_string()],
+            }
         )
-        .expect("entity conversion");
-        assert_eq!(mutated["entities"], json!(["entity-1"]));
-        assert_eq!(mutated["revision"], json!(3));
-        let drawing = drawing_of(handle);
-        let EntityKind::Line { from, to } = drawing.entities[0].kind
-        else {
-            panic!("expected a line");
-        };
-        assert!((from[0] - 10.0).abs() < 1e-9 && from[1].abs() < 1e-9, "{from:?}");
-        assert!((to[0] - 10.0).abs() < 1e-9 && (to[1] - 10.0).abs() < 1e-9, "{to:?}");
+        .expect_err("locked")
+        .code,
+        "drawing/layer-locked"
+    );
+    close(handle).expect("close");
+}
 
-        assert_eq!(
-            ucs(handle, UcsRequest { origin: [0.0, 0.0], rotation: 0.0, direction: UcsDirection::ToWorld, points: vec![], ids: vec![] })
-                .expect_err("empty request")
-                .code,
-            "session/argument-invalid"
-        );
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(
-            ucs(
-                handle,
-                UcsRequest {
-                    origin: [0.0, 0.0],
-                    rotation: 0.0,
-                    direction: UcsDirection::ToWorld,
-                    points: vec![],
-                    ids: vec!["entity-1".to_string()],
-                }
-            )
-            .expect_err("locked")
-            .code,
-            "drawing/layer-locked"
-        );
-        close(handle).expect("close");
-    }
+#[test]
+fn dimension_styles_are_listed_added_updated_and_deleted() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(created["drawing"]["dimStyles"][0]["name"], json!("standard"));
+    assert_eq!(list_dim_styles(handle).expect("list")["dimStyles"].as_array().map(Vec::len), Some(1));
 
-    #[test]
-    fn dimension_styles_are_listed_added_updated_and_deleted() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(created["drawing"]["dimStyles"][0]["name"], json!("standard"));
-        assert_eq!(list_dim_styles(handle).expect("list")["dimStyles"].as_array().map(Vec::len), Some(1));
+    let added = add_dim_style(
+        handle,
+        DimensionStyleRequest {
+            name: "ARCH".to_string(),
+            scale: Some(2.0),
+            text_height: Some(3.5),
+            precision: Some(0),
+            ..DimensionStyleRequest::default()
+        },
+    )
+    .expect("add");
+    assert_eq!(added["style"]["id"], json!("ARCH"));
+    assert_eq!(added["style"]["scale"], json!(2.0));
+    assert_eq!(added["style"]["arrowSize"], json!(2.5));
+    assert_eq!(added["style"]["originOffset"], json!(0.625));
+    assert_eq!(added["style"]["precision"], json!(0));
 
-        let added = add_dim_style(
-            handle,
-            DimensionStyleRequest {
-                name: "ARCH".to_string(),
-                scale: Some(2.0),
-                text_height: Some(3.5),
-                precision: Some(0),
-                ..DimensionStyleRequest::default()
-            },
-        )
-        .expect("add");
-        assert_eq!(added["style"]["id"], json!("ARCH"));
-        assert_eq!(added["style"]["scale"], json!(2.0));
-        assert_eq!(added["style"]["arrowSize"], json!(2.5));
-        assert_eq!(added["style"]["originOffset"], json!(0.625));
-        assert_eq!(added["style"]["precision"], json!(0));
+    let duplicate = add_dim_style(handle, DimensionStyleRequest { name: "arch".to_string(), ..DimensionStyleRequest::default() })
+        .expect_err("duplicate style");
+    assert_eq!(duplicate.code, "drawing/style-exists");
 
-        let duplicate = add_dim_style(handle, DimensionStyleRequest { name: "arch".to_string(), ..DimensionStyleRequest::default() })
-            .expect_err("duplicate style");
-        assert_eq!(duplicate.code, "drawing/style-exists");
+    let updated = update_dim_style(
+        handle,
+        "ARCH",
+        DimensionStyleUpdate { name: Some("ARCH-1".to_string()), scale: Some(3.0), ..DimensionStyleUpdate::default() },
+    )
+    .expect("update");
+    assert_eq!(updated["style"]["id"], json!("ARCH-1"));
+    assert_eq!(updated["style"]["scale"], json!(3.0));
+    assert_eq!(updated["drawing"]["dimStyles"].as_array().map(Vec::len), Some(2));
 
-        let updated = update_dim_style(
-            handle,
-            "ARCH",
-            DimensionStyleUpdate { name: Some("ARCH-1".to_string()), scale: Some(3.0), ..DimensionStyleUpdate::default() },
-        )
-        .expect("update");
-        assert_eq!(updated["style"]["id"], json!("ARCH-1"));
-        assert_eq!(updated["style"]["scale"], json!(3.0));
-        assert_eq!(updated["drawing"]["dimStyles"].as_array().map(Vec::len), Some(2));
+    let invalid = update_dim_style(handle, "ARCH-1", DimensionStyleUpdate { precision: Some(9), ..DimensionStyleUpdate::default() })
+        .expect_err("precision");
+    assert_eq!(invalid.code, "session/argument-invalid");
 
-        let invalid = update_dim_style(handle, "ARCH-1", DimensionStyleUpdate { precision: Some(9), ..DimensionStyleUpdate::default() })
-            .expect_err("precision");
-        assert_eq!(invalid.code, "session/argument-invalid");
+    let deleted = delete_dim_style(handle, "ARCH-1").expect("delete");
+    assert_eq!(deleted["deleted"], json!("ARCH-1"));
+    assert_eq!(delete_dim_style(handle, "ARCH-1").expect_err("missing").code, "object/not-found");
+    assert_eq!(delete_dim_style(handle, "standard").expect_err("last").code, "drawing/style-last");
+    close(handle).expect("close");
+}
 
-        let deleted = delete_dim_style(handle, "ARCH-1").expect("delete");
-        assert_eq!(deleted["deleted"], json!("ARCH-1"));
-        assert_eq!(delete_dim_style(handle, "ARCH-1").expect_err("missing").code, "object/not-found");
-        assert_eq!(delete_dim_style(handle, "standard").expect_err("last").code, "drawing/style-last");
-        close(handle).expect("close");
-    }
+#[test]
+fn dxf_round_trip_keeps_dimension_styles() {
+    let dir = TempDir::new("dimstyle-dxf");
+    let path = dir.path.join("plan.dxf");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_dim_style(
+        handle,
+        DimensionStyleRequest {
+            name: "ARCH".to_string(),
+            scale: Some(2.0),
+            arrow_size: Some(3.0),
+            precision: Some(1),
+            ..DimensionStyleRequest::default()
+        },
+    )
+    .expect("add style");
+    add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, None).expect("dimension");
+    export(handle, "dxf", &path).expect("export dxf");
+    let dxf = fs::read_to_string(&path).expect("read dxf");
+    assert!(dxf.contains("DIMSTYLE"));
+    assert!(dxf.contains("ARCH"));
 
-    #[test]
-    fn dxf_round_trip_keeps_dimension_styles() {
-        let dir = TempDir::new("dimstyle-dxf");
-        let path = dir.path.join("plan.dxf");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_dim_style(
-            handle,
-            DimensionStyleRequest {
-                name: "ARCH".to_string(),
-                scale: Some(2.0),
-                arrow_size: Some(3.0),
-                precision: Some(1),
-                ..DimensionStyleRequest::default()
-            },
-        )
-        .expect("add style");
-        add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, None).expect("dimension");
-        export(handle, "dxf", &path).expect("export dxf");
-        let dxf = fs::read_to_string(&path).expect("read dxf");
-        assert!(dxf.contains("DIMSTYLE"));
-        assert!(dxf.contains("ARCH"));
+    let imported = import_dxf(&path, Some("Imported".to_string())).expect("import dxf");
+    let styles = imported["drawing"]["dimStyles"].as_array().expect("dimStyles");
+    let arch = styles.iter().find(|style| style["name"] == json!("ARCH")).expect("imported ARCH style");
+    assert_eq!(arch["scale"], json!(2.0));
+    assert_eq!(arch["arrowSize"], json!(3.0));
+    assert_eq!(arch["precision"], json!(1));
+    close(handle).expect("close");
+}
 
-        let imported = import_dxf(&path, Some("Imported".to_string())).expect("import dxf");
-        let styles = imported["drawing"]["dimStyles"].as_array().expect("dimStyles");
-        let arch = styles.iter().find(|style| style["name"] == json!("ARCH")).expect("imported ARCH style");
-        assert_eq!(arch["scale"], json!(2.0));
-        assert_eq!(arch["arrowSize"], json!(3.0));
-        assert_eq!(arch["precision"], json!(1));
-        close(handle).expect("close");
-    }
+#[test]
+fn text_styles_are_listed_added_updated_and_deleted() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(created["drawing"]["textStyles"][0]["name"], json!("standard"));
+    assert_eq!(created["drawing"]["textStyles"][0]["font"], json!("txt"));
+    assert_eq!(list_text_styles(handle).expect("list")["textStyles"].as_array().map(Vec::len), Some(1));
 
-    #[test]
-    fn text_styles_are_listed_added_updated_and_deleted() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(created["drawing"]["textStyles"][0]["name"], json!("standard"));
-        assert_eq!(created["drawing"]["textStyles"][0]["font"], json!("txt"));
-        assert_eq!(list_text_styles(handle).expect("list")["textStyles"].as_array().map(Vec::len), Some(1));
+    let added = add_text_style(
+        handle,
+        TextStyleRequest {
+            name: "NOTES".to_string(),
+            font: Some("romans.shx".to_string()),
+            height: Some(2.5),
+            width_factor: Some(0.8),
+            oblique: Some(15.0),
+        },
+    )
+    .expect("add");
+    assert_eq!(added["style"]["id"], json!("NOTES"));
+    assert_eq!(added["style"]["font"], json!("romans.shx"));
+    assert_eq!(added["style"]["widthFactor"], json!(0.8));
+    assert_eq!(added["style"]["oblique"], json!(15.0));
 
-        let added = add_text_style(
-            handle,
-            TextStyleRequest {
-                name: "NOTES".to_string(),
-                font: Some("romans.shx".to_string()),
-                height: Some(2.5),
-                width_factor: Some(0.8),
-                oblique: Some(15.0),
-            },
-        )
-        .expect("add");
-        assert_eq!(added["style"]["id"], json!("NOTES"));
-        assert_eq!(added["style"]["font"], json!("romans.shx"));
-        assert_eq!(added["style"]["widthFactor"], json!(0.8));
-        assert_eq!(added["style"]["oblique"], json!(15.0));
+    let duplicate =
+        add_text_style(handle, TextStyleRequest { name: "notes".to_string(), ..TextStyleRequest::default() }).expect_err("duplicate");
+    assert_eq!(duplicate.code, "drawing/style-exists");
 
-        let duplicate =
-            add_text_style(handle, TextStyleRequest { name: "notes".to_string(), ..TextStyleRequest::default() }).expect_err("duplicate");
-        assert_eq!(duplicate.code, "drawing/style-exists");
+    let updated = update_text_style(
+        handle,
+        "NOTES",
+        TextStyleUpdate { name: Some("NOTES-1".to_string()), oblique: Some(0.0), ..TextStyleUpdate::default() },
+    )
+    .expect("update");
+    assert_eq!(updated["style"]["id"], json!("NOTES-1"));
+    assert_eq!(updated["style"]["oblique"], json!(0.0));
 
-        let updated = update_text_style(
-            handle,
-            "NOTES",
-            TextStyleUpdate { name: Some("NOTES-1".to_string()), oblique: Some(0.0), ..TextStyleUpdate::default() },
-        )
-        .expect("update");
-        assert_eq!(updated["style"]["id"], json!("NOTES-1"));
-        assert_eq!(updated["style"]["oblique"], json!(0.0));
+    let invalid =
+        update_text_style(handle, "NOTES-1", TextStyleUpdate { oblique: Some(120.0), ..TextStyleUpdate::default() }).expect_err("oblique");
+    assert_eq!(invalid.code, "session/argument-invalid");
 
-        let invalid =
-            update_text_style(handle, "NOTES-1", TextStyleUpdate { oblique: Some(120.0), ..TextStyleUpdate::default() }).expect_err("oblique");
-        assert_eq!(invalid.code, "session/argument-invalid");
+    let deleted = delete_text_style(handle, "NOTES-1").expect("delete");
+    assert_eq!(deleted["deleted"], json!("NOTES-1"));
+    assert_eq!(delete_text_style(handle, "standard").expect_err("last").code, "drawing/style-last");
+    close(handle).expect("close");
+}
 
-        let deleted = delete_text_style(handle, "NOTES-1").expect("delete");
-        assert_eq!(deleted["deleted"], json!("NOTES-1"));
-        assert_eq!(delete_text_style(handle, "standard").expect_err("last").code, "drawing/style-last");
-        close(handle).expect("close");
-    }
+#[test]
+fn dxf_round_trip_keeps_text_styles() {
+    let dir = TempDir::new("textstyle-dxf");
+    let path = dir.path.join("plan.dxf");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_text_style(
+        handle,
+        TextStyleRequest {
+            name: "NOTES".to_string(),
+            font: Some("romans.shx".to_string()),
+            height: Some(3.0),
+            width_factor: Some(0.75),
+            oblique: Some(10.0),
+        },
+    )
+    .expect("add style");
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "Site").expect("text");
+    export(handle, "dxf", &path).expect("export dxf");
+    let dxf = fs::read_to_string(&path).expect("read dxf");
+    assert!(dxf.contains("STYLE"));
+    assert!(dxf.contains("romans.shx"));
 
-    #[test]
-    fn dxf_round_trip_keeps_text_styles() {
-        let dir = TempDir::new("textstyle-dxf");
-        let path = dir.path.join("plan.dxf");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_text_style(
-            handle,
-            TextStyleRequest {
-                name: "NOTES".to_string(),
-                font: Some("romans.shx".to_string()),
-                height: Some(3.0),
-                width_factor: Some(0.75),
-                oblique: Some(10.0),
-            },
-        )
-        .expect("add style");
-        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "Site").expect("text");
-        export(handle, "dxf", &path).expect("export dxf");
-        let dxf = fs::read_to_string(&path).expect("read dxf");
-        assert!(dxf.contains("STYLE"));
-        assert!(dxf.contains("romans.shx"));
+    let imported = import_dxf(&path, Some("Imported".to_string())).expect("import dxf");
+    let styles = imported["drawing"]["textStyles"].as_array().expect("textStyles");
+    let notes = styles.iter().find(|style| style["name"] == json!("NOTES")).expect("imported NOTES style");
+    assert_eq!(notes["font"], json!("romans.shx"));
+    assert_eq!(notes["height"], json!(3.0));
+    assert_eq!(notes["widthFactor"], json!(0.75));
+    assert_eq!(notes["oblique"], json!(10.0));
+    close(handle).expect("close");
+}
 
-        let imported = import_dxf(&path, Some("Imported".to_string())).expect("import dxf");
-        let styles = imported["drawing"]["textStyles"].as_array().expect("textStyles");
-        let notes = styles.iter().find(|style| style["name"] == json!("NOTES")).expect("imported NOTES style");
-        assert_eq!(notes["font"], json!("romans.shx"));
-        assert_eq!(notes["height"], json!(3.0));
-        assert_eq!(notes["widthFactor"], json!(0.75));
-        assert_eq!(notes["oblique"], json!(10.0));
-        close(handle).expect("close");
-    }
+#[test]
+fn linetypes_and_layer_lineweights_round_trip() {
+    let dir = TempDir::new("linetypes");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let listed = list_linetypes(handle).expect("list");
+    assert_eq!(listed["linetypes"].as_array().map(Vec::len), Some(1));
+    assert_eq!(listed["linetypes"][0]["name"], json!("continuous"));
 
-    #[test]
-    fn linetypes_and_layer_lineweights_round_trip() {
-        let dir = TempDir::new("linetypes");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let listed = list_linetypes(handle).expect("list");
-        assert_eq!(listed["linetypes"].as_array().map(Vec::len), Some(1));
-        assert_eq!(listed["linetypes"][0]["name"], json!("continuous"));
+    let added = add_linetype(
+        handle,
+        LinetypeRequest { name: "DASHED".to_string(), description: Some("Dashed".to_string()), pattern: Some(vec![5.0, 2.0]) },
+    )
+    .expect("add linetype");
+    assert_eq!(added["linetype"]["pattern"], json!([5.0, 2.0]));
 
-        let added = add_linetype(
-            handle,
-            LinetypeRequest { name: "DASHED".to_string(), description: Some("Dashed".to_string()), pattern: Some(vec![5.0, 2.0]) },
-        )
-        .expect("add linetype");
-        assert_eq!(added["linetype"]["pattern"], json!([5.0, 2.0]));
+    let layer = update_layer(
+        handle,
+        DEFAULT_LAYER,
+        LayerUpdate { linetype: Some("DASHED".to_string()), lineweight: Some(0.5), ..LayerUpdate::default() },
+    )
+    .expect("assign linetype");
+    assert_eq!(layer["layer"]["linetype"], json!("DASHED"));
+    assert_eq!(layer["layer"]["lineweight"], json!(0.5));
 
-        let layer = update_layer(
-            handle,
-            DEFAULT_LAYER,
-            LayerUpdate { linetype: Some("DASHED".to_string()), lineweight: Some(0.5), ..LayerUpdate::default() },
-        )
-        .expect("assign linetype");
-        assert_eq!(layer["layer"]["linetype"], json!("DASHED"));
-        assert_eq!(layer["layer"]["lineweight"], json!(0.5));
+    assert!(delete_linetype(handle, "continuous").is_err(), "a referenced line type cannot be removed");
+    let renamed =
+        update_linetype(handle, "DASHED", LinetypeUpdate { name: Some("DASH-1".to_string()), ..LinetypeUpdate::default() }).expect("rename");
+    assert_eq!(renamed["linetype"]["name"], json!("DASH-1"));
+    assert_eq!(renamed["drawing"]["layers"][0]["linetype"], json!("DASH-1"));
 
-        assert!(delete_linetype(handle, "continuous").is_err(), "a referenced line type cannot be removed");
-        let renamed = update_linetype(handle, "DASHED", LinetypeUpdate { name: Some("DASH-1".to_string()), ..LinetypeUpdate::default() })
-            .expect("rename");
-        assert_eq!(renamed["linetype"]["name"], json!("DASH-1"));
-        assert_eq!(renamed["drawing"]["layers"][0]["linetype"], json!("DASH-1"));
+    let path = dir.path.join("plan.dxf");
+    export(handle, "dxf", &path).expect("export dxf");
+    let text = fs::read_to_string(&path).expect("read dxf");
+    assert!(text.contains("LTYPE"));
+    assert!(text.contains("DASH-1"));
+    assert!(text.contains("370"));
 
-        let path = dir.path.join("plan.dxf");
-        export(handle, "dxf", &path).expect("export dxf");
-        let text = fs::read_to_string(&path).expect("read dxf");
-        assert!(text.contains("LTYPE"));
-        assert!(text.contains("DASH-1"));
-        assert!(text.contains("370"));
+    let imported = import_dxf(&path, None).expect("import dxf");
+    let imported_handle = handle_of(&imported);
+    let linetypes = list_linetypes(imported_handle).expect("list imported");
+    let dashed = linetypes["linetypes"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["name"] == json!("DASH-1")))
+        .cloned()
+        .expect("imported line type");
+    assert_eq!(dashed["pattern"], json!([5.0, 2.0]));
+    let imported_layer = imported["drawing"]["layers"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["id"] == json!(DEFAULT_LAYER)))
+        .cloned()
+        .expect("imported layer");
+    assert_eq!(imported_layer["lineweight"], json!(0.5));
+    close(imported_handle).expect("close imported");
+    close(handle).expect("close");
+}
 
-        let imported = import_dxf(&path, None).expect("import dxf");
-        let imported_handle = handle_of(&imported);
-        let linetypes = list_linetypes(imported_handle).expect("list imported");
-        let dashed = linetypes["linetypes"]
-            .as_array()
-            .and_then(|entries| entries.iter().find(|entry| entry["name"] == json!("DASH-1")))
-            .cloned()
-            .expect("imported line type");
-        assert_eq!(dashed["pattern"], json!([5.0, 2.0]));
-        let imported_layer = imported["drawing"]["layers"]
-            .as_array()
-            .and_then(|entries| entries.iter().find(|entry| entry["id"] == json!(DEFAULT_LAYER)))
-            .cloned()
-            .expect("imported layer");
-        assert_eq!(imported_layer["lineweight"], json!(0.5));
-        close(imported_handle).expect("close imported");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn svg_and_pdf_draw_layer_lineweight_and_dash_pattern() {
-        let dir = TempDir::new("stroke-style");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_linetype(
-            handle,
-            LinetypeRequest { name: "DASHED".to_string(), description: Some("Dashed".to_string()), pattern: Some(vec![5.0, 2.0]) },
-        )
-        .expect("linetype");
-        update_layer(
-            handle,
-            DEFAULT_LAYER,
-            LayerUpdate { linetype: Some("DASHED".to_string()), lineweight: Some(0.8), ..LayerUpdate::default() },
-        )
+#[test]
+fn svg_and_pdf_draw_layer_lineweight_and_dash_pattern() {
+    let dir = TempDir::new("stroke-style");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_linetype(
+        handle,
+        LinetypeRequest { name: "DASHED".to_string(), description: Some("Dashed".to_string()), pattern: Some(vec![5.0, 2.0]) },
+    )
+    .expect("linetype");
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { linetype: Some("DASHED".to_string()), lineweight: Some(0.8), ..LayerUpdate::default() })
         .expect("layer");
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 0.0]).expect("line");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 0.0]).expect("line");
 
-        let svg_path = dir.path.join("plan.svg");
-        export(handle, "svg", &svg_path).expect("export svg");
-        let svg = fs::read_to_string(&svg_path).expect("read svg");
-        assert!(svg.contains(r#"stroke-width="0.8""#), "the layer lineweight is the SVG stroke width: {svg}");
-        assert!(svg.contains(r#"stroke-dasharray="5 2""#), "the line type becomes an SVG dash array: {svg}");
+    let svg_path = dir.path.join("plan.svg");
+    export(handle, "svg", &svg_path).expect("export svg");
+    let svg = fs::read_to_string(&svg_path).expect("read svg");
+    assert!(svg.contains(r#"stroke-width="0.8""#), "the layer lineweight is the SVG stroke width: {svg}");
+    assert!(svg.contains(r#"stroke-dasharray="5 2""#), "the line type becomes an SVG dash array: {svg}");
 
-        let pdf_path = dir.path.join("plan.pdf");
-        export(handle, "pdf", &pdf_path).expect("export pdf");
-        let pdf = fs::read_to_string(&pdf_path).expect("read pdf");
-        let widths = pdf.lines().filter_map(|line| line.strip_suffix(" w").and_then(|value| value.parse::<f64>().ok())).collect::<Vec<_>>();
-        assert!(
-            widths.iter().any(|width| (*width - 0.7).abs() > 1e-9),
-            "the PDF stroke width follows the layer lineweight instead of the default 0.7: {widths:?}"
-        );
-        close(handle).expect("close");
-    }
+    let pdf_path = dir.path.join("plan.pdf");
+    export(handle, "pdf", &pdf_path).expect("export pdf");
+    let pdf = fs::read_to_string(&pdf_path).expect("read pdf");
+    let widths = pdf.lines().filter_map(|line| line.strip_suffix(" w").and_then(|value| value.parse::<f64>().ok())).collect::<Vec<_>>();
+    assert!(
+        widths.iter().any(|width| (*width - 0.7).abs() > 1e-9),
+        "the PDF stroke width follows the layer lineweight instead of the default 0.7: {widths:?}"
+    );
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let first = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        let second = add_line(handle, DEFAULT_LAYER, [5.0, -5.0], [5.0, 5.0]).expect("line");
-        add_circle(handle, DEFAULT_LAYER, [20.0, 20.0], 2.0).expect("circle");
+#[test]
+fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let first = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let second = add_line(handle, DEFAULT_LAYER, [5.0, -5.0], [5.0, 5.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [20.0, 20.0], 2.0).expect("circle");
 
-        let all = snap_points(handle, SnapRequest::default()).expect("snap");
-        assert_eq!(all["count"], json!(8));
-        let modes = all["modes"].as_array().expect("modes");
-        assert_eq!(modes.len(), SNAP_MODES.len());
+    let all = snap_points(handle, SnapRequest::default()).expect("snap");
+    assert_eq!(all["count"], json!(8));
+    let modes = all["modes"].as_array().expect("modes");
+    assert_eq!(modes.len(), SNAP_MODES.len());
 
-        let intersections =
-            snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ..SnapRequest::default() }).expect("intersect");
-        assert_eq!(intersections["count"], json!(1));
-        assert_eq!(intersections["points"][0]["point"], json!([5.0, 0.0]));
-        assert_eq!(intersections["points"][0]["entities"], json!([first["entity"]["id"], second["entity"]["id"]]));
+    let intersections =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ..SnapRequest::default() }).expect("intersect");
+    assert_eq!(intersections["count"], json!(1));
+    assert_eq!(intersections["points"][0]["point"], json!([5.0, 0.0]));
+    assert_eq!(intersections["points"][0]["entities"], json!([first["entity"]["id"], second["entity"]["id"]]));
 
-        let near = snap_points(
-            handle,
-            SnapRequest {
-                modes: vec!["endpoint".to_string(), "midpoint".to_string()],
-                point: Some([9.9, 0.0]),
-                tolerance: Some(0.5),
-                ..SnapRequest::default()
-            },
-        )
-        .expect("near");
-        assert_eq!(near["count"], json!(1));
-        assert_eq!(near["points"][0]["point"], json!([10.0, 0.0]));
-        assert_eq!(near["points"][0]["kind"], json!("endpoint"));
+    let near = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["endpoint".to_string(), "midpoint".to_string()],
+            point: Some([9.9, 0.0]),
+            tolerance: Some(0.5),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("near");
+    assert_eq!(near["count"], json!(1));
+    assert_eq!(near["points"][0]["point"], json!([10.0, 0.0]));
+    assert_eq!(near["points"][0]["kind"], json!("endpoint"));
 
-        let centres = snap_points(handle, SnapRequest { modes: vec!["center".to_string()], ..SnapRequest::default() }).expect("center");
-        assert_eq!(centres["points"][0]["point"], json!([20.0, 20.0]));
+    let centres = snap_points(handle, SnapRequest { modes: vec!["center".to_string()], ..SnapRequest::default() }).expect("center");
+    assert_eq!(centres["points"][0]["point"], json!([20.0, 20.0]));
 
-        assert!(snap_points(handle, SnapRequest { modes: vec!["edge".to_string()], ..SnapRequest::default() }).is_err());
-        assert!(snap_points(handle, SnapRequest { ids: Some(vec!["entity-99".to_string()]), ..SnapRequest::default() }).is_err());
-        assert!(snap_points(handle, SnapRequest { tolerance: Some(1.0), ..SnapRequest::default() }).is_err());
-        close(handle).expect("close");
-    }
+    assert!(snap_points(handle, SnapRequest { modes: vec!["edge".to_string()], ..SnapRequest::default() }).is_err());
+    assert!(snap_points(handle, SnapRequest { ids: Some(vec!["entity-99".to_string()]), ..SnapRequest::default() }).is_err());
+    assert!(snap_points(handle, SnapRequest { tolerance: Some(1.0), ..SnapRequest::default() }).is_err());
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn drawing_properties_are_read_and_written() {
-        let created = create(CreateRequest { title: Some("Site".to_string()), ..CreateRequest::default() }).expect("create");
-        let handle = handle_of(&created);
-        let initial = properties(handle).expect("properties");
-        assert_eq!(initial["title"], json!("Site"));
-        assert_eq!(initial["properties"]["author"], json!(""));
+#[test]
+fn drawing_properties_are_read_and_written() {
+    let created = create(CreateRequest { title: Some("Site".to_string()), ..CreateRequest::default() }).expect("create");
+    let handle = handle_of(&created);
+    let initial = properties(handle).expect("properties");
+    assert_eq!(initial["title"], json!("Site"));
+    assert_eq!(initial["properties"]["author"], json!(""));
 
-        let updated = update_properties(
-            handle,
-            PropertiesUpdate {
-                title: Some("  Site plan  ".to_string()),
-                author: Some("Design team".to_string()),
-                company: Some("OpenCAD".to_string()),
-                project: Some("Harbour".to_string()),
-                ..PropertiesUpdate::default()
-            },
-        )
-        .expect("update");
-        assert_eq!(updated["title"], json!("Site plan"));
-        assert_eq!(updated["drawing"]["title"], json!("Site plan"));
-        assert_eq!(updated["drawing"]["properties"]["author"], json!("Design team"));
-        assert_eq!(updated["properties"]["company"], json!("OpenCAD"));
-        assert_eq!(updated["revision"], json!(2));
+    let updated = update_properties(
+        handle,
+        PropertiesUpdate {
+            title: Some("  Site plan  ".to_string()),
+            author: Some("Design team".to_string()),
+            company: Some("OpenCAD".to_string()),
+            project: Some("Harbour".to_string()),
+            ..PropertiesUpdate::default()
+        },
+    )
+    .expect("update");
+    assert_eq!(updated["title"], json!("Site plan"));
+    assert_eq!(updated["drawing"]["title"], json!("Site plan"));
+    assert_eq!(updated["drawing"]["properties"]["author"], json!("Design team"));
+    assert_eq!(updated["properties"]["company"], json!("OpenCAD"));
+    assert_eq!(updated["revision"], json!(2));
 
-        let cleared =
-            update_properties(handle, PropertiesUpdate { author: Some(String::new()), ..PropertiesUpdate::default() }).expect("clear");
-        assert_eq!(cleared["properties"]["author"], json!(""));
-        assert_eq!(cleared["properties"]["company"], json!("OpenCAD"));
+    let cleared = update_properties(handle, PropertiesUpdate { author: Some(String::new()), ..PropertiesUpdate::default() }).expect("clear");
+    assert_eq!(cleared["properties"]["author"], json!(""));
+    assert_eq!(cleared["properties"]["company"], json!("OpenCAD"));
 
-        let without =
-            update_properties(handle, PropertiesUpdate { title: Some(String::new()), ..PropertiesUpdate::default() }).expect("clear title");
-        assert_eq!(without["title"], Value::Null);
+    let without =
+        update_properties(handle, PropertiesUpdate { title: Some(String::new()), ..PropertiesUpdate::default() }).expect("clear title");
+    assert_eq!(without["title"], Value::Null);
 
-        assert!(update_properties(handle, PropertiesUpdate::default()).is_err());
-        assert!(
-            update_properties(handle, PropertiesUpdate { author: Some("a".repeat(PROPERTY_VALUE_LIMIT + 1)), ..PropertiesUpdate::default() })
-                .is_err()
-        );
-        close(handle).expect("close");
-    }
+    assert!(update_properties(handle, PropertiesUpdate::default()).is_err());
+    assert!(
+        update_properties(handle, PropertiesUpdate { author: Some("a".repeat(PROPERTY_VALUE_LIMIT + 1)), ..PropertiesUpdate::default() })
+            .is_err()
+    );
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn selection_matches_window_and_crossing_rectangles() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "walls", None).expect("layer");
-        let first = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        let second = add_line(handle, "walls", [10.0, 10.0], [20.0, 20.0]).expect("line");
-        add_circle(handle, DEFAULT_LAYER, [50.0, 50.0], 5.0).expect("circle");
+#[test]
+fn selection_matches_window_and_crossing_rectangles() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "walls", None).expect("layer");
+    let first = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let second = add_line(handle, "walls", [10.0, 10.0], [20.0, 20.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [50.0, 50.0], 5.0).expect("circle");
 
-        let window = select(handle, SelectionMode::Window, [[-1.0, -1.0], [11.0, 1.0]], None).expect("window");
-        assert_eq!(window["mode"], json!("window"));
-        assert_eq!(window["count"], json!(1));
-        assert_eq!(window["ids"], json!([first["entity"]["id"]]));
+    let window = select(handle, SelectionMode::Window, [[-1.0, -1.0], [11.0, 1.0]], None).expect("window");
+    assert_eq!(window["mode"], json!("window"));
+    assert_eq!(window["count"], json!(1));
+    assert_eq!(window["ids"], json!([first["entity"]["id"]]));
 
-        let crossing = select(handle, SelectionMode::Crossing, [[9.0, -1.0], [11.0, 11.0]], None).expect("crossing");
-        assert_eq!(crossing["count"], json!(2), "{crossing}");
-        assert_eq!(crossing["ids"][0], first["entity"]["id"]);
-        assert_eq!(crossing["ids"][1], second["entity"]["id"]);
+    let crossing = select(handle, SelectionMode::Crossing, [[9.0, -1.0], [11.0, 11.0]], None).expect("crossing");
+    assert_eq!(crossing["count"], json!(2), "{crossing}");
+    assert_eq!(crossing["ids"][0], first["entity"]["id"]);
+    assert_eq!(crossing["ids"][1], second["entity"]["id"]);
 
-        let walls = select(handle, SelectionMode::Crossing, [[9.0, -1.0], [11.0, 11.0]], Some("walls")).expect("layer filter");
-        assert_eq!(walls["count"], json!(1));
-        assert_eq!(walls["ids"][0], second["entity"]["id"]);
-        assert_eq!(walls["layer"], json!("walls"));
+    let walls = select(handle, SelectionMode::Crossing, [[9.0, -1.0], [11.0, 11.0]], Some("walls")).expect("layer filter");
+    assert_eq!(walls["count"], json!(1));
+    assert_eq!(walls["ids"][0], second["entity"]["id"]);
+    assert_eq!(walls["layer"], json!("walls"));
 
-        let circle = select(handle, SelectionMode::Crossing, [[44.0, 44.0], [56.0, 56.0]], None).expect("circle");
-        assert_eq!(circle["count"], json!(1));
+    let circle = select(handle, SelectionMode::Crossing, [[44.0, 44.0], [56.0, 56.0]], None).expect("circle");
+    assert_eq!(circle["count"], json!(1));
 
-        assert_eq!(
-            select(handle, SelectionMode::Window, [[5.0, 5.0], [5.0, 5.0]], None).expect_err("degenerate").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            select(handle, SelectionMode::Window, [[0.0, 0.0], [1.0, 1.0]], Some("missing")).expect_err("missing layer").code,
-            "object/not-found"
-        );
-        close(handle).expect("close");
-    }
+    assert_eq!(select(handle, SelectionMode::Window, [[5.0, 5.0], [5.0, 5.0]], None).expect_err("degenerate").code, "session/argument-invalid");
+    assert_eq!(
+        select(handle, SelectionMode::Window, [[0.0, 0.0], [1.0, 1.0]], Some("missing")).expect_err("missing layer").code,
+        "object/not-found"
+    );
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn entities_move_and_update_without_losing_identity() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
-        add_text(handle, DEFAULT_LAYER, [1.0, 1.0], 2.5, "Old").expect("text");
+#[test]
+fn entities_move_and_update_without_losing_identity() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
+    add_text(handle, DEFAULT_LAYER, [1.0, 1.0], 2.5, "Old").expect("text");
 
-        let moved = move_entity(handle, "entity-1", Some([10.0, 5.0]), None).expect("move line");
-        assert_eq!(moved["entity"]["kind"]["from"], json!([10.0, 5.0]));
-        assert_eq!(moved["entity"]["kind"]["to"], json!([20.0, 5.0]));
+    let moved = move_entity(handle, "entity-1", Some([10.0, 5.0]), None).expect("move line");
+    assert_eq!(moved["entity"]["kind"]["from"], json!([10.0, 5.0]));
+    assert_eq!(moved["entity"]["kind"]["to"], json!([20.0, 5.0]));
 
-        let placed = move_entity(handle, "entity-2", None, Some([0.0, 0.0])).expect("absolute move");
-        assert_eq!(placed["entity"]["kind"]["center"], json!([0.0, 0.0]));
+    let placed = move_entity(handle, "entity-2", None, Some([0.0, 0.0])).expect("absolute move");
+    assert_eq!(placed["entity"]["kind"]["center"], json!([0.0, 0.0]));
 
-        let text = update_entity(handle, "entity-3", Some("Hall".to_string()), Some(4.0), None).expect("update text");
-        assert_eq!(text["entity"]["kind"]["content"], json!("Hall"));
-        assert_eq!(text["entity"]["kind"]["height"], json!(4.0));
+    let text = update_entity(handle, "entity-3", Some("Hall".to_string()), Some(4.0), None).expect("update text");
+    assert_eq!(text["entity"]["kind"]["content"], json!("Hall"));
+    assert_eq!(text["entity"]["kind"]["height"], json!(4.0));
 
-        let circle = update_entity(handle, "entity-2", None, None, Some(7.0)).expect("update radius");
-        assert_eq!(circle["entity"]["kind"]["radius"], json!(7.0));
+    let circle = update_entity(handle, "entity-2", None, None, Some(7.0)).expect("update radius");
+    assert_eq!(circle["entity"]["kind"]["radius"], json!(7.0));
 
-        assert_eq!(update_entity(handle, "entity-1", None, Some(2.0), None).expect_err("line height").code, "object/unsupported");
-        assert_eq!(
-            move_entity(handle, "entity-1", Some([1.0, 1.0]), Some([0.0, 0.0])).expect_err("ambiguous move").code,
-            "session/argument-invalid"
-        );
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock default layer");
-        assert_eq!(update_entity(handle, "entity-3", Some("X".to_string()), None, None).expect_err("locked").code, "drawing/layer-locked");
+    assert_eq!(update_entity(handle, "entity-1", None, Some(2.0), None).expect_err("line height").code, "object/unsupported");
+    assert_eq!(
+        move_entity(handle, "entity-1", Some([1.0, 1.0]), Some([0.0, 0.0])).expect_err("ambiguous move").code,
+        "session/argument-invalid"
+    );
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock default layer");
+    assert_eq!(update_entity(handle, "entity-3", Some("X".to_string()), None, None).expect_err("locked").code, "drawing/layer-locked");
 
-        close(handle).expect("close");
-    }
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn polyline_vertices_and_closure_are_editable() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+#[test]
+fn polyline_vertices_and_closure_are_editable() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
 
-        let closed = update_polyline(handle, "entity-1", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
-            .expect("close the polyline");
-        assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
-        assert_eq!(closed["revision"], json!(3));
+    let closed =
+        update_polyline(handle, "entity-1", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() }).expect("close the polyline");
+    assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
+    assert_eq!(closed["revision"], json!(3));
 
-        let inserted = update_polyline(
-            handle,
-            "entity-1",
-            PolylineUpdate { insert_at: Some(1), insert_point: Some([5.0, 0.0]), ..PolylineUpdate::default() },
-        )
-        .expect("insert a vertex");
-        assert_eq!(inserted["entity"]["kind"]["points"], json!([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [10.0, 10.0]]));
+    let inserted =
+        update_polyline(handle, "entity-1", PolylineUpdate { insert_at: Some(1), insert_point: Some([5.0, 0.0]), ..PolylineUpdate::default() })
+            .expect("insert a vertex");
+    assert_eq!(inserted["entity"]["kind"]["points"], json!([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [10.0, 10.0]]));
 
-        let appended = update_polyline(
-            handle,
-            "entity-1",
-            PolylineUpdate { insert_at: Some(4), insert_point: Some([0.0, 10.0]), ..PolylineUpdate::default() },
-        )
-        .expect("append a vertex");
-        assert_eq!(appended["entity"]["kind"]["points"].as_array().map(Vec::len), Some(5));
+    let appended = update_polyline(
+        handle,
+        "entity-1",
+        PolylineUpdate { insert_at: Some(4), insert_point: Some([0.0, 10.0]), ..PolylineUpdate::default() },
+    )
+    .expect("append a vertex");
+    assert_eq!(appended["entity"]["kind"]["points"].as_array().map(Vec::len), Some(5));
 
-        let removed =
-            update_polyline(handle, "entity-1", PolylineUpdate { remove_at: Some(1), ..PolylineUpdate::default() }).expect("remove a vertex");
-        assert_eq!(removed["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
+    let removed =
+        update_polyline(handle, "entity-1", PolylineUpdate { remove_at: Some(1), ..PolylineUpdate::default() }).expect("remove a vertex");
+    assert_eq!(removed["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
 
-        let moved =
-            update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(1), move_to: Some([12.0, 3.0]), ..PolylineUpdate::default() })
-                .expect("move a vertex");
-        assert_eq!(moved["entity"]["kind"]["points"][1], json!([12.0, 3.0]));
-        assert_eq!(moved["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
+    let moved =
+        update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(1), move_to: Some([12.0, 3.0]), ..PolylineUpdate::default() })
+            .expect("move a vertex");
+    assert_eq!(moved["entity"]["kind"]["points"][1], json!([12.0, 3.0]));
+    assert_eq!(moved["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
 
-        let replaced = update_polyline(
-            handle,
-            "entity-1",
-            PolylineUpdate {
-                points: Some(vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]),
-                closed: Some(true),
-                ..PolylineUpdate::default()
-            },
-        )
-        .expect("replace the vertices");
-        assert_eq!(replaced["entity"]["kind"]["points"], json!([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]));
-        assert_eq!(replaced["entity"]["kind"]["closed"], json!(true));
+    let replaced = update_polyline(
+        handle,
+        "entity-1",
+        PolylineUpdate { points: Some(vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]), closed: Some(true), ..PolylineUpdate::default() },
+    )
+    .expect("replace the vertices");
+    assert_eq!(replaced["entity"]["kind"]["points"], json!([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]));
+    assert_eq!(replaced["entity"]["kind"]["closed"], json!(true));
 
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 0.0]], false).expect("two-point polyline");
-        assert_eq!(
-            update_polyline(handle, "entity-2", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
-                .expect_err("a line is not a polyline")
-                .code,
-            "object/unsupported"
-        );
-        assert_eq!(update_polyline(handle, "entity-1", PolylineUpdate::default()).expect_err("no edit").code, "session/argument-invalid");
-        assert_eq!(
-            update_polyline(handle, "entity-1", PolylineUpdate { insert_at: Some(0), ..PolylineUpdate::default() })
-                .expect_err("insert without a point")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(
-                handle,
-                "entity-1",
-                PolylineUpdate { insert_at: Some(99), insert_point: Some([0.0, 0.0]), ..PolylineUpdate::default() }
-            )
-            .expect_err("index beyond the list")
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 0.0]], false).expect("two-point polyline");
+    assert_eq!(
+        update_polyline(handle, "entity-2", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
+            .expect_err("a line is not a polyline")
             .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(0), ..PolylineUpdate::default() })
-                .expect_err("move without a point")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(99), move_to: Some([1.0, 1.0]), ..PolylineUpdate::default() })
-                .expect_err("move index beyond the list")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(
-                handle,
-                "entity-1",
-                PolylineUpdate { remove_at: Some(0), move_at: Some(0), move_to: Some([1.0, 1.0]), ..PolylineUpdate::default() }
-            )
-            .expect_err("one vertex edit per call")
+        "object/unsupported"
+    );
+    assert_eq!(update_polyline(handle, "entity-1", PolylineUpdate::default()).expect_err("no edit").code, "session/argument-invalid");
+    assert_eq!(
+        update_polyline(handle, "entity-1", PolylineUpdate { insert_at: Some(0), ..PolylineUpdate::default() })
+            .expect_err("insert without a point")
             .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(handle, "entity-1", PolylineUpdate { points: Some(vec![[0.0, 0.0]]), ..PolylineUpdate::default() })
-                .expect_err("too few vertices")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(handle, "entity-3", PolylineUpdate { remove_at: Some(0), ..PolylineUpdate::default() })
-                .expect_err("removing leaves one vertex")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_polyline(handle, "entity-404", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
-                .expect_err("missing entity")
-                .code,
-            "object/not-found"
-        );
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(
-            update_polyline(handle, "entity-1", PolylineUpdate { closed: Some(false), ..PolylineUpdate::default() })
-                .expect_err("locked layer")
-                .code,
-            "drawing/layer-locked"
-        );
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn rectangle_builds_a_closed_counter_clockwise_polyline() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let before = drawing_of(handle).revision;
-
-        let rectangle = add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 5.0]).expect("rectangle");
-        assert_eq!(rectangle["entity"]["kind"]["type"], json!("polyline"));
-        assert_eq!(rectangle["entity"]["kind"]["closed"], json!(true));
-        assert_eq!(rectangle["entity"]["kind"]["points"], json!([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]]));
-        assert_eq!(drawing_of(handle).revision, before + 1, "one revision for the whole rectangle");
-
-        let measured = measure_entities(handle, &["entity-1".to_string()]).expect("measure");
-        assert_eq!(measured["entities"][0]["closed"], json!(true));
-        assert_eq!(measured["entities"][0]["area"], json!(50.0));
-        assert_eq!(measured["entities"][0]["length"], json!(30.0));
-
-        undo(handle).expect("undo the rectangle");
-        assert_eq!(list_entities(handle).expect("list")["entities"].as_array().map(Vec::len), Some(0), "one undo step removes it");
-
-        assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [5.0, 0.0], [5.0, 5.0]).expect_err("zero width").code, "session/argument-invalid");
-        assert_eq!(
-            add_rectangle(handle, DEFAULT_LAYER, [10.0, 10.0], [0.0, 0.0]).expect_err("inverted corners").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [f64::NAN, 5.0]).expect_err("non-finite corner").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(add_rectangle(handle, "missing", [0.0, 0.0], [5.0, 5.0]).expect_err("missing layer").code, "object/not-found");
-
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 5.0]).expect_err("locked layer").code, "drawing/layer-locked");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn polygon_builds_a_closed_regular_polyline() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let before = drawing_of(handle).revision;
-
-        let triangle = add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 3, 0.0).expect("triangle");
-        assert_eq!(triangle["entity"]["kind"]["type"], json!("polyline"));
-        assert_eq!(triangle["entity"]["kind"]["closed"], json!(true));
-        assert_eq!(drawing_of(handle).revision, before + 1, "one revision for the whole polygon");
-        let points = triangle["entity"]["kind"]["points"].as_array().expect("points").clone();
-        assert_eq!(points.len(), 3);
-        let vertex = |index: usize| (points[index][0].as_f64().expect("x"), points[index][1].as_f64().expect("y"));
-        assert!((vertex(0).0 - 10.0).abs() < 1e-9 && vertex(0).1.abs() < 1e-9, "the first vertex starts at rotation 0: {:?}", vertex(0));
-        assert!((vertex(1).0 + 5.0).abs() < 1e-9, "the second vertex sits at 120 degrees: {:?}", vertex(1));
-        assert!((vertex(1).1 - 8.660_254_037_844_387).abs() < 1e-9, "the second vertex sits at 120 degrees: {:?}", vertex(1));
-        for point in &points {
-            let x = point[0].as_f64().expect("x");
-            let y = point[1].as_f64().expect("y");
-            assert!(((x * x + y * y).sqrt() - 10.0).abs() < 1e-9, "every vertex sits on the radius: {point:?}");
-        }
-
-        let rotated = add_polygon(handle, DEFAULT_LAYER, [5.0, 5.0], 4.0, 4, 90.0).expect("rotated square");
-        let corners = rotated["entity"]["kind"]["points"].as_array().expect("points").clone();
-        assert_eq!(corners.len(), 4);
-        let start = (corners[0][0].as_f64().expect("x"), corners[0][1].as_f64().expect("y"));
-        assert!((start.0 - 5.0).abs() < 1e-9 && (start.1 - 9.0).abs() < 1e-9, "rotation places the first vertex: {start:?}");
-
-        undo(handle).expect("undo the square");
-        undo(handle).expect("undo the triangle");
-        assert_eq!(list_entities(handle).expect("list")["entities"].as_array().map(Vec::len), Some(0), "each polygon is one undo step");
-
-        assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 2, 0.0).expect_err("too few sides").code, "session/argument-invalid");
-        assert_eq!(
-            add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, MAX_POLYGON_SIDES + 1, 0.0).expect_err("too many sides").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0, 4, 0.0).expect_err("non-positive radius").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 4, f64::INFINITY).expect_err("non-finite rotation").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_polygon(handle, DEFAULT_LAYER, [f64::NAN, 0.0], 5.0, 4, 0.0).expect_err("non-finite centre").code,
-            "session/argument-invalid"
-        );
-
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
-        assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 4, 0.0).expect_err("frozen layer").code, "drawing/layer-frozen");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn arc_radius_and_sweep_angles_are_editable() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
-
-        let radius = update_arc(handle, "entity-1", Some(8.0), None, None).expect("update the radius");
-        assert_eq!(radius["entity"]["kind"]["radius"], json!(8.0));
-        assert_eq!(radius["entity"]["kind"]["start_angle"], json!(0.0));
-
-        let angles = update_arc(handle, "entity-1", None, Some(45.0), Some(180.0)).expect("update the sweep");
-        assert_eq!(angles["entity"]["kind"]["start_angle"], json!(45.0));
-        assert_eq!(angles["entity"]["kind"]["end_angle"], json!(180.0));
-        assert_eq!(angles["entity"]["kind"]["radius"], json!(8.0));
-
-        let full = update_arc(handle, "entity-1", None, Some(90.0), Some(90.0)).expect("full turn");
-        assert_eq!(full["entity"]["kind"]["start_angle"], json!(90.0));
-        assert_eq!(full["entity"]["kind"]["end_angle"], json!(90.0));
-
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
-        assert_eq!(update_arc(handle, "entity-2", Some(2.0), None, None).expect_err("a line is not an arc").code, "object/unsupported");
-        assert_eq!(update_arc(handle, "entity-1", None, None, None).expect_err("no edit").code, "session/argument-invalid");
-        assert_eq!(update_arc(handle, "entity-1", Some(0.0), None, None).expect_err("zero radius").code, "session/argument-invalid");
-        assert_eq!(update_arc(handle, "entity-1", Some(f64::NAN), None, None).expect_err("non-finite radius").code, "session/argument-invalid");
-        assert_eq!(
-            update_arc(handle, "entity-1", None, Some(f64::INFINITY), None).expect_err("non-finite angle").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(update_arc(handle, "entity-404", Some(2.0), None, None).expect_err("missing entity").code, "object/not-found");
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(update_arc(handle, "entity-1", Some(2.0), None, None).expect_err("locked layer").code, "drawing/layer-locked");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn entity_layer_assignment_preserves_geometry_and_respects_locks() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Walls", None).expect("add layer");
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-
-        let assigned = assign_entity_layer(handle, "entity-1", "Walls").expect("assign the layer");
-        assert_eq!(assigned["from"], json!(DEFAULT_LAYER));
-        assert_eq!(assigned["to"], json!("Walls"));
-        assert_eq!(assigned["moved"], json!(true));
-        assert_eq!(assigned["entity"]["layer"], json!("Walls"));
-        assert_eq!(assigned["entity"]["kind"]["from"], json!([0.0, 0.0]));
-        assert_eq!(assigned["entity"]["kind"]["to"], json!([10.0, 0.0]));
-        let revision = assigned["revision"].as_u64().expect("revision");
-        let layers = assigned["drawing"]["layers"].as_array().expect("layers");
-        assert_eq!(layers.iter().find(|layer| layer["id"] == json!("Walls")).expect("Walls")["entityCount"], json!(1));
-        assert_eq!(layers.iter().find(|layer| layer["id"] == json!(DEFAULT_LAYER)).expect("default")["entityCount"], json!(0));
-
-        let same = assign_entity_layer(handle, "entity-1", "Walls").expect("assign the same layer");
-        assert_eq!(same["moved"], json!(false));
-        assert_eq!(same["revision"], json!(revision));
-
-        assert_eq!(assign_entity_layer(handle, "entity-1", "missing").expect_err("missing target").code, "object/not-found");
-        assert_eq!(assign_entity_layer(handle, "entity-404", "Walls").expect_err("missing entity").code, "object/not-found");
-        update_layer(handle, "Walls", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock the target");
-        assert_eq!(
-            assign_entity_layer(handle, "entity-1", "Walls").expect_err("the entity is already on the locked layer").code,
-            "drawing/layer-locked"
-        );
-        update_layer(handle, "Walls", LayerUpdate { locked: Some(false), ..LayerUpdate::default() }).expect("unlock the target");
-        update_layer(handle, "Walls", LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze the target");
-        assert_eq!(
-            assign_entity_layer(handle, "entity-1", DEFAULT_LAYER).expect_err("the source layer is frozen").code,
-            "drawing/layer-frozen"
-        );
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn find_text_matches_case_insensitively_and_filters_by_layer() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "Main Hall").expect("text");
-        add_text(handle, DEFAULT_LAYER, [0.0, 4.0], 2.5, "Side hall").expect("text");
-        add_text(handle, DEFAULT_LAYER, [0.0, 8.0], 2.5, "Room").expect("text");
-        add_layer(handle, "Notes", None).expect("layer");
-
-        let found = find_text(handle, "HALL", TextSearchOptions::default()).expect("find");
-        assert_eq!(found["count"], json!(2));
-        assert_eq!(found["matches"][0]["id"], json!("entity-1"));
-        assert_eq!(found["matches"][1]["content"], json!("Side hall"));
-
-        let exact = find_text(handle, "HALL", TextSearchOptions { match_case: true, layer: None }).expect("exact");
-        assert_eq!(exact["count"], json!(0));
-        let scoped = find_text(handle, "hall", TextSearchOptions { match_case: false, layer: Some("Notes".to_string()) }).expect("scoped");
-        assert_eq!(scoped["count"], json!(0));
-        assert_eq!(find_text(handle, "", TextSearchOptions::default()).expect_err("empty pattern").code, "session/argument-invalid");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn replace_text_rewrites_every_match_in_one_history_step() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "hall hall").expect("text");
-        add_text(handle, DEFAULT_LAYER, [0.0, 4.0], 2.5, "Hall").expect("text");
-        add_text(handle, DEFAULT_LAYER, [0.0, 8.0], 2.5, "Room").expect("text");
-
-        let replaced = replace_text(handle, "hall", "lobby", TextSearchOptions::default()).expect("replace");
-        assert_eq!(replaced["count"], json!(2));
-        assert_eq!(replaced["occurrences"], json!(3));
-        assert_eq!(replaced["revision"], json!(5));
-        let drawing = drawing_of(handle);
-        assert!(matches!(&drawing.entities[0].kind, EntityKind::Text { content, .. } if content == "lobby lobby"));
-        assert!(matches!(&drawing.entities[1].kind, EntityKind::Text { content, .. } if content == "lobby"));
-
-        undo(handle).expect("undo");
-        let restored = drawing_of(handle);
-        assert!(matches!(&restored.entities[0].kind, EntityKind::Text { content, .. } if content == "hall hall"));
-
-        let before = restored.revision;
-        let none = replace_text(handle, "zzz", "x", TextSearchOptions::default()).expect("no match");
-        assert_eq!(none["count"], json!(0));
-        assert_eq!(none["revision"], json!(before));
-
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(replace_text(handle, "hall", "x", TextSearchOptions::default()).expect_err("locked layer").code, "drawing/layer-locked");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn groups_create_add_remove_and_prune_deleted_entities() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
-        add_line(handle, DEFAULT_LAYER, [0.0, 1.0], [1.0, 1.0]).expect("line");
-        add_line(handle, DEFAULT_LAYER, [0.0, 2.0], [1.0, 2.0]).expect("line");
-
-        let group = create_group(
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(
             handle,
-            GroupCreateRequest { name: "Frame".to_string(), entities: vec!["entity-1".to_string(), "entity-2".to_string()] },
+            "entity-1",
+            PolylineUpdate { insert_at: Some(99), insert_point: Some([0.0, 0.0]), ..PolylineUpdate::default() }
         )
-        .expect("create group");
-        assert_eq!(group["group"]["entities"], json!(["entity-1", "entity-2"]));
-        assert_eq!(group["drawing"]["groups"], json!(1));
-        assert_eq!(group["revision"], json!(5));
+        .expect_err("index beyond the list")
+        .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(0), ..PolylineUpdate::default() })
+            .expect_err("move without a point")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(99), move_to: Some([1.0, 1.0]), ..PolylineUpdate::default() })
+            .expect_err("move index beyond the list")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(
+            handle,
+            "entity-1",
+            PolylineUpdate { remove_at: Some(0), move_at: Some(0), move_to: Some([1.0, 1.0]), ..PolylineUpdate::default() }
+        )
+        .expect_err("one vertex edit per call")
+        .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(handle, "entity-1", PolylineUpdate { points: Some(vec![[0.0, 0.0]]), ..PolylineUpdate::default() })
+            .expect_err("too few vertices")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(handle, "entity-3", PolylineUpdate { remove_at: Some(0), ..PolylineUpdate::default() })
+            .expect_err("removing leaves one vertex")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_polyline(handle, "entity-404", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
+            .expect_err("missing entity")
+            .code,
+        "object/not-found"
+    );
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        update_polyline(handle, "entity-1", PolylineUpdate { closed: Some(false), ..PolylineUpdate::default() })
+            .expect_err("locked layer")
+            .code,
+        "drawing/layer-locked"
+    );
+    close(handle).expect("close");
+}
 
-        assert_eq!(
-            create_group(handle, GroupCreateRequest { name: "frame".to_string(), entities: vec!["entity-1".to_string()] },)
-                .expect_err("duplicate name")
-                .code,
-            "drawing/group-exists"
-        );
-        assert_eq!(
-            create_group(handle, GroupCreateRequest { name: "Missing".to_string(), entities: vec!["entity-9".to_string()] })
-                .expect_err("unknown entity")
-                .code,
-            "object/not-found"
-        );
-        assert_eq!(
-            create_group(handle, GroupCreateRequest { name: "Empty".to_string(), entities: Vec::new() }).expect_err("empty group").code,
-            "session/argument-invalid"
-        );
+#[test]
+fn rectangle_builds_a_closed_counter_clockwise_polyline() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let before = drawing_of(handle).revision;
 
-        let added = add_group_members(handle, "Frame", &["entity-3".to_string(), "entity-1".to_string()]).expect("add members");
-        assert_eq!(added["group"]["entities"], json!(["entity-1", "entity-2", "entity-3"]));
-        let before = added["revision"].as_u64().expect("revision");
-        let noop = add_group_members(handle, "Frame", &["entity-1".to_string()]).expect("no-op add");
-        assert_eq!(noop["revision"], json!(before));
+    let rectangle = add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 5.0]).expect("rectangle");
+    assert_eq!(rectangle["entity"]["kind"]["type"], json!("polyline"));
+    assert_eq!(rectangle["entity"]["kind"]["closed"], json!(true));
+    assert_eq!(rectangle["entity"]["kind"]["points"], json!([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]]));
+    assert_eq!(drawing_of(handle).revision, before + 1, "one revision for the whole rectangle");
 
-        let removed = remove_group_members(handle, "Frame", &["entity-2".to_string()]).expect("remove member");
-        assert_eq!(removed["group"]["entities"], json!(["entity-1", "entity-3"]));
+    let measured = measure_entities(handle, &["entity-1".to_string()]).expect("measure");
+    assert_eq!(measured["entities"][0]["closed"], json!(true));
+    assert_eq!(measured["entities"][0]["area"], json!(50.0));
+    assert_eq!(measured["entities"][0]["length"], json!(30.0));
 
-        delete_entity(handle, "entity-1").expect("delete member");
-        let listed = list_groups(handle).expect("list groups");
-        assert_eq!(listed["groups"][0]["entities"], json!(["entity-3"]));
+    undo(handle).expect("undo the rectangle");
+    assert_eq!(list_entities(handle).expect("list")["entities"].as_array().map(Vec::len), Some(0), "one undo step removes it");
 
-        let deleted = delete_group(handle, "Frame").expect("delete group");
-        assert_eq!(deleted["deleted"], json!("Frame"));
-        assert_eq!(deleted["drawing"]["groups"], json!(0));
-        assert_eq!(delete_group(handle, "Frame").expect_err("missing group").code, "object/not-found");
+    assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [5.0, 0.0], [5.0, 5.0]).expect_err("zero width").code, "session/argument-invalid");
+    assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [10.0, 10.0], [0.0, 0.0]).expect_err("inverted corners").code, "session/argument-invalid");
+    assert_eq!(
+        add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [f64::NAN, 5.0]).expect_err("non-finite corner").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(add_rectangle(handle, "missing", [0.0, 0.0], [5.0, 5.0]).expect_err("missing layer").code, "object/not-found");
 
-        let mut drawing = Drawing::empty(None, Units::Mm);
-        drawing.groups.push(EntityGroup { id: "G".to_string(), name: "G".to_string(), entities: vec!["entity-9".to_string()] });
-        assert!(drawing.validate().is_err());
-        close(handle).expect("close");
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(add_rectangle(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 5.0]).expect_err("locked layer").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn polygon_builds_a_closed_regular_polyline() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let before = drawing_of(handle).revision;
+
+    let triangle = add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 3, 0.0).expect("triangle");
+    assert_eq!(triangle["entity"]["kind"]["type"], json!("polyline"));
+    assert_eq!(triangle["entity"]["kind"]["closed"], json!(true));
+    assert_eq!(drawing_of(handle).revision, before + 1, "one revision for the whole polygon");
+    let points = triangle["entity"]["kind"]["points"].as_array().expect("points").clone();
+    assert_eq!(points.len(), 3);
+    let vertex = |index: usize| (points[index][0].as_f64().expect("x"), points[index][1].as_f64().expect("y"));
+    assert!((vertex(0).0 - 10.0).abs() < 1e-9 && vertex(0).1.abs() < 1e-9, "the first vertex starts at rotation 0: {:?}", vertex(0));
+    assert!((vertex(1).0 + 5.0).abs() < 1e-9, "the second vertex sits at 120 degrees: {:?}", vertex(1));
+    assert!((vertex(1).1 - 8.660_254_037_844_387).abs() < 1e-9, "the second vertex sits at 120 degrees: {:?}", vertex(1));
+    for point in &points {
+        let x = point[0].as_f64().expect("x");
+        let y = point[1].as_f64().expect("y");
+        assert!(((x * x + y * y).sqrt() - 10.0).abs() < 1e-9, "every vertex sits on the radius: {point:?}");
     }
 
-    fn sample_dxf() -> String {
-        [
-            "0",
-            "SECTION",
-            "2",
-            "HEADER",
-            "9",
-            "$INSUNITS",
-            "70",
-            "4",
-            "0",
-            "ENDSEC",
-            "0",
-            "SECTION",
-            "2",
-            "TABLES",
-            "0",
-            "TABLE",
-            "2",
-            "LAYER",
-            "70",
-            "2",
-            "0",
-            "LAYER",
-            "2",
-            "0",
-            "70",
-            "0",
-            "62",
-            "7",
-            "0",
-            "LAYER",
-            "2",
-            "WALLS",
-            "70",
-            "0",
-            "62",
-            "1",
-            "0",
-            "ENDTAB",
-            "0",
-            "ENDSEC",
-            "0",
-            "SECTION",
-            "2",
-            "ENTITIES",
-            "0",
-            "LINE",
-            "8",
-            "WALLS",
-            "10",
-            "0",
-            "20",
-            "0",
-            "11",
-            "10",
-            "21",
-            "0",
-            "0",
-            "CIRCLE",
-            "8",
-            "WALLS",
-            "10",
-            "5",
-            "20",
-            "5",
-            "40",
-            "2",
-            "0",
-            "TEXT",
-            "8",
-            "NOTES",
-            "10",
-            "1",
-            "20",
-            "1",
-            "40",
-            "2.5",
-            "1",
-            "Hall",
-            "0",
-            "LWPOLYLINE",
-            "8",
-            "WALLS",
-            "90",
-            "3",
-            "70",
-            "1",
-            "10",
-            "0",
-            "20",
-            "0",
-            "10",
-            "10",
-            "20",
-            "0",
-            "10",
-            "10",
-            "20",
-            "10",
-            "0",
-            "POLYLINE",
-            "8",
-            "WALLS",
-            "70",
-            "1",
-            "0",
-            "VERTEX",
-            "8",
-            "WALLS",
-            "10",
-            "0",
-            "20",
-            "0",
-            "0",
-            "VERTEX",
-            "8",
-            "WALLS",
-            "10",
-            "5",
-            "20",
-            "0",
-            "0",
-            "SEQEND",
-            "8",
-            "WALLS",
-            "0",
-            "SPLINE",
-            "8",
-            "WALLS",
-            "0",
-            "ENDSEC",
-            "0",
-            "EOF",
-        ]
-        .join("\n")
+    let rotated = add_polygon(handle, DEFAULT_LAYER, [5.0, 5.0], 4.0, 4, 90.0).expect("rotated square");
+    let corners = rotated["entity"]["kind"]["points"].as_array().expect("points").clone();
+    assert_eq!(corners.len(), 4);
+    let start = (corners[0][0].as_f64().expect("x"), corners[0][1].as_f64().expect("y"));
+    assert!((start.0 - 5.0).abs() < 1e-9 && (start.1 - 9.0).abs() < 1e-9, "rotation places the first vertex: {start:?}");
+
+    undo(handle).expect("undo the square");
+    undo(handle).expect("undo the triangle");
+    assert_eq!(list_entities(handle).expect("list")["entities"].as_array().map(Vec::len), Some(0), "each polygon is one undo step");
+
+    assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 2, 0.0).expect_err("too few sides").code, "session/argument-invalid");
+    assert_eq!(
+        add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, MAX_POLYGON_SIDES + 1, 0.0).expect_err("too many sides").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0, 4, 0.0).expect_err("non-positive radius").code, "session/argument-invalid");
+    assert_eq!(
+        add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 4, f64::INFINITY).expect_err("non-finite rotation").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        add_polygon(handle, DEFAULT_LAYER, [f64::NAN, 0.0], 5.0, 4, 0.0).expect_err("non-finite centre").code,
+        "session/argument-invalid"
+    );
+
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(add_polygon(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 4, 0.0).expect_err("frozen layer").code, "drawing/layer-frozen");
+    close(handle).expect("close");
+}
+
+#[test]
+fn arc_radius_and_sweep_angles_are_editable() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
+
+    let radius = update_arc(handle, "entity-1", Some(8.0), None, None).expect("update the radius");
+    assert_eq!(radius["entity"]["kind"]["radius"], json!(8.0));
+    assert_eq!(radius["entity"]["kind"]["start_angle"], json!(0.0));
+
+    let angles = update_arc(handle, "entity-1", None, Some(45.0), Some(180.0)).expect("update the sweep");
+    assert_eq!(angles["entity"]["kind"]["start_angle"], json!(45.0));
+    assert_eq!(angles["entity"]["kind"]["end_angle"], json!(180.0));
+    assert_eq!(angles["entity"]["kind"]["radius"], json!(8.0));
+
+    let full = update_arc(handle, "entity-1", None, Some(90.0), Some(90.0)).expect("full turn");
+    assert_eq!(full["entity"]["kind"]["start_angle"], json!(90.0));
+    assert_eq!(full["entity"]["kind"]["end_angle"], json!(90.0));
+
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    assert_eq!(update_arc(handle, "entity-2", Some(2.0), None, None).expect_err("a line is not an arc").code, "object/unsupported");
+    assert_eq!(update_arc(handle, "entity-1", None, None, None).expect_err("no edit").code, "session/argument-invalid");
+    assert_eq!(update_arc(handle, "entity-1", Some(0.0), None, None).expect_err("zero radius").code, "session/argument-invalid");
+    assert_eq!(update_arc(handle, "entity-1", Some(f64::NAN), None, None).expect_err("non-finite radius").code, "session/argument-invalid");
+    assert_eq!(update_arc(handle, "entity-1", None, Some(f64::INFINITY), None).expect_err("non-finite angle").code, "session/argument-invalid");
+    assert_eq!(update_arc(handle, "entity-404", Some(2.0), None, None).expect_err("missing entity").code, "object/not-found");
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(update_arc(handle, "entity-1", Some(2.0), None, None).expect_err("locked layer").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn entity_layer_assignment_preserves_geometry_and_respects_locks() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", None).expect("add layer");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+    let assigned = assign_entity_layer(handle, "entity-1", "Walls").expect("assign the layer");
+    assert_eq!(assigned["from"], json!(DEFAULT_LAYER));
+    assert_eq!(assigned["to"], json!("Walls"));
+    assert_eq!(assigned["moved"], json!(true));
+    assert_eq!(assigned["entity"]["layer"], json!("Walls"));
+    assert_eq!(assigned["entity"]["kind"]["from"], json!([0.0, 0.0]));
+    assert_eq!(assigned["entity"]["kind"]["to"], json!([10.0, 0.0]));
+    let revision = assigned["revision"].as_u64().expect("revision");
+    let layers = assigned["drawing"]["layers"].as_array().expect("layers");
+    assert_eq!(layers.iter().find(|layer| layer["id"] == json!("Walls")).expect("Walls")["entityCount"], json!(1));
+    assert_eq!(layers.iter().find(|layer| layer["id"] == json!(DEFAULT_LAYER)).expect("default")["entityCount"], json!(0));
+
+    let same = assign_entity_layer(handle, "entity-1", "Walls").expect("assign the same layer");
+    assert_eq!(same["moved"], json!(false));
+    assert_eq!(same["revision"], json!(revision));
+
+    assert_eq!(assign_entity_layer(handle, "entity-1", "missing").expect_err("missing target").code, "object/not-found");
+    assert_eq!(assign_entity_layer(handle, "entity-404", "Walls").expect_err("missing entity").code, "object/not-found");
+    update_layer(handle, "Walls", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock the target");
+    assert_eq!(
+        assign_entity_layer(handle, "entity-1", "Walls").expect_err("the entity is already on the locked layer").code,
+        "drawing/layer-locked"
+    );
+    update_layer(handle, "Walls", LayerUpdate { locked: Some(false), ..LayerUpdate::default() }).expect("unlock the target");
+    update_layer(handle, "Walls", LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze the target");
+    assert_eq!(assign_entity_layer(handle, "entity-1", DEFAULT_LAYER).expect_err("the source layer is frozen").code, "drawing/layer-frozen");
+    close(handle).expect("close");
+}
+
+#[test]
+fn find_text_matches_case_insensitively_and_filters_by_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "Main Hall").expect("text");
+    add_text(handle, DEFAULT_LAYER, [0.0, 4.0], 2.5, "Side hall").expect("text");
+    add_text(handle, DEFAULT_LAYER, [0.0, 8.0], 2.5, "Room").expect("text");
+    add_layer(handle, "Notes", None).expect("layer");
+
+    let found = find_text(handle, "HALL", TextSearchOptions::default()).expect("find");
+    assert_eq!(found["count"], json!(2));
+    assert_eq!(found["matches"][0]["id"], json!("entity-1"));
+    assert_eq!(found["matches"][1]["content"], json!("Side hall"));
+
+    let exact = find_text(handle, "HALL", TextSearchOptions { match_case: true, layer: None }).expect("exact");
+    assert_eq!(exact["count"], json!(0));
+    let scoped = find_text(handle, "hall", TextSearchOptions { match_case: false, layer: Some("Notes".to_string()) }).expect("scoped");
+    assert_eq!(scoped["count"], json!(0));
+    assert_eq!(find_text(handle, "", TextSearchOptions::default()).expect_err("empty pattern").code, "session/argument-invalid");
+    close(handle).expect("close");
+}
+
+#[test]
+fn replace_text_rewrites_every_match_in_one_history_step() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.5, "hall hall").expect("text");
+    add_text(handle, DEFAULT_LAYER, [0.0, 4.0], 2.5, "Hall").expect("text");
+    add_text(handle, DEFAULT_LAYER, [0.0, 8.0], 2.5, "Room").expect("text");
+
+    let replaced = replace_text(handle, "hall", "lobby", TextSearchOptions::default()).expect("replace");
+    assert_eq!(replaced["count"], json!(2));
+    assert_eq!(replaced["occurrences"], json!(3));
+    assert_eq!(replaced["revision"], json!(5));
+    let drawing = drawing_of(handle);
+    assert!(matches!(&drawing.entities[0].kind, EntityKind::Text { content, .. } if content == "lobby lobby"));
+    assert!(matches!(&drawing.entities[1].kind, EntityKind::Text { content, .. } if content == "lobby"));
+
+    undo(handle).expect("undo");
+    let restored = drawing_of(handle);
+    assert!(matches!(&restored.entities[0].kind, EntityKind::Text { content, .. } if content == "hall hall"));
+
+    let before = restored.revision;
+    let none = replace_text(handle, "zzz", "x", TextSearchOptions::default()).expect("no match");
+    assert_eq!(none["count"], json!(0));
+    assert_eq!(none["revision"], json!(before));
+
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(replace_text(handle, "hall", "x", TextSearchOptions::default()).expect_err("locked layer").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn groups_create_add_remove_and_prune_deleted_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    add_line(handle, DEFAULT_LAYER, [0.0, 1.0], [1.0, 1.0]).expect("line");
+    add_line(handle, DEFAULT_LAYER, [0.0, 2.0], [1.0, 2.0]).expect("line");
+
+    let group =
+        create_group(handle, GroupCreateRequest { name: "Frame".to_string(), entities: vec!["entity-1".to_string(), "entity-2".to_string()] })
+            .expect("create group");
+    assert_eq!(group["group"]["entities"], json!(["entity-1", "entity-2"]));
+    assert_eq!(group["drawing"]["groups"], json!(1));
+    assert_eq!(group["revision"], json!(5));
+
+    assert_eq!(
+        create_group(handle, GroupCreateRequest { name: "frame".to_string(), entities: vec!["entity-1".to_string()] },)
+            .expect_err("duplicate name")
+            .code,
+        "drawing/group-exists"
+    );
+    assert_eq!(
+        create_group(handle, GroupCreateRequest { name: "Missing".to_string(), entities: vec!["entity-9".to_string()] })
+            .expect_err("unknown entity")
+            .code,
+        "object/not-found"
+    );
+    assert_eq!(
+        create_group(handle, GroupCreateRequest { name: "Empty".to_string(), entities: Vec::new() }).expect_err("empty group").code,
+        "session/argument-invalid"
+    );
+
+    let added = add_group_members(handle, "Frame", &["entity-3".to_string(), "entity-1".to_string()]).expect("add members");
+    assert_eq!(added["group"]["entities"], json!(["entity-1", "entity-2", "entity-3"]));
+    let before = added["revision"].as_u64().expect("revision");
+    let noop = add_group_members(handle, "Frame", &["entity-1".to_string()]).expect("no-op add");
+    assert_eq!(noop["revision"], json!(before));
+
+    let removed = remove_group_members(handle, "Frame", &["entity-2".to_string()]).expect("remove member");
+    assert_eq!(removed["group"]["entities"], json!(["entity-1", "entity-3"]));
+
+    delete_entity(handle, "entity-1").expect("delete member");
+    let listed = list_groups(handle).expect("list groups");
+    assert_eq!(listed["groups"][0]["entities"], json!(["entity-3"]));
+
+    let deleted = delete_group(handle, "Frame").expect("delete group");
+    assert_eq!(deleted["deleted"], json!("Frame"));
+    assert_eq!(deleted["drawing"]["groups"], json!(0));
+    assert_eq!(delete_group(handle, "Frame").expect_err("missing group").code, "object/not-found");
+
+    let mut drawing = Drawing::empty(None, Units::Mm);
+    drawing.groups.push(EntityGroup { id: "G".to_string(), name: "G".to_string(), entities: vec!["entity-9".to_string()] });
+    assert!(drawing.validate().is_err());
+    close(handle).expect("close");
+}
+
+fn sample_dxf() -> String {
+    [
+        "0",
+        "SECTION",
+        "2",
+        "HEADER",
+        "9",
+        "$INSUNITS",
+        "70",
+        "4",
+        "0",
+        "ENDSEC",
+        "0",
+        "SECTION",
+        "2",
+        "TABLES",
+        "0",
+        "TABLE",
+        "2",
+        "LAYER",
+        "70",
+        "2",
+        "0",
+        "LAYER",
+        "2",
+        "0",
+        "70",
+        "0",
+        "62",
+        "7",
+        "0",
+        "LAYER",
+        "2",
+        "WALLS",
+        "70",
+        "0",
+        "62",
+        "1",
+        "0",
+        "ENDTAB",
+        "0",
+        "ENDSEC",
+        "0",
+        "SECTION",
+        "2",
+        "ENTITIES",
+        "0",
+        "LINE",
+        "8",
+        "WALLS",
+        "10",
+        "0",
+        "20",
+        "0",
+        "11",
+        "10",
+        "21",
+        "0",
+        "0",
+        "CIRCLE",
+        "8",
+        "WALLS",
+        "10",
+        "5",
+        "20",
+        "5",
+        "40",
+        "2",
+        "0",
+        "TEXT",
+        "8",
+        "NOTES",
+        "10",
+        "1",
+        "20",
+        "1",
+        "40",
+        "2.5",
+        "1",
+        "Hall",
+        "0",
+        "LWPOLYLINE",
+        "8",
+        "WALLS",
+        "90",
+        "3",
+        "70",
+        "1",
+        "10",
+        "0",
+        "20",
+        "0",
+        "10",
+        "10",
+        "20",
+        "0",
+        "10",
+        "10",
+        "20",
+        "10",
+        "0",
+        "POLYLINE",
+        "8",
+        "WALLS",
+        "70",
+        "1",
+        "0",
+        "VERTEX",
+        "8",
+        "WALLS",
+        "10",
+        "0",
+        "20",
+        "0",
+        "0",
+        "VERTEX",
+        "8",
+        "WALLS",
+        "10",
+        "5",
+        "20",
+        "0",
+        "0",
+        "SEQEND",
+        "8",
+        "WALLS",
+        "0",
+        "SPLINE",
+        "8",
+        "WALLS",
+        "0",
+        "ENDSEC",
+        "0",
+        "EOF",
+    ]
+    .join("\n")
+}
+
+#[test]
+fn dxf_import_reads_the_declared_subset() {
+    let dir = TempDir::new("dxf-import");
+    let source = dir.path.join("site.dxf");
+    fs::write(&source, sample_dxf()).expect("write dxf");
+
+    let imported = import_dxf(&source, Some("Imported site".to_string())).expect("import");
+    assert_eq!(imported["drawing"]["title"], json!("Imported site"));
+    assert_eq!(imported["drawing"]["units"], json!("mm"));
+    assert_eq!(imported["imported"]["entities"], json!(5));
+    assert_eq!(imported["drawing"]["entities"], json!(5));
+    assert_eq!(imported["drawing"]["canUndo"], json!(false));
+    let losses = imported["losses"].as_array().expect("losses");
+    let codes = losses.iter().map(|loss| loss["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(codes.contains(&"dxf/unsupported-entity"), "{codes:?}");
+    assert!(codes.contains(&"dxf/implicit-layer"), "{codes:?}");
+    assert!(losses.iter().all(|loss| loss["severity"] == json!("warning") || loss["severity"] == json!("notice")));
+    let walls = imported["drawing"]["layers"]
+        .as_array()
+        .expect("layers")
+        .iter()
+        .find(|layer| layer["name"] == json!("WALLS"))
+        .cloned()
+        .expect("walls layer");
+    assert_eq!(walls["color"], json!("#ff0000"));
+    assert_eq!(walls["entityCount"], json!(4));
+
+    let handle = handle_of(&imported);
+    let listed = list_entities(handle).expect("list");
+    assert_eq!(listed["entities"][3]["kind"]["closed"], json!(true));
+    assert_eq!(listed["entities"][4]["kind"]["type"], json!("polyline"));
+    assert_eq!(listed["entities"][4]["kind"]["closed"], json!(true));
+    assert_eq!(listed["entities"][4]["kind"]["points"], json!([[0.0, 0.0], [5.0, 0.0]]));
+    let target = dir.path.join("imported.ocad");
+    save(handle, &target, true).expect("save imported");
+    close(handle).expect("close");
+    let reopened = open(&target).expect("reopen");
+    assert_eq!(reopened["drawing"]["entities"], json!(5));
+    close(handle_of(&reopened)).expect("close reopened");
+
+    let broken = dir.path.join("broken.dxf");
+    fs::write(&broken, "not a dxf").expect("write");
+    assert_eq!(import_dxf(&broken, None).expect_err("invalid dxf").code, "format/invalid");
+    assert_eq!(import_dxf(&dir.path.join("missing.dxf"), None).expect_err("missing").code, "drawing/not-found");
+}
+
+#[test]
+fn pdf_export_writes_a_minimal_document() {
+    let dir = TempDir::new("pdf");
+    let path = dir.path.join("plan.pdf");
+    let created = create(CreateRequest { title: Some("Sheet".to_string()), ..CreateRequest::default() }).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 40.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [50.0, 20.0], 10.0).expect("circle");
+    add_text(handle, DEFAULT_LAYER, [5.0, 5.0], 2.5, "A(B)").expect("text");
+
+    let report = export(handle, "pdf", &path).expect("export pdf");
+    assert_eq!(report["format"], json!("pdf"));
+    assert_eq!(report["editable"], json!(false));
+    let pdf = fs::read_to_string(&path).expect("read pdf");
+    assert!(pdf.starts_with("%PDF"));
+    assert!(pdf.contains("/MediaBox [0 0 841.89 595.28]"));
+    assert!(pdf.contains("/BaseFont /"));
+    assert!(pdf.contains("xref"));
+    assert!(pdf.contains("trailer"));
+    assert!(pdf.contains("/Size"));
+    assert!(pdf.contains("A\\(B\\)"));
+    assert!(pdf.trim_end().ends_with("%%EOF"));
+    close(handle).expect("close");
+}
+
+#[test]
+fn inspection_reports_layer_and_text_findings() {
+    let mut drawing = Drawing::empty(None, Units::Mm);
+    drawing.layers[0].visible = false;
+    drawing.layers.push(Layer {
+        id: "shadow".to_string(),
+        name: "0".to_string(),
+        color: "#000000".to_string(),
+        visible: true,
+        locked: false,
+        frozen: false,
+        plottable: true,
+        linetype: CONTINUOUS_LINETYPE.to_string(),
+        lineweight: 0.0,
+    });
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Text { at: [0.0, 0.0], height: 1.0, content: "  ".to_string() },
+    });
+    drawing.entities.push(Entity {
+        id: "entity-2".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Polyline { points: vec![[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]], closed: false },
+    });
+    drawing.entities.push(Entity {
+        id: "entity-3".to_string(),
+        layer: DIMENSION_LAYER.to_string(),
+        kind: EntityKind::Dimension { from: [0.0, 0.0], to: [5.0, 0.0], offset: 1.0, text: Some(String::new()) },
+    });
+
+    let report = inspection::run(&drawing, inspection::SUPPORTED_CHECKS).to_json();
+    let codes = report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    for expected in ["layers/duplicate-name", "layers/hidden", "geometry/empty-text", "geometry/zero-length-segment", "dimensions/empty-text"] {
+        assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
     }
+    assert_eq!(report["passed"], json!(false));
+}
 
-    #[test]
-    fn dxf_import_reads_the_declared_subset() {
-        let dir = TempDir::new("dxf-import");
-        let source = dir.path.join("site.dxf");
-        fs::write(&source, sample_dxf()).expect("write dxf");
+#[test]
+fn render_returns_a_read_only_svg_preview() {
+    let created = create(CreateRequest { title: Some("Preview".to_string()), ..CreateRequest::default() }).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], false).expect("polyline");
 
-        let imported = import_dxf(&source, Some("Imported site".to_string())).expect("import");
-        assert_eq!(imported["drawing"]["title"], json!("Imported site"));
-        assert_eq!(imported["drawing"]["units"], json!("mm"));
-        assert_eq!(imported["imported"]["entities"], json!(5));
-        assert_eq!(imported["drawing"]["entities"], json!(5));
-        assert_eq!(imported["drawing"]["canUndo"], json!(false));
-        let losses = imported["losses"].as_array().expect("losses");
-        let codes = losses.iter().map(|loss| loss["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        assert!(codes.contains(&"dxf/unsupported-entity"), "{codes:?}");
-        assert!(codes.contains(&"dxf/implicit-layer"), "{codes:?}");
-        assert!(losses.iter().all(|loss| loss["severity"] == json!("warning") || loss["severity"] == json!("notice")));
-        let walls = imported["drawing"]["layers"]
-            .as_array()
-            .expect("layers")
-            .iter()
-            .find(|layer| layer["name"] == json!("WALLS"))
-            .cloned()
-            .expect("walls layer");
-        assert_eq!(walls["color"], json!("#ff0000"));
-        assert_eq!(walls["entityCount"], json!(4));
+    let preview = render(handle, "svg").expect("render svg");
+    assert_eq!(preview["format"], json!("svg"));
+    assert_eq!(preview["revision"], json!(3));
+    let svg = preview["svg"].as_str().expect("svg");
+    assert!(svg.contains("<svg"), "the preview is an SVG document");
+    assert!(svg.contains("<line"), "the line is drawn");
+    assert!(svg.contains("<path"), "the polyline is drawn");
+    assert_eq!(preview["width"], json!(12.0), "the 10 unit line plus the 1 unit pad on each side");
+    assert!(preview["height"].as_f64().is_some_and(|height| height > 0.0));
 
-        let handle = handle_of(&imported);
-        let listed = list_entities(handle).expect("list");
-        assert_eq!(listed["entities"][3]["kind"]["closed"], json!(true));
-        assert_eq!(listed["entities"][4]["kind"]["type"], json!("polyline"));
-        assert_eq!(listed["entities"][4]["kind"]["closed"], json!(true));
-        assert_eq!(listed["entities"][4]["kind"]["points"], json!([[0.0, 0.0], [5.0, 0.0]]));
-        let target = dir.path.join("imported.ocad");
-        save(handle, &target, true).expect("save imported");
-        close(handle).expect("close");
-        let reopened = open(&target).expect("reopen");
-        assert_eq!(reopened["drawing"]["entities"], json!(5));
-        close(handle_of(&reopened)).expect("close reopened");
+    let again = render(handle, "svg").expect("render again");
+    assert_eq!(again["svg"], preview["svg"], "rendering is deterministic");
 
-        let broken = dir.path.join("broken.dxf");
-        fs::write(&broken, "not a dxf").expect("write");
-        assert_eq!(import_dxf(&broken, None).expect_err("invalid dxf").code, "format/invalid");
-        assert_eq!(import_dxf(&dir.path.join("missing.dxf"), None).expect_err("missing").code, "drawing/not-found");
-    }
+    assert_eq!(render(handle, "png").expect_err("png preview").code, NOT_IMPLEMENTED);
+    assert_eq!(render(handle, "pdf").expect_err("pdf preview").code, NOT_IMPLEMENTED);
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn pdf_export_writes_a_minimal_document() {
-        let dir = TempDir::new("pdf");
-        let path = dir.path.join("plan.pdf");
-        let created = create(CreateRequest { title: Some("Sheet".to_string()), ..CreateRequest::default() }).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [100.0, 40.0]).expect("line");
-        add_circle(handle, DEFAULT_LAYER, [50.0, 20.0], 10.0).expect("circle");
-        add_text(handle, DEFAULT_LAYER, [5.0, 5.0], 2.5, "A(B)").expect("text");
+#[test]
+fn dxf_writes_polylines_as_polyline_vertex_sequences() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], true).expect("polyline");
+    let drawing = store::read(handle, |session| session.drawing.clone()).expect("drawing");
 
-        let report = export(handle, "pdf", &path).expect("export pdf");
-        assert_eq!(report["format"], json!("pdf"));
-        assert_eq!(report["editable"], json!(false));
-        let pdf = fs::read_to_string(&path).expect("read pdf");
-        assert!(pdf.starts_with("%PDF"));
-        assert!(pdf.contains("/MediaBox [0 0 841.89 595.28]"));
-        assert!(pdf.contains("/BaseFont /"));
-        assert!(pdf.contains("xref"));
-        assert!(pdf.contains("trailer"));
-        assert!(pdf.contains("/Size"));
-        assert!(pdf.contains("A\\(B\\)"));
-        assert!(pdf.trim_end().ends_with("%%EOF"));
-        close(handle).expect("close");
-    }
+    let (text, losses) = exchange::dxf(&drawing);
+    assert!(text.contains("0\nPOLYLINE\n8\n0\n66\n1\n10\n0\n20\n0\n30\n0\n70\n1\n"), "closed POLYLINE header");
+    assert_eq!(text.lines().filter(|line| line.trim() == "VERTEX").count(), 3);
+    assert!(text.contains("0\nSEQEND\n8\n0\n"));
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/polyline-segments"), "polyline is no longer approximated");
 
-    #[test]
-    fn inspection_reports_layer_and_text_findings() {
-        let mut drawing = Drawing::empty(None, Units::Mm);
-        drawing.layers[0].visible = false;
-        drawing.layers.push(Layer {
-            id: "shadow".to_string(),
-            name: "0".to_string(),
-            color: "#000000".to_string(),
-            visible: true,
-            locked: false,
-            frozen: false,
-            plottable: true,
-            linetype: CONTINUOUS_LINETYPE.to_string(),
-            lineweight: 0.0,
-        });
-        drawing.entities.push(Entity {
-            id: "entity-1".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Text { at: [0.0, 0.0], height: 1.0, content: "  ".to_string() },
-        });
-        drawing.entities.push(Entity {
-            id: "entity-2".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Polyline { points: vec![[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]], closed: false },
-        });
-        drawing.entities.push(Entity {
-            id: "entity-3".to_string(),
-            layer: DIMENSION_LAYER.to_string(),
-            kind: EntityKind::Dimension { from: [0.0, 0.0], to: [5.0, 0.0], offset: 1.0, text: Some(String::new()) },
-        });
+    let (imported, _warnings) = import::dxf(&text, None).expect("import the exported DXF");
+    let (points, closed) = imported
+        .entities
+        .iter()
+        .find_map(|entity| match &entity.kind {
+            EntityKind::Polyline { points, closed } => Some((points.clone(), *closed)),
+            _ => None,
+        })
+        .expect("imported polyline");
+    assert_eq!(points, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
+    assert!(closed);
+    close(handle).expect("close");
+}
 
-        let report = inspection::run(&drawing, inspection::SUPPORTED_CHECKS).to_json();
-        let codes =
-            report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        for expected in
-            ["layers/duplicate-name", "layers/hidden", "geometry/empty-text", "geometry/zero-length-segment", "dimensions/empty-text"]
-        {
-            assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
+#[test]
+fn layer_delete_removes_empty_layers_and_refuses_in_use() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", None).expect("add layer");
+    add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+    let error = delete_layer(handle, "Walls").expect_err("layer is in use");
+    assert_eq!(error.code, "drawing/layer-in-use");
+    assert!(error.message.contains("Walls"), "the message names the layer: {}", error.message);
+    assert!(error.message.contains('1'), "the message counts the reference: {}", error.message);
+
+    delete_entity(handle, "entity-1").expect("delete entity");
+    let deleted = delete_layer(handle, "Walls").expect("delete empty layer");
+    assert_eq!(deleted["deleted"], json!("Walls"));
+    assert_eq!(deleted["drawing"]["layers"].as_array().map(Vec::len), Some(2));
+
+    let restored = undo(handle).expect("undo the delete");
+    assert_eq!(restored["drawing"]["layers"].as_array().map(Vec::len), Some(3));
+    assert!(restored["drawing"]["layers"].as_array().is_some_and(|layers| layers.iter().any(|layer| layer["id"] == json!("Walls"))));
+    let removed = redo(handle).expect("redo the delete");
+    assert_eq!(removed["drawing"]["layers"].as_array().map(Vec::len), Some(2));
+
+    delete_layer(handle, DIMENSION_LAYER).expect("delete the second layer");
+    let last = delete_layer(handle, DEFAULT_LAYER).expect_err("the last layer stays");
+    assert_eq!(last.code, "drawing/layer-last");
+    assert_eq!(delete_layer(handle, "missing").expect_err("unknown layer").code, "object/not-found");
+    close(handle).expect("close");
+}
+
+#[test]
+fn merge_layer_moves_references_and_removes_the_source() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", None).expect("add Walls");
+    add_layer(handle, "Structure", None).expect("add Structure");
+    add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_circle(handle, "Walls", [5.0, 5.0], 2.0).expect("circle");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [0.0, 5.0]).expect("default line");
+
+    let merged = merge_layer(handle, "Walls", "Structure").expect("merge");
+    assert_eq!(merged["from"], json!("Walls"));
+    assert_eq!(merged["to"], json!("Structure"));
+    assert_eq!(merged["moved"], json!(2));
+    assert_eq!(merged["drawing"]["layers"].as_array().map(Vec::len), Some(3));
+    let layers = merged["drawing"]["layers"].as_array().expect("layers");
+    assert!(layers.iter().all(|layer| layer["id"] != json!("Walls")));
+    let structure = layers.iter().find(|layer| layer["id"] == json!("Structure")).expect("target layer");
+    assert_eq!(structure["entityCount"], json!(2));
+
+    let listed = list_entities(handle).expect("list");
+    assert_eq!(listed["entities"][0]["layer"], json!("Structure"));
+    assert_eq!(listed["entities"][1]["layer"], json!("Structure"));
+    assert_eq!(listed["entities"][2]["layer"], json!(DEFAULT_LAYER));
+
+    let restored = undo(handle).expect("undo the merge");
+    assert!(restored["drawing"]["layers"].as_array().is_some_and(|layers| layers.iter().any(|layer| layer["id"] == json!("Walls"))));
+    redo(handle).expect("redo the merge");
+
+    assert_eq!(merge_layer(handle, "Walls", "Structure").expect_err("source is gone").code, "object/not-found");
+    assert_eq!(merge_layer(handle, "Structure", "missing").expect_err("target is gone").code, "object/not-found");
+    assert_eq!(merge_layer(handle, "Structure", "Structure").expect_err("same layer").code, "session/argument-invalid");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(merge_layer(handle, "Structure", DEFAULT_LAYER).expect_err("locked source").code, "drawing/layer-locked");
+    assert_eq!(merge_layer(handle, DEFAULT_LAYER, "Structure").expect_err("locked target").code, "drawing/layer-locked");
+
+    close(handle).expect("close");
+}
+
+#[test]
+fn convert_units_scales_geometry_and_round_trips() {
+    let created = create(CreateRequest { units: Some("mm".to_string()), ..CreateRequest::default() }).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [25.4, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [25.4, 0.0], 12.7).expect("circle");
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.54, "Hall").expect("text");
+    add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [25.4, 0.0], 2.54, None).expect("dimension");
+    let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+
+    let inches = convert_units(handle, "inch").expect("convert to inches");
+    assert_eq!(inches["from"], json!("mm"));
+    assert_eq!(inches["to"], json!("inch"));
+    assert_eq!(inches["converted"], json!(true));
+    assert_eq!(inches["drawing"]["units"], json!("inch"));
+    assert_eq!(inches["revision"], json!(revision + 1));
+    let listed = list_entities(handle).expect("list");
+    let entities = listed["entities"].as_array().expect("entities");
+    let end = entities[0]["kind"]["to"][0].as_f64().expect("x");
+    assert!((end - 1.0).abs() < 1e-12, "line length converts to inches: {end}");
+    let radius = entities[1]["kind"]["radius"].as_f64().expect("radius");
+    assert!((radius - 0.5).abs() < 1e-12, "circle radius converts to inches: {radius}");
+    let height = entities[2]["kind"]["height"].as_f64().expect("height");
+    assert!((height - 0.1).abs() < 1e-12, "text height converts to inches: {height}");
+    let offset = entities[3]["kind"]["offset"].as_f64().expect("offset");
+    assert!((offset - 0.1).abs() < 1e-12, "dimension offset scales: {offset}");
+
+    let millimetres = convert_units(handle, "mm").expect("convert back");
+    assert_eq!(millimetres["converted"], json!(true));
+    let listed = list_entities(handle).expect("list");
+    let entities = listed["entities"].as_array().expect("entities");
+    let end = entities[0]["kind"]["to"][0].as_f64().expect("x");
+    assert!((end - 25.4).abs() < 1e-9, "round trip returns the original length: {end}");
+    let radius = entities[1]["kind"]["radius"].as_f64().expect("radius");
+    assert!((radius - 12.7).abs() < 1e-9);
+
+    let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+    let same = convert_units(handle, "mm").expect("same unit");
+    assert_eq!(same["converted"], json!(false));
+    assert_eq!(same["revision"], json!(revision), "a no-op conversion adds no revision");
+    assert_eq!(convert_units(handle, "metre").expect_err("unknown unit").code, "session/argument-invalid");
+    close(handle).expect("close");
+}
+
+#[test]
+fn duplicate_entity_copies_geometry_under_a_new_id() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 5.0]).expect("line");
+
+    let copy = duplicate_entity(handle, "entity-1").expect("duplicate");
+    assert_eq!(copy["entity"]["id"], json!("entity-2"));
+    assert_eq!(copy["entity"]["layer"], json!(DEFAULT_LAYER));
+    assert_eq!(copy["entity"]["kind"]["from"], json!([0.0, 0.0]));
+    assert_eq!(copy["entity"]["kind"]["to"], json!([10.0, 5.0]));
+    assert_eq!(copy["drawing"]["entities"], json!(2));
+    assert_eq!(copy["revision"], json!(3));
+
+    let listed = list_entities(handle).expect("list");
+    assert_eq!(listed["entities"].as_array().map(Vec::len), Some(2));
+    assert_eq!(listed["entities"][0]["kind"], listed["entities"][1]["kind"]);
+
+    assert_eq!(duplicate_entity(handle, "entity-9").expect_err("unknown entity").code, "object/not-found");
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(duplicate_entity(handle, "entity-1").expect_err("locked layer").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn dxf_import_flattens_arcs_and_keeps_points() {
+    let text = [
+        "0",
+        "SECTION",
+        "2",
+        "HEADER",
+        "9",
+        "$INSUNITS",
+        "70",
+        "4",
+        "0",
+        "ENDSEC",
+        "0",
+        "SECTION",
+        "2",
+        "TABLES",
+        "0",
+        "TABLE",
+        "2",
+        "LAYER",
+        "70",
+        "1",
+        "0",
+        "LAYER",
+        "2",
+        "ARC-LAYER",
+        "70",
+        "0",
+        "62",
+        "1",
+        "0",
+        "ENDTAB",
+        "0",
+        "ENDSEC",
+        "0",
+        "SECTION",
+        "2",
+        "ENTITIES",
+        "0",
+        "ARC",
+        "8",
+        "ARC-LAYER",
+        "10",
+        "0",
+        "20",
+        "0",
+        "40",
+        "10",
+        "50",
+        "0",
+        "51",
+        "90",
+        "0",
+        "POINT",
+        "8",
+        "ARC-LAYER",
+        "10",
+        "5",
+        "20",
+        "7",
+        "0",
+        "ENDSEC",
+        "0",
+        "EOF",
+    ]
+    .join("\n");
+
+    let (drawing, losses) = import::dxf(&text, None).expect("import");
+    assert_eq!(drawing.entities.len(), 2);
+    let arc = &drawing.entities[0];
+    match &arc.kind {
+        EntityKind::Arc { center, radius, start_angle, end_angle } => {
+            assert_eq!(*center, [0.0, 0.0]);
+            assert!((*radius - 10.0).abs() < 1e-9);
+            assert!((*start_angle - 0.0).abs() < 1e-9);
+            assert!((*end_angle - 90.0).abs() < 1e-9);
         }
-        assert_eq!(report["passed"], json!(false));
+        other => panic!("ARC should stay analytic, got {other:?}"),
     }
+    assert_eq!(arc.layer, "ARC-LAYER");
+    assert!(matches!(drawing.entities[1].kind, EntityKind::Point { at } if at == [5.0, 7.0]));
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/flattened-arc"), "an analytic arc is not reported as lost: {losses:?}");
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "known entities are not skipped");
+}
 
-    #[test]
-    fn render_returns_a_read_only_svg_preview() {
-        let created = create(CreateRequest { title: Some("Preview".to_string()), ..CreateRequest::default() }).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], false).expect("polyline");
+#[test]
+fn dxf_import_scales_metres_into_millimetres() {
+    let text = [
+        "0",
+        "SECTION",
+        "2",
+        "HEADER",
+        "9",
+        "$INSUNITS",
+        "70",
+        "6",
+        "0",
+        "ENDSEC",
+        "0",
+        "SECTION",
+        "2",
+        "ENTITIES",
+        "0",
+        "LINE",
+        "8",
+        "0",
+        "10",
+        "1",
+        "20",
+        "0",
+        "11",
+        "2",
+        "21",
+        "0.5",
+        "0",
+        "ENDSEC",
+        "0",
+        "EOF",
+    ]
+    .join("\n");
 
-        let preview = render(handle, "svg").expect("render svg");
-        assert_eq!(preview["format"], json!("svg"));
-        assert_eq!(preview["revision"], json!(3));
-        let svg = preview["svg"].as_str().expect("svg");
-        assert!(svg.contains("<svg"), "the preview is an SVG document");
-        assert!(svg.contains("<line"), "the line is drawn");
-        assert!(svg.contains("<path"), "the polyline is drawn");
-        assert_eq!(preview["width"], json!(12.0), "the 10 unit line plus the 1 unit pad on each side");
-        assert!(preview["height"].as_f64().is_some_and(|height| height > 0.0));
+    let (drawing, losses) = import::dxf(&text, None).expect("import");
+    assert_eq!(drawing.units, Units::Mm);
+    let EntityKind::Line { from, to } = &drawing.entities[0].kind
+    else {
+        panic!("LINE should stay a line");
+    };
+    assert_eq!(*from, [1000.0, 0.0]);
+    assert_eq!(*to, [2000.0, 500.0]);
+    assert!(
+        losses.iter().any(|loss| loss.code == "dxf/assumed-units" && loss.detail.contains("metres")),
+        "the metre conversion is stated: {losses:?}"
+    );
+}
 
-        let again = render(handle, "svg").expect("render again");
-        assert_eq!(again["svg"], preview["svg"], "rendering is deterministic");
+#[test]
+fn dxf_import_flattens_ellipses() {
+    let text = [
+        "0",
+        "SECTION",
+        "2",
+        "ENTITIES",
+        "0",
+        "ELLIPSE",
+        "8",
+        "0",
+        "10",
+        "0",
+        "20",
+        "0",
+        "11",
+        "10",
+        "21",
+        "0",
+        "40",
+        "0.5",
+        "41",
+        "0",
+        "42",
+        "6.283185307179586",
+        "0",
+        "ENDSEC",
+        "0",
+        "EOF",
+    ]
+    .join("\n");
 
-        assert_eq!(render(handle, "png").expect_err("png preview").code, NOT_IMPLEMENTED);
-        assert_eq!(render(handle, "pdf").expect_err("pdf preview").code, NOT_IMPLEMENTED);
-        close(handle).expect("close");
-    }
+    let (drawing, losses) = import::dxf(&text, None).expect("import");
+    assert_eq!(drawing.entities.len(), 1);
+    let EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } = &drawing.entities[0].kind
+    else {
+        panic!("ELLIPSE should stay analytic");
+    };
+    assert_eq!(*center, [0.0, 0.0]);
+    assert!((*rx - 10.0).abs() < 1e-9);
+    assert!((*ry - 5.0).abs() < 1e-9);
+    assert!(rotation.abs() < 1e-9);
+    assert!(start_angle.abs() < 1e-9);
+    assert!((*end_angle - 360.0).abs() < 1e-9);
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/flattened-ellipse"), "an analytic ellipse is not reported as lost: {losses:?}");
+}
 
-    #[test]
-    fn dxf_writes_polylines_as_polyline_vertex_sequences() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], true).expect("polyline");
-        let drawing = store::read(handle, |session| session.drawing.clone()).expect("drawing");
+#[test]
+fn dxf_import_expands_blocks_with_insert_scale_and_rotation() {
+    let text = [
+        "0", "SECTION", "2", "BLOCKS", "0", "BLOCK", "8", "0", "2", "DOOR", "70", "0", "10", "0", "20", "0", "0", "LINE", "8", "0", "10", "0",
+        "20", "0", "11", "1", "21", "0", "0", "ENDBLK", "8", "0", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "WALLS",
+        "2", "DOOR", "10", "10", "20", "20", "41", "2", "42", "2", "50", "90", "0", "ENDSEC", "0", "EOF",
+    ]
+    .join("\n");
 
-        let (text, losses) = exchange::dxf(&drawing);
-        assert!(text.contains("0\nPOLYLINE\n8\n0\n66\n1\n10\n0\n20\n0\n30\n0\n70\n1\n"), "closed POLYLINE header");
-        assert_eq!(text.lines().filter(|line| line.trim() == "VERTEX").count(), 3);
-        assert!(text.contains("0\nSEQEND\n8\n0\n"));
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/polyline-segments"), "polyline is no longer approximated");
-
-        let (imported, _warnings) = import::dxf(&text, None).expect("import the exported DXF");
-        let (points, closed) = imported
-            .entities
-            .iter()
-            .find_map(|entity| match &entity.kind {
-                EntityKind::Polyline { points, closed } => Some((points.clone(), *closed)),
-                _ => None,
-            })
-            .expect("imported polyline");
-        assert_eq!(points, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
-        assert!(closed);
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn layer_delete_removes_empty_layers_and_refuses_in_use() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Walls", None).expect("add layer");
-        add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line");
-
-        let error = delete_layer(handle, "Walls").expect_err("layer is in use");
-        assert_eq!(error.code, "drawing/layer-in-use");
-        assert!(error.message.contains("Walls"), "the message names the layer: {}", error.message);
-        assert!(error.message.contains('1'), "the message counts the reference: {}", error.message);
-
-        delete_entity(handle, "entity-1").expect("delete entity");
-        let deleted = delete_layer(handle, "Walls").expect("delete empty layer");
-        assert_eq!(deleted["deleted"], json!("Walls"));
-        assert_eq!(deleted["drawing"]["layers"].as_array().map(Vec::len), Some(2));
-
-        let restored = undo(handle).expect("undo the delete");
-        assert_eq!(restored["drawing"]["layers"].as_array().map(Vec::len), Some(3));
-        assert!(restored["drawing"]["layers"].as_array().is_some_and(|layers| layers.iter().any(|layer| layer["id"] == json!("Walls"))));
-        let removed = redo(handle).expect("redo the delete");
-        assert_eq!(removed["drawing"]["layers"].as_array().map(Vec::len), Some(2));
-
-        delete_layer(handle, DIMENSION_LAYER).expect("delete the second layer");
-        let last = delete_layer(handle, DEFAULT_LAYER).expect_err("the last layer stays");
-        assert_eq!(last.code, "drawing/layer-last");
-        assert_eq!(delete_layer(handle, "missing").expect_err("unknown layer").code, "object/not-found");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn merge_layer_moves_references_and_removes_the_source() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Walls", None).expect("add Walls");
-        add_layer(handle, "Structure", None).expect("add Structure");
-        add_line(handle, "Walls", [0.0, 0.0], [10.0, 0.0]).expect("line");
-        add_circle(handle, "Walls", [5.0, 5.0], 2.0).expect("circle");
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [0.0, 5.0]).expect("default line");
-
-        let merged = merge_layer(handle, "Walls", "Structure").expect("merge");
-        assert_eq!(merged["from"], json!("Walls"));
-        assert_eq!(merged["to"], json!("Structure"));
-        assert_eq!(merged["moved"], json!(2));
-        assert_eq!(merged["drawing"]["layers"].as_array().map(Vec::len), Some(3));
-        let layers = merged["drawing"]["layers"].as_array().expect("layers");
-        assert!(layers.iter().all(|layer| layer["id"] != json!("Walls")));
-        let structure = layers.iter().find(|layer| layer["id"] == json!("Structure")).expect("target layer");
-        assert_eq!(structure["entityCount"], json!(2));
-
-        let listed = list_entities(handle).expect("list");
-        assert_eq!(listed["entities"][0]["layer"], json!("Structure"));
-        assert_eq!(listed["entities"][1]["layer"], json!("Structure"));
-        assert_eq!(listed["entities"][2]["layer"], json!(DEFAULT_LAYER));
-
-        let restored = undo(handle).expect("undo the merge");
-        assert!(restored["drawing"]["layers"].as_array().is_some_and(|layers| layers.iter().any(|layer| layer["id"] == json!("Walls"))));
-        redo(handle).expect("redo the merge");
-
-        assert_eq!(merge_layer(handle, "Walls", "Structure").expect_err("source is gone").code, "object/not-found");
-        assert_eq!(merge_layer(handle, "Structure", "missing").expect_err("target is gone").code, "object/not-found");
-        assert_eq!(merge_layer(handle, "Structure", "Structure").expect_err("same layer").code, "session/argument-invalid");
-        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(merge_layer(handle, "Structure", DEFAULT_LAYER).expect_err("locked source").code, "drawing/layer-locked");
-        assert_eq!(merge_layer(handle, DEFAULT_LAYER, "Structure").expect_err("locked target").code, "drawing/layer-locked");
-
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn convert_units_scales_geometry_and_round_trips() {
-        let created = create(CreateRequest { units: Some("mm".to_string()), ..CreateRequest::default() }).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [25.4, 0.0]).expect("line");
-        add_circle(handle, DEFAULT_LAYER, [25.4, 0.0], 12.7).expect("circle");
-        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.54, "Hall").expect("text");
-        add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [25.4, 0.0], 2.54, None).expect("dimension");
-        let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
-
-        let inches = convert_units(handle, "inch").expect("convert to inches");
-        assert_eq!(inches["from"], json!("mm"));
-        assert_eq!(inches["to"], json!("inch"));
-        assert_eq!(inches["converted"], json!(true));
-        assert_eq!(inches["drawing"]["units"], json!("inch"));
-        assert_eq!(inches["revision"], json!(revision + 1));
-        let listed = list_entities(handle).expect("list");
-        let entities = listed["entities"].as_array().expect("entities");
-        let end = entities[0]["kind"]["to"][0].as_f64().expect("x");
-        assert!((end - 1.0).abs() < 1e-12, "line length converts to inches: {end}");
-        let radius = entities[1]["kind"]["radius"].as_f64().expect("radius");
-        assert!((radius - 0.5).abs() < 1e-12, "circle radius converts to inches: {radius}");
-        let height = entities[2]["kind"]["height"].as_f64().expect("height");
-        assert!((height - 0.1).abs() < 1e-12, "text height converts to inches: {height}");
-        let offset = entities[3]["kind"]["offset"].as_f64().expect("offset");
-        assert!((offset - 0.1).abs() < 1e-12, "dimension offset scales: {offset}");
-
-        let millimetres = convert_units(handle, "mm").expect("convert back");
-        assert_eq!(millimetres["converted"], json!(true));
-        let listed = list_entities(handle).expect("list");
-        let entities = listed["entities"].as_array().expect("entities");
-        let end = entities[0]["kind"]["to"][0].as_f64().expect("x");
-        assert!((end - 25.4).abs() < 1e-9, "round trip returns the original length: {end}");
-        let radius = entities[1]["kind"]["radius"].as_f64().expect("radius");
-        assert!((radius - 12.7).abs() < 1e-9);
-
-        let revision = summary(handle).expect("summary")["revision"].as_u64().expect("revision");
-        let same = convert_units(handle, "mm").expect("same unit");
-        assert_eq!(same["converted"], json!(false));
-        assert_eq!(same["revision"], json!(revision), "a no-op conversion adds no revision");
-        assert_eq!(convert_units(handle, "metre").expect_err("unknown unit").code, "session/argument-invalid");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn duplicate_entity_copies_geometry_under_a_new_id() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 5.0]).expect("line");
-
-        let copy = duplicate_entity(handle, "entity-1").expect("duplicate");
-        assert_eq!(copy["entity"]["id"], json!("entity-2"));
-        assert_eq!(copy["entity"]["layer"], json!(DEFAULT_LAYER));
-        assert_eq!(copy["entity"]["kind"]["from"], json!([0.0, 0.0]));
-        assert_eq!(copy["entity"]["kind"]["to"], json!([10.0, 5.0]));
-        assert_eq!(copy["drawing"]["entities"], json!(2));
-        assert_eq!(copy["revision"], json!(3));
-
-        let listed = list_entities(handle).expect("list");
-        assert_eq!(listed["entities"].as_array().map(Vec::len), Some(2));
-        assert_eq!(listed["entities"][0]["kind"], listed["entities"][1]["kind"]);
-
-        assert_eq!(duplicate_entity(handle, "entity-9").expect_err("unknown entity").code, "object/not-found");
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(duplicate_entity(handle, "entity-1").expect_err("locked layer").code, "drawing/layer-locked");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn dxf_import_flattens_arcs_and_keeps_points() {
-        let text = [
-            "0",
-            "SECTION",
-            "2",
-            "HEADER",
-            "9",
-            "$INSUNITS",
-            "70",
-            "4",
-            "0",
-            "ENDSEC",
-            "0",
-            "SECTION",
-            "2",
-            "TABLES",
-            "0",
-            "TABLE",
-            "2",
-            "LAYER",
-            "70",
-            "1",
-            "0",
-            "LAYER",
-            "2",
-            "ARC-LAYER",
-            "70",
-            "0",
-            "62",
-            "1",
-            "0",
-            "ENDTAB",
-            "0",
-            "ENDSEC",
-            "0",
-            "SECTION",
-            "2",
-            "ENTITIES",
-            "0",
-            "ARC",
-            "8",
-            "ARC-LAYER",
-            "10",
-            "0",
-            "20",
-            "0",
-            "40",
-            "10",
-            "50",
-            "0",
-            "51",
-            "90",
-            "0",
-            "POINT",
-            "8",
-            "ARC-LAYER",
-            "10",
-            "5",
-            "20",
-            "7",
-            "0",
-            "ENDSEC",
-            "0",
-            "EOF",
-        ]
-        .join("\n");
-
-        let (drawing, losses) = import::dxf(&text, None).expect("import");
-        assert_eq!(drawing.entities.len(), 2);
-        let arc = &drawing.entities[0];
-        match &arc.kind {
-            EntityKind::Arc { center, radius, start_angle, end_angle } => {
-                assert_eq!(*center, [0.0, 0.0]);
-                assert!((*radius - 10.0).abs() < 1e-9);
-                assert!((*start_angle - 0.0).abs() < 1e-9);
-                assert!((*end_angle - 90.0).abs() < 1e-9);
-            }
-            other => panic!("ARC should stay analytic, got {other:?}"),
+    let (drawing, losses) = import::dxf(&text, None).expect("import");
+    assert_eq!(drawing.entities.len(), 1);
+    let entity = &drawing.entities[0];
+    assert_eq!(entity.layer, "WALLS");
+    match &entity.kind {
+        EntityKind::Line { from, to } => {
+            assert!((from[0] - 10.0).abs() < 1e-9 && (from[1] - 20.0).abs() < 1e-9, "base point lands on the insertion: {from:?}");
+            assert!((to[0] - 10.0).abs() < 1e-9 && (to[1] - 22.0).abs() < 1e-9, "scale and rotation apply: {to:?}");
         }
-        assert_eq!(arc.layer, "ARC-LAYER");
-        assert!(matches!(drawing.entities[1].kind, EntityKind::Point { at } if at == [5.0, 7.0]));
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/flattened-arc"), "an analytic arc is not reported as lost: {losses:?}");
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "known entities are not skipped");
+        other => panic!("the block LINE should expand, got {other:?}"),
     }
+    assert!(losses.iter().any(|loss| loss.code == "dxf/expanded-block" && loss.severity == "notice"), "the expansion is a notice: {losses:?}");
+    assert!(losses.iter().any(|loss| loss.code == "dxf/implicit-layer"));
+}
 
-    #[test]
-    fn dxf_import_scales_metres_into_millimetres() {
-        let text = [
-            "0",
-            "SECTION",
-            "2",
-            "HEADER",
-            "9",
-            "$INSUNITS",
-            "70",
-            "6",
-            "0",
-            "ENDSEC",
-            "0",
-            "SECTION",
-            "2",
-            "ENTITIES",
-            "0",
-            "LINE",
-            "8",
-            "0",
-            "10",
-            "1",
-            "20",
-            "0",
-            "11",
-            "2",
-            "21",
-            "0.5",
-            "0",
-            "ENDSEC",
-            "0",
-            "EOF",
-        ]
-        .join("\n");
+#[test]
+fn dxf_import_stops_recursive_blocks_at_the_depth_limit() {
+    let text = [
+        "0", "SECTION", "2", "BLOCKS", "0", "BLOCK", "8", "0", "2", "LOOP", "70", "0", "10", "0", "20", "0", "0", "INSERT", "8", "0", "2",
+        "LOOP", "10", "0", "20", "0", "0", "ENDBLK", "8", "0", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0", "2",
+        "LOOP", "10", "0", "20", "0", "0", "ENDSEC", "0", "EOF",
+    ]
+    .join("\n");
 
-        let (drawing, losses) = import::dxf(&text, None).expect("import");
-        assert_eq!(drawing.units, Units::Mm);
-        let EntityKind::Line { from, to } = &drawing.entities[0].kind
-        else {
-            panic!("LINE should stay a line");
-        };
-        assert_eq!(*from, [1000.0, 0.0]);
-        assert_eq!(*to, [2000.0, 500.0]);
-        assert!(
-            losses.iter().any(|loss| loss.code == "dxf/assumed-units" && loss.detail.contains("metres")),
-            "the metre conversion is stated: {losses:?}"
-        );
-    }
+    let (drawing, losses) = import::dxf(&text, None).expect("import");
+    assert!(drawing.entities.is_empty(), "a self-referencing block expands no geometry");
+    assert!(losses.iter().any(|loss| loss.code == "dxf/block-recursion" && loss.severity == "warning"), "recursion is reported: {losses:?}");
+    assert!(losses.iter().any(|loss| loss.code == "dxf/expanded-block"));
+}
 
-    #[test]
-    fn dxf_import_flattens_ellipses() {
-        let text = [
-            "0",
-            "SECTION",
-            "2",
-            "ENTITIES",
-            "0",
-            "ELLIPSE",
-            "8",
-            "0",
-            "10",
-            "0",
-            "20",
-            "0",
-            "11",
-            "10",
-            "21",
-            "0",
-            "40",
-            "0.5",
-            "41",
-            "0",
-            "42",
-            "6.283185307179586",
-            "0",
-            "ENDSEC",
-            "0",
-            "EOF",
-        ]
-        .join("\n");
+#[test]
+fn dxf_import_turns_lwpolyline_bulges_into_arcs() {
+    let text = [
+        "0",
+        "SECTION",
+        "2",
+        "ENTITIES",
+        "0",
+        "LWPOLYLINE",
+        "8",
+        "0",
+        "90",
+        "2",
+        "70",
+        "0",
+        "10",
+        "0",
+        "20",
+        "0",
+        "42",
+        "1",
+        "10",
+        "10",
+        "20",
+        "0",
+        "0",
+        "ENDSEC",
+        "0",
+        "EOF",
+    ]
+    .join("\n");
 
-        let (drawing, losses) = import::dxf(&text, None).expect("import");
-        assert_eq!(drawing.entities.len(), 1);
-        let EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } = &drawing.entities[0].kind
-        else {
-            panic!("ELLIPSE should stay analytic");
-        };
-        assert_eq!(*center, [0.0, 0.0]);
-        assert!((*rx - 10.0).abs() < 1e-9);
-        assert!((*ry - 5.0).abs() < 1e-9);
-        assert!(rotation.abs() < 1e-9);
-        assert!(start_angle.abs() < 1e-9);
-        assert!((*end_angle - 360.0).abs() < 1e-9);
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/flattened-ellipse"), "an analytic ellipse is not reported as lost: {losses:?}");
-    }
+    let (drawing, losses) = import::dxf(&text, None).expect("import");
+    assert_eq!(drawing.entities.len(), 1);
+    let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+    else {
+        panic!("LWPOLYLINE should stay a polyline");
+    };
+    assert!(!closed);
+    assert!(points.len() >= 10, "the bulge is sampled: {}", points.len());
+    assert!(points.iter().any(|point| point[1].abs() > 1e-6), "the arc leaves the chord: {points:?}");
+    assert!(
+        losses.iter().any(|loss| loss.code == "dxf/assumed-units" && loss.severity == "notice"),
+        "a missing header is a notice, not a silent default: {losses:?}"
+    );
+}
 
-    #[test]
-    fn dxf_import_expands_blocks_with_insert_scale_and_rotation() {
-        let text = [
-            "0", "SECTION", "2", "BLOCKS", "0", "BLOCK", "8", "0", "2", "DOOR", "70", "0", "10", "0", "20", "0", "0", "LINE", "8", "0", "10",
-            "0", "20", "0", "11", "1", "21", "0", "0", "ENDBLK", "8", "0", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8",
-            "WALLS", "2", "DOOR", "10", "10", "20", "20", "41", "2", "42", "2", "50", "90", "0", "ENDSEC", "0", "EOF",
-        ]
-        .join("\n");
+#[test]
+fn stl_export_extrudes_a_closed_profile() {
+    let dir = TempDir::new("stl");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [2.0, 2.0], [2.0, 4.0], [0.0, 4.0]], true)
+        .expect("closed L profile");
 
-        let (drawing, losses) = import::dxf(&text, None).expect("import");
-        assert_eq!(drawing.entities.len(), 1);
-        let entity = &drawing.entities[0];
-        assert_eq!(entity.layer, "WALLS");
-        match &entity.kind {
-            EntityKind::Line { from, to } => {
-                assert!((from[0] - 10.0).abs() < 1e-9 && (from[1] - 20.0).abs() < 1e-9, "base point lands on the insertion: {from:?}");
-                assert!((to[0] - 10.0).abs() < 1e-9 && (to[1] - 22.0).abs() < 1e-9, "scale and rotation apply: {to:?}");
-            }
-            other => panic!("the block LINE should expand, got {other:?}"),
-        }
-        assert!(
-            losses.iter().any(|loss| loss.code == "dxf/expanded-block" && loss.severity == "notice"),
-            "the expansion is a notice: {losses:?}"
-        );
-        assert!(losses.iter().any(|loss| loss.code == "dxf/implicit-layer"));
-    }
+    let path = dir.path.join("solid.stl");
+    let report = export(handle, "stl", &path).expect("export stl");
+    assert_eq!(report["format"], json!("stl"));
+    assert_eq!(report["editable"], json!(false));
+    assert_eq!(report["triangles"], json!(20), "4 cap triangles per side and 6 wall quads");
+    assert!(report["losses"].as_array().is_some_and(Vec::is_empty));
+    let stl = fs::read_to_string(&path).expect("read stl");
+    assert_eq!(report["bytes"], json!(stl.len()));
+    assert!(stl.starts_with("solid open-cad\n"));
+    assert!(stl.trim_end().ends_with("endsolid"));
+    assert_eq!(stl.matches("facet normal").count(), 20);
+    assert_eq!(stl.matches("vertex").count(), 60);
 
-    #[test]
-    fn dxf_import_stops_recursive_blocks_at_the_depth_limit() {
-        let text = [
-            "0", "SECTION", "2", "BLOCKS", "0", "BLOCK", "8", "0", "2", "LOOP", "70", "0", "10", "0", "20", "0", "0", "INSERT", "8", "0", "2",
-            "LOOP", "10", "0", "20", "0", "0", "ENDBLK", "8", "0", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0",
-            "2", "LOOP", "10", "0", "20", "0", "0", "ENDSEC", "0", "EOF",
-        ]
-        .join("\n");
+    let thick = dir.path.join("thick.stl");
+    let thick_report = export_with_options(handle, "stl", &thick, ExportOptions { thickness: Some(2.5) }).expect("export thick stl");
+    assert_eq!(thick_report["triangles"], json!(20));
+    let thick_text = fs::read_to_string(&thick).expect("read thick stl");
+    assert!(thick_text.contains("2.5\n"), "the configured thickness reaches the vertices");
+    close(handle).expect("close");
+}
 
-        let (drawing, losses) = import::dxf(&text, None).expect("import");
-        assert!(drawing.entities.is_empty(), "a self-referencing block expands no geometry");
-        assert!(
-            losses.iter().any(|loss| loss.code == "dxf/block-recursion" && loss.severity == "warning"),
-            "recursion is reported: {losses:?}"
-        );
-        assert!(losses.iter().any(|loss| loss.code == "dxf/expanded-block"));
-    }
+#[test]
+fn stl_export_reports_profiles_it_cannot_extrude() {
+    let dir = TempDir::new("stl-open");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], false).expect("open polyline");
 
-    #[test]
-    fn dxf_import_turns_lwpolyline_bulges_into_arcs() {
-        let text = [
-            "0",
-            "SECTION",
-            "2",
-            "ENTITIES",
-            "0",
-            "LWPOLYLINE",
-            "8",
-            "0",
-            "90",
-            "2",
-            "70",
-            "0",
-            "10",
-            "0",
-            "20",
-            "0",
-            "42",
-            "1",
-            "10",
-            "10",
-            "20",
-            "0",
-            "0",
-            "ENDSEC",
-            "0",
-            "EOF",
-        ]
-        .join("\n");
+    let path = dir.path.join("open.stl");
+    let report = export(handle, "stl", &path).expect("export stl");
+    assert_eq!(report["triangles"], json!(0));
+    let losses = report["losses"].as_array().expect("losses");
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0]["code"], json!("stl/open-profile"));
+    assert_eq!(losses[0]["severity"], json!("warning"));
+    assert!(losses[0]["entityId"].as_str().is_some_and(|id| id.starts_with("entity-")));
+    let stl = fs::read_to_string(&path).expect("read stl");
+    assert!(stl.starts_with("solid open-cad\n"));
+    assert!(stl.trim_end().ends_with("endsolid"));
+    close(handle).expect("close");
+}
 
-        let (drawing, losses) = import::dxf(&text, None).expect("import");
-        assert_eq!(drawing.entities.len(), 1);
-        let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
-        else {
-            panic!("LWPOLYLINE should stay a polyline");
-        };
-        assert!(!closed);
-        assert!(points.len() >= 10, "the bulge is sampled: {}", points.len());
-        assert!(points.iter().any(|point| point[1].abs() > 1e-6), "the arc leaves the chord: {points:?}");
-        assert!(
-            losses.iter().any(|loss| loss.code == "dxf/assumed-units" && loss.severity == "notice"),
-            "a missing header is a notice, not a silent default: {losses:?}"
-        );
-    }
+#[test]
+fn obj_export_writes_a_triangulated_extrusion() {
+    let dir = TempDir::new("obj");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed square");
+    add_polyline(handle, DEFAULT_LAYER, vec![[10.0, 0.0], [12.0, 0.0], [12.0, 2.0]], false).expect("open polyline");
 
-    #[test]
-    fn stl_export_extrudes_a_closed_profile() {
-        let dir = TempDir::new("stl");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [2.0, 2.0], [2.0, 4.0], [0.0, 4.0]], true)
-            .expect("closed L profile");
+    let path = dir.path.join("solid.obj");
+    let report = export(handle, "obj", &path).expect("export obj");
+    assert_eq!(report["format"], json!("obj"));
+    assert_eq!(report["editable"], json!(false));
+    assert_eq!(report["triangles"], json!(12), "2 cap triangles per side and 4 wall quads");
+    let losses = report["losses"].as_array().expect("losses");
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0]["code"], json!("obj/open-profile"));
+    let obj = fs::read_to_string(&path).expect("read obj");
+    assert!(obj.starts_with("# OpenCAD OBJ extrusion\n"));
+    assert_eq!(obj.matches("\nv ").count(), 36, "three vertices per triangle");
+    assert_eq!(obj.matches("\nf ").count(), 12);
+    assert!(obj.contains("f 1 2 3"));
+    assert!(obj.trim_end().ends_with("# end of OpenCAD OBJ"));
+    close(handle).expect("close");
+}
 
-        let path = dir.path.join("solid.stl");
-        let report = export(handle, "stl", &path).expect("export stl");
-        assert_eq!(report["format"], json!("stl"));
-        assert_eq!(report["editable"], json!(false));
-        assert_eq!(report["triangles"], json!(20), "4 cap triangles per side and 6 wall quads");
-        assert!(report["losses"].as_array().is_some_and(Vec::is_empty));
-        let stl = fs::read_to_string(&path).expect("read stl");
-        assert_eq!(report["bytes"], json!(stl.len()));
-        assert!(stl.starts_with("solid open-cad\n"));
-        assert!(stl.trim_end().ends_with("endsolid"));
-        assert_eq!(stl.matches("facet normal").count(), 20);
-        assert_eq!(stl.matches("vertex").count(), 60);
+#[test]
+fn step_export_writes_a_faceted_brep_for_a_closed_profile() {
+    let dir = TempDir::new("step");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], true).expect("closed rectangle");
 
-        let thick = dir.path.join("thick.stl");
-        let thick_report = export_with_options(handle, "stl", &thick, ExportOptions { thickness: Some(2.5) }).expect("export thick stl");
-        assert_eq!(thick_report["triangles"], json!(20));
-        let thick_text = fs::read_to_string(&thick).expect("read thick stl");
-        assert!(thick_text.contains("2.5\n"), "the configured thickness reaches the vertices");
-        close(handle).expect("close");
-    }
+    let path = dir.path.join("solid.step");
+    let report = export(handle, "step", &path).expect("export step");
+    assert_eq!(report["format"], json!("step"));
+    assert_eq!(report["editable"], json!(false));
+    assert_eq!(report["faces"], json!(12), "two cap triangles per side plus four wall quads");
+    assert!(report["losses"].as_array().is_some_and(Vec::is_empty));
 
-    #[test]
-    fn stl_export_reports_profiles_it_cannot_extrude() {
-        let dir = TempDir::new("stl-open");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], false).expect("open polyline");
+    let step = fs::read_to_string(&path).expect("read step");
+    assert_eq!(report["bytes"], json!(step.len()));
+    assert!(step.starts_with("ISO-10303-21;\n"), "the header must open the exchange structure");
+    assert!(step.trim_end().ends_with("END-ISO-10303-21;"));
+    assert!(step.contains("HEADER;"));
+    assert!(step.contains("FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));"));
+    assert!(step.contains("MANIFOLD_SOLID_BREP"));
+    assert!(step.contains("CLOSED_SHELL"));
+    assert!(step.contains("FACE_OUTER_BOUND"));
+    assert_eq!(step.matches("ADVANCED_FACE").count(), 12);
+    assert_eq!(step.matches("POLY_LOOP").count(), 12);
+    assert_eq!(step.matches("CARTESIAN_POINT").count(), 37, "three vertices per face plus the shape origin");
 
-        let path = dir.path.join("open.stl");
-        let report = export(handle, "stl", &path).expect("export stl");
-        assert_eq!(report["triangles"], json!(0));
-        let losses = report["losses"].as_array().expect("losses");
-        assert_eq!(losses.len(), 1);
-        assert_eq!(losses[0]["code"], json!("stl/open-profile"));
-        assert_eq!(losses[0]["severity"], json!("warning"));
-        assert!(losses[0]["entityId"].as_str().is_some_and(|id| id.starts_with("entity-")));
-        let stl = fs::read_to_string(&path).expect("read stl");
-        assert!(stl.starts_with("solid open-cad\n"));
-        assert!(stl.trim_end().ends_with("endsolid"));
-        close(handle).expect("close");
-    }
+    let second = dir.path.join("again.step");
+    export(handle, "step", &second).expect("export step again");
+    assert_eq!(fs::read(&path).expect("first"), fs::read(&second).expect("second"), "the projection is deterministic");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn obj_export_writes_a_triangulated_extrusion() {
-        let dir = TempDir::new("obj");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed square");
-        add_polyline(handle, DEFAULT_LAYER, vec![[10.0, 0.0], [12.0, 0.0], [12.0, 2.0]], false).expect("open polyline");
+#[test]
+fn step_export_keeps_disjoint_profiles_as_separate_solids() {
+    let dir = TempDir::new("step-disjoint");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]], true).expect("first rectangle");
+    add_polyline(handle, DEFAULT_LAYER, vec![[10.0, 0.0], [12.0, 0.0], [12.0, 2.0], [10.0, 2.0]], true).expect("second rectangle");
 
-        let path = dir.path.join("solid.obj");
-        let report = export(handle, "obj", &path).expect("export obj");
-        assert_eq!(report["format"], json!("obj"));
-        assert_eq!(report["editable"], json!(false));
-        assert_eq!(report["triangles"], json!(12), "2 cap triangles per side and 4 wall quads");
-        let losses = report["losses"].as_array().expect("losses");
-        assert_eq!(losses.len(), 1);
-        assert_eq!(losses[0]["code"], json!("obj/open-profile"));
-        let obj = fs::read_to_string(&path).expect("read obj");
-        assert!(obj.starts_with("# OpenCAD OBJ extrusion\n"));
-        assert_eq!(obj.matches("\nv ").count(), 36, "three vertices per triangle");
-        assert_eq!(obj.matches("\nf ").count(), 12);
-        assert!(obj.contains("f 1 2 3"));
-        assert!(obj.trim_end().ends_with("# end of OpenCAD OBJ"));
-        close(handle).expect("close");
-    }
+    let path = dir.path.join("pair.step");
+    let report = export(handle, "step", &path).expect("export step");
+    assert_eq!(report["faces"], json!(24));
 
-    #[test]
-    fn step_export_writes_a_faceted_brep_for_a_closed_profile() {
-        let dir = TempDir::new("step");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], true).expect("closed rectangle");
+    let step = fs::read_to_string(&path).expect("read step");
+    assert_eq!(step.matches("MANIFOLD_SOLID_BREP").count(), 2, "each disjoint profile is its own solid");
+    assert_eq!(step.matches("CLOSED_SHELL").count(), 2);
+    assert_eq!(step.matches("ADVANCED_FACE").count(), 24);
+    assert!(step.trim_end().ends_with("END-ISO-10303-21;"));
+    close(handle).expect("close");
+}
 
-        let path = dir.path.join("solid.step");
-        let report = export(handle, "step", &path).expect("export step");
-        assert_eq!(report["format"], json!("step"));
-        assert_eq!(report["editable"], json!(false));
-        assert_eq!(report["faces"], json!(12), "two cap triangles per side plus four wall quads");
-        assert!(report["losses"].as_array().is_some_and(Vec::is_empty));
+#[test]
+fn step_export_skips_open_profiles_instead_of_faking_a_solid() {
+    let dir = TempDir::new("step-open");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], false).expect("open polyline");
 
-        let step = fs::read_to_string(&path).expect("read step");
-        assert_eq!(report["bytes"], json!(step.len()));
-        assert!(step.starts_with("ISO-10303-21;\n"), "the header must open the exchange structure");
-        assert!(step.trim_end().ends_with("END-ISO-10303-21;"));
-        assert!(step.contains("HEADER;"));
-        assert!(step.contains("FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));"));
-        assert!(step.contains("MANIFOLD_SOLID_BREP"));
-        assert!(step.contains("CLOSED_SHELL"));
-        assert!(step.contains("FACE_OUTER_BOUND"));
-        assert_eq!(step.matches("ADVANCED_FACE").count(), 12);
-        assert_eq!(step.matches("POLY_LOOP").count(), 12);
-        assert_eq!(step.matches("CARTESIAN_POINT").count(), 37, "three vertices per face plus the shape origin");
+    let path = dir.path.join("open.step");
+    let report = export(handle, "step", &path).expect("export step");
+    assert_eq!(report["faces"], json!(0));
+    let losses = report["losses"].as_array().expect("losses");
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0]["code"], json!("step/open-profile"));
+    assert_eq!(losses[0]["severity"], json!("warning"));
+    assert!(losses[0]["entityId"].as_str().is_some_and(|id| id.starts_with("entity-")));
 
-        let second = dir.path.join("again.step");
-        export(handle, "step", &second).expect("export step again");
-        assert_eq!(fs::read(&path).expect("first"), fs::read(&second).expect("second"), "the projection is deterministic");
-        close(handle).expect("close");
-    }
+    let step = fs::read_to_string(&path).expect("read step");
+    assert!(step.starts_with("ISO-10303-21;\n"));
+    assert!(step.trim_end().ends_with("END-ISO-10303-21;"));
+    assert!(step.contains("SHAPE_REPRESENTATION"));
+    assert!(step.contains("PRODUCT_DEFINITION_SHAPE"));
+    assert!(!step.contains("MANIFOLD_SOLID_BREP"), "an open profile must not become a fabricated solid");
+    assert!(!step.contains("CLOSED_SHELL"));
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn step_export_keeps_disjoint_profiles_as_separate_solids() {
-        let dir = TempDir::new("step-disjoint");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]], true).expect("first rectangle");
-        add_polyline(handle, DEFAULT_LAYER, vec![[10.0, 0.0], [12.0, 0.0], [12.0, 2.0], [10.0, 2.0]], true).expect("second rectangle");
+#[test]
+fn arc_and_ellipse_round_trip_and_reject_invalid_values() {
+    let dir = TempDir::new("arc-ellipse");
+    let path = dir.path.join("curves.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
 
-        let path = dir.path.join("pair.step");
-        let report = export(handle, "step", &path).expect("export step");
-        assert_eq!(report["faces"], json!(24));
+    let arc = add_arc(handle, DEFAULT_LAYER, [1.0, 2.0], 5.0, 30.0, 120.0).expect("add arc");
+    assert_eq!(arc["entity"]["kind"]["type"], json!("arc"));
+    let ellipse = add_ellipse(handle, DEFAULT_LAYER, [0.0, 0.0], 8.0, 3.0, 15.0, 0.0, 360.0).expect("add ellipse");
+    assert_eq!(ellipse["entity"]["kind"]["type"], json!("ellipse"));
 
-        let step = fs::read_to_string(&path).expect("read step");
-        assert_eq!(step.matches("MANIFOLD_SOLID_BREP").count(), 2, "each disjoint profile is its own solid");
-        assert_eq!(step.matches("CLOSED_SHELL").count(), 2);
-        assert_eq!(step.matches("ADVANCED_FACE").count(), 24);
-        assert!(step.trim_end().ends_with("END-ISO-10303-21;"));
-        close(handle).expect("close");
-    }
+    save(handle, &path, true).expect("save");
+    let text = fs::read_to_string(&path).expect("read saved");
+    let document: Value = serde_json::from_str(&text).expect("parse saved");
+    assert_eq!(document["document"]["entities"][0]["kind"]["type"], json!("arc"));
+    assert_eq!(document["document"]["entities"][1]["kind"]["type"], json!("ellipse"));
+    close(handle).expect("close");
 
-    #[test]
-    fn step_export_skips_open_profiles_instead_of_faking_a_solid() {
-        let dir = TempDir::new("step-open");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], false).expect("open polyline");
+    let reopened = open(&path).expect("reopen");
+    let reopened_handle = handle_of(&reopened);
+    let drawing = drawing_of(reopened_handle);
+    assert!(matches!(
+        drawing.entities[0].kind,
+        EntityKind::Arc { radius, start_angle, end_angle, .. } if (radius - 5.0).abs() < 1e-12 && (start_angle - 30.0).abs() < 1e-12 && (end_angle - 120.0).abs() < 1e-12
+    ));
+    assert!(matches!(
+        drawing.entities[1].kind,
+        EntityKind::Ellipse { rx, ry, rotation, .. } if (rx - 8.0).abs() < 1e-12 && (ry - 3.0).abs() < 1e-12 && (rotation - 15.0).abs() < 1e-12
+    ));
+    close(reopened_handle).expect("close reopened");
 
-        let path = dir.path.join("open.step");
-        let report = export(handle, "step", &path).expect("export step");
-        assert_eq!(report["faces"], json!(0));
-        let losses = report["losses"].as_array().expect("losses");
-        assert_eq!(losses.len(), 1);
-        assert_eq!(losses[0]["code"], json!("step/open-profile"));
-        assert_eq!(losses[0]["severity"], json!("warning"));
-        assert!(losses[0]["entityId"].as_str().is_some_and(|id| id.starts_with("entity-")));
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0, 0.0, 90.0).expect_err("zero radius").code, "session/argument-invalid");
+    assert_eq!(add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0, f64::NAN, 90.0).expect_err("nan angle").code, "session/argument-invalid");
+    assert_eq!(
+        add_ellipse(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0, -2.0, 0.0, 0.0, 360.0).expect_err("negative ry").code,
+        "session/argument-invalid"
+    );
+    close(handle).expect("close");
 
-        let step = fs::read_to_string(&path).expect("read step");
-        assert!(step.starts_with("ISO-10303-21;\n"));
-        assert!(step.trim_end().ends_with("END-ISO-10303-21;"));
-        assert!(step.contains("SHAPE_REPRESENTATION"));
-        assert!(step.contains("PRODUCT_DEFINITION_SHAPE"));
-        assert!(!step.contains("MANIFOLD_SOLID_BREP"), "an open profile must not become a fabricated solid");
-        assert!(!step.contains("CLOSED_SHELL"));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn arc_and_ellipse_round_trip_and_reject_invalid_values() {
-        let dir = TempDir::new("arc-ellipse");
-        let path = dir.path.join("curves.ocad");
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-
-        let arc = add_arc(handle, DEFAULT_LAYER, [1.0, 2.0], 5.0, 30.0, 120.0).expect("add arc");
-        assert_eq!(arc["entity"]["kind"]["type"], json!("arc"));
-        let ellipse = add_ellipse(handle, DEFAULT_LAYER, [0.0, 0.0], 8.0, 3.0, 15.0, 0.0, 360.0).expect("add ellipse");
-        assert_eq!(ellipse["entity"]["kind"]["type"], json!("ellipse"));
-
-        save(handle, &path, true).expect("save");
-        let text = fs::read_to_string(&path).expect("read saved");
-        let document: Value = serde_json::from_str(&text).expect("parse saved");
-        assert_eq!(document["document"]["entities"][0]["kind"]["type"], json!("arc"));
-        assert_eq!(document["document"]["entities"][1]["kind"]["type"], json!("ellipse"));
-        close(handle).expect("close");
-
-        let reopened = open(&path).expect("reopen");
-        let reopened_handle = handle_of(&reopened);
-        let drawing = drawing_of(reopened_handle);
-        assert!(matches!(
-            drawing.entities[0].kind,
-            EntityKind::Arc { radius, start_angle, end_angle, .. } if (radius - 5.0).abs() < 1e-12 && (start_angle - 30.0).abs() < 1e-12 && (end_angle - 120.0).abs() < 1e-12
-        ));
-        assert!(matches!(
-            drawing.entities[1].kind,
-            EntityKind::Ellipse { rx, ry, rotation, .. } if (rx - 8.0).abs() < 1e-12 && (ry - 3.0).abs() < 1e-12 && (rotation - 15.0).abs() < 1e-12
-        ));
-        close(reopened_handle).expect("close reopened");
-
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0, 0.0, 90.0).expect_err("zero radius").code, "session/argument-invalid");
-        assert_eq!(add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0, f64::NAN, 90.0).expect_err("nan angle").code, "session/argument-invalid");
-        assert_eq!(
-            add_ellipse(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0, -2.0, 0.0, 0.0, 360.0).expect_err("negative ry").code,
-            "session/argument-invalid"
-        );
-        close(handle).expect("close");
-
-        let kind: EntityKind = serde_json::from_value(json!({
-            "type": "arc", "center": [0.0, 0.0], "radius": 4.0, "start_angle": 0.0, "end_angle": 90.0
-        }))
-        .expect("parse arc kind");
-        assert_eq!(
-            serde_json::to_value(&kind).expect("serialize"),
-            json!({ "type": "arc", "center": [0.0, 0.0], "radius": 4.0, "start_angle": 0.0, "end_angle": 90.0 })
-        );
-        let invalid: Drawing = serde_json::from_value(json!({
+    let kind: EntityKind = serde_json::from_value(json!({
+        "type": "arc", "center": [0.0, 0.0], "radius": 4.0, "start_angle": 0.0, "end_angle": 90.0
+    }))
+    .expect("parse arc kind");
+    assert_eq!(
+        serde_json::to_value(&kind).expect("serialize"),
+        json!({ "type": "arc", "center": [0.0, 0.0], "radius": 4.0, "start_angle": 0.0, "end_angle": 90.0 })
+    );
+    let invalid: Drawing = serde_json::from_value(json!({
             "id": "drawing-1",
             "title": null,
             "revision": 1,
@@ -2228,1060 +2205,1046 @@
             "next_entity": 2
         }))
         .expect("parse drawing");
-        assert!(invalid.validate().is_err_and(|message| message.contains("non-positive radius")));
-    }
+    assert!(invalid.validate().is_err_and(|message| message.contains("non-positive radius")));
+}
 
-    #[test]
-    fn svg_arc_path_samples_the_radius() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("add arc");
-        let svg = store::read(handle, |session| exchange::svg(&session.drawing)).expect("render");
-        assert!(svg.contains("<path"), "the arc is a path: {svg}");
-        assert!(svg.matches(" L").count() >= 2, "the quarter arc is sampled into segments: {svg}");
-        assert!(!svg.contains(" A "), "the arc keeps the shared writer's sampled path: {svg}");
-        close(handle).expect("close");
-    }
+#[test]
+fn svg_arc_path_samples_the_radius() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("add arc");
+    let svg = store::read(handle, |session| exchange::svg(&session.drawing)).expect("render");
+    assert!(svg.contains("<path"), "the arc is a path: {svg}");
+    assert!(svg.matches(" L").count() >= 2, "the quarter arc is sampled into segments: {svg}");
+    assert!(!svg.contains(" A "), "the arc keeps the shared writer's sampled path: {svg}");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn dxf_arc_round_trip_preserves_centre_radius_and_angles() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_arc(handle, DEFAULT_LAYER, [1.5, 2.25], 10.5, 30.0, 120.0).expect("add arc");
-        let (text, _) = store::read(handle, |session| exchange::dxf(&session.drawing)).expect("export");
-        assert!(text.contains("ARC"));
-        let (imported, losses) = import::dxf(&text, None).expect("import");
-        let EntityKind::Arc { center, radius, start_angle, end_angle } = imported.entities[0].kind
-        else {
-            panic!("ARC should import as an arc");
-        };
-        assert!((center[0] - 1.5).abs() < 1e-9 && (center[1] - 2.25).abs() < 1e-9);
-        assert!((radius - 10.5).abs() < 1e-9);
-        assert!((start_angle - 30.0).abs() < 1e-9);
-        assert!((end_angle - 120.0).abs() < 1e-9);
-        assert!(losses.iter().all(|loss| loss.code != "dxf/flattened-arc"));
-        close(handle).expect("close");
-    }
+#[test]
+fn dxf_arc_round_trip_preserves_centre_radius_and_angles() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [1.5, 2.25], 10.5, 30.0, 120.0).expect("add arc");
+    let (text, _) = store::read(handle, |session| exchange::dxf(&session.drawing)).expect("export");
+    assert!(text.contains("ARC"));
+    let (imported, losses) = import::dxf(&text, None).expect("import");
+    let EntityKind::Arc { center, radius, start_angle, end_angle } = imported.entities[0].kind
+    else {
+        panic!("ARC should import as an arc");
+    };
+    assert!((center[0] - 1.5).abs() < 1e-9 && (center[1] - 2.25).abs() < 1e-9);
+    assert!((radius - 10.5).abs() < 1e-9);
+    assert!((start_angle - 30.0).abs() < 1e-9);
+    assert!((end_angle - 120.0).abs() < 1e-9);
+    assert!(losses.iter().all(|loss| loss.code != "dxf/flattened-arc"));
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn spline_entities_add_measure_and_round_trip_through_dxf() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let points = vec![[0.0, 0.0], [10.0, 10.0], [20.0, 0.0], [30.0, 10.0]];
-        let added = add_spline(handle, DEFAULT_LAYER, points.clone(), false).expect("add spline");
-        assert_eq!(added["entity"]["kind"]["type"], json!("spline"));
-        assert_eq!(added["entity"]["kind"]["points"], json!(points));
-        assert_eq!(
-            add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0]], false).expect_err("one fit point").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [f64::NAN, 0.0]], false).expect_err("nan fit point").code,
-            "session/argument-invalid"
-        );
+#[test]
+fn spline_entities_add_measure_and_round_trip_through_dxf() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let points = vec![[0.0, 0.0], [10.0, 10.0], [20.0, 0.0], [30.0, 10.0]];
+    let added = add_spline(handle, DEFAULT_LAYER, points.clone(), false).expect("add spline");
+    assert_eq!(added["entity"]["kind"]["type"], json!("spline"));
+    assert_eq!(added["entity"]["kind"]["points"], json!(points));
+    assert_eq!(add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0]], false).expect_err("one fit point").code, "session/argument-invalid");
+    assert_eq!(
+        add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [f64::NAN, 0.0]], false).expect_err("nan fit point").code,
+        "session/argument-invalid"
+    );
 
-        let measured = measure_entities(handle, &["entity-1".to_string()]).expect("measure spline");
-        assert!(measured["entities"][0]["length"].as_f64().expect("length") > 30.0, "the sampled curve is longer than the chord");
-        assert_eq!(measured["entities"][0]["area"], json!(0.0), "an open spline encloses no area");
-        let selected = select(handle, SelectionMode::Window, [[-1.0, -1.0], [31.0, 20.0]], None).expect("select spline");
-        assert!(
-            selected["ids"].as_array().is_some_and(|ids| ids.contains(&json!("entity-1"))),
-            "a window over the sampled curve selects the spline: {selected}"
-        );
+    let measured = measure_entities(handle, &["entity-1".to_string()]).expect("measure spline");
+    assert!(measured["entities"][0]["length"].as_f64().expect("length") > 30.0, "the sampled curve is longer than the chord");
+    assert_eq!(measured["entities"][0]["area"], json!(0.0), "an open spline encloses no area");
+    let selected = select(handle, SelectionMode::Window, [[-1.0, -1.0], [31.0, 20.0]], None).expect("select spline");
+    assert!(
+        selected["ids"].as_array().is_some_and(|ids| ids.contains(&json!("entity-1"))),
+        "a window over the sampled curve selects the spline: {selected}"
+    );
 
-        let svg = store::read(handle, |session| exchange::svg(&session.drawing)).expect("render svg");
-        assert!(svg.contains("<path"), "the spline is drawn as a path: {svg}");
-        assert!(svg.matches(" L").count() >= 3 * 16, "each of the 3 spans is sampled: {svg}");
+    let svg = store::read(handle, |session| exchange::svg(&session.drawing)).expect("render svg");
+    assert!(svg.contains("<path"), "the spline is drawn as a path: {svg}");
+    assert!(svg.matches(" L").count() >= 3 * 16, "each of the 3 spans is sampled: {svg}");
 
-        let (text, losses) = store::read(handle, |session| exchange::dxf(&session.drawing)).expect("export dxf");
-        assert!(text.contains("\nSPLINE\n"), "a spline is written as a SPLINE entity: {text}");
-        assert!(text.contains("AC1015"), "a spline raises the DXF version: {text}");
-        assert!(
-            losses.iter().all(|loss| loss.code == "dxf/layer-color"),
-            "a spline writes without spline-specific losses: {:?}",
-            losses.iter().map(|loss| loss.code.clone()).collect::<Vec<_>>()
-        );
-        let (imported, import_losses) = import::dxf(&text, None).expect("import dxf");
-        let EntityKind::Spline { points: imported_points, closed } = &imported.entities[0].kind
-        else {
-            panic!("SPLINE should import as a spline, got {:?}", imported.entities[0].kind);
-        };
-        assert_eq!(imported_points, &points, "fit points round-trip exactly");
-        assert!(!closed);
-        assert!(import_losses.iter().any(|loss| loss.code == "dxf/spline-fit-points"));
+    let (text, losses) = store::read(handle, |session| exchange::dxf(&session.drawing)).expect("export dxf");
+    assert!(text.contains("\nSPLINE\n"), "a spline is written as a SPLINE entity: {text}");
+    assert!(text.contains("AC1015"), "a spline raises the DXF version: {text}");
+    assert!(losses.is_empty(), "a spline writes without losses: {:?}", losses.iter().map(|loss| loss.code.clone()).collect::<Vec<_>>());
+    let (imported, import_losses) = import::dxf(&text, None).expect("import dxf");
+    let EntityKind::Spline { points: imported_points, closed } = &imported.entities[0].kind
+    else {
+        panic!("SPLINE should import as a spline, got {:?}", imported.entities[0].kind);
+    };
+    assert_eq!(imported_points, &points, "fit points round-trip exactly");
+    assert!(!closed);
+    assert!(import_losses.iter().any(|loss| loss.code == "dxf/spline-fit-points"));
 
-        let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
-        let closed_added = add_spline(handle, DEFAULT_LAYER, square, true).expect("closed spline");
-        let closed_id = closed_added["entity"]["id"].as_str().expect("id").to_string();
-        let closed_measured = measure_entities(handle, &[closed_id]).expect("measure closed spline");
-        assert!(closed_measured["entities"][0]["area"].as_f64().expect("area") > 0.0);
-        close(handle).expect("close");
-    }
+    let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+    let closed_added = add_spline(handle, DEFAULT_LAYER, square, true).expect("closed spline");
+    let closed_id = closed_added["entity"]["id"].as_str().expect("id").to_string();
+    let closed_measured = measure_entities(handle, &[closed_id]).expect("measure closed spline");
+    assert!(closed_measured["entities"][0]["area"].as_f64().expect("area") > 0.0);
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn rotation_transform_shifts_arc_angles() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 90.0).expect("add arc");
-        let result = transform(
-            handle,
-            TransformRequest {
-                sheet: None,
-                target: TransformTarget::Ids(vec!["entity-1".to_string()]),
-                operation: TransformOp::Rotate { angle: 45.0, cx: 0.0, cy: 0.0 },
-            },
-        )
-        .expect("transform");
-        assert_eq!(result["affected"], json!(1));
-        let drawing = drawing_of(handle);
-        assert!(matches!(
-            drawing.entities[0].kind,
-            EntityKind::Arc { start_angle, end_angle, .. } if (start_angle - 45.0).abs() < 1e-12 && (end_angle - 135.0).abs() < 1e-12
-        ));
-        close(handle).expect("close");
-    }
+#[test]
+fn rotation_transform_shifts_arc_angles() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 90.0).expect("add arc");
+    let result = transform(
+        handle,
+        TransformRequest {
+            sheet: None,
+            target: TransformTarget::Ids(vec!["entity-1".to_string()]),
+            operation: TransformOp::Rotate { angle: 45.0, cx: 0.0, cy: 0.0 },
+        },
+    )
+    .expect("transform");
+    assert_eq!(result["affected"], json!(1));
+    let drawing = drawing_of(handle);
+    assert!(matches!(
+        drawing.entities[0].kind,
+        EntityKind::Arc { start_angle, end_angle, .. } if (start_angle - 45.0).abs() < 1e-12 && (end_angle - 135.0).abs() < 1e-12
+    ));
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn copy_creates_the_requested_number_of_new_entities() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("add line");
-        let result = copy(handle, CopyRequest { ids: vec!["entity-1".to_string()], dx: 10.0, dy: 0.0, count: 3 }).expect("copy");
-        let created_ids =
-            result["created"].as_array().expect("created").iter().map(|id| id.as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
-        assert_eq!(created_ids.len(), 3);
-        assert_eq!(created_ids.iter().collect::<std::collections::HashSet<_>>().len(), 3, "ids stay distinct");
-        assert_eq!(result["drawing"]["entities"], json!(4));
-        assert_eq!(result["revision"], json!(3));
-        let drawing = drawing_of(handle);
-        assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from, .. } if from == [30.0, 0.0]));
-        close(handle).expect("close");
-    }
+#[test]
+fn copy_creates_the_requested_number_of_new_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("add line");
+    let result = copy(handle, CopyRequest { ids: vec!["entity-1".to_string()], dx: 10.0, dy: 0.0, count: 3 }).expect("copy");
+    let created_ids =
+        result["created"].as_array().expect("created").iter().map(|id| id.as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
+    assert_eq!(created_ids.len(), 3);
+    assert_eq!(created_ids.iter().collect::<std::collections::HashSet<_>>().len(), 3, "ids stay distinct");
+    assert_eq!(result["drawing"]["entities"], json!(4));
+    assert_eq!(result["revision"], json!(3));
+    let drawing = drawing_of(handle);
+    assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from, .. } if from == [30.0, 0.0]));
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn measure_reports_the_exact_box_and_area_of_a_closed_square() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("add square");
-        let measured = measure(handle, None).expect("measure");
-        assert_eq!(measured["bounds"], json!({ "minX": 0.0, "minY": 0.0, "maxX": 10.0, "maxY": 10.0 }));
-        assert_eq!(measured["width"], json!(10.0));
-        assert_eq!(measured["height"], json!(10.0));
-        assert_eq!(measured["entities"], json!(1));
-        assert_eq!(measured["area"], json!(100.0));
-        assert_eq!(measured["length"], json!(40.0));
-        close(handle).expect("close");
-    }
+#[test]
+fn measure_reports_the_exact_box_and_area_of_a_closed_square() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("add square");
+    let measured = measure(handle, None).expect("measure");
+    assert_eq!(measured["bounds"], json!({ "minX": 0.0, "minY": 0.0, "maxX": 10.0, "maxY": 10.0 }));
+    assert_eq!(measured["width"], json!(10.0));
+    assert_eq!(measured["height"], json!(10.0));
+    assert_eq!(measured["entities"], json!(1));
+    assert_eq!(measured["area"], json!(100.0));
+    assert_eq!(measured["length"], json!(40.0));
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn measure_entities_reports_closed_polyline_area_and_perimeter() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("square");
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [3.0, 4.0]).expect("line");
+#[test]
+fn measure_entities_reports_closed_polyline_area_and_perimeter() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("square");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [3.0, 4.0]).expect("line");
 
-        let measured =
-            measure_entities(handle, &["entity-1".to_string(), "entity-2".to_string(), "entity-1".to_string()]).expect("measure entities");
-        assert_eq!(measured["totals"], json!({ "entities": 2, "length": 45.0, "area": 100.0 }));
-        assert_eq!(measured["entities"][0]["kind"], json!("polyline"));
-        assert_eq!(measured["entities"][0]["closed"], json!(true));
-        assert_eq!(measured["entities"][0]["length"], json!(40.0));
-        assert_eq!(measured["entities"][0]["area"], json!(100.0));
-        assert_eq!(measured["entities"][1]["closed"], json!(false));
-        assert_eq!(measured["entities"][1]["length"], json!(5.0));
-        assert_eq!(measured["entities"][1]["area"], json!(0.0));
+    let measured =
+        measure_entities(handle, &["entity-1".to_string(), "entity-2".to_string(), "entity-1".to_string()]).expect("measure entities");
+    assert_eq!(measured["totals"], json!({ "entities": 2, "length": 45.0, "area": 100.0 }));
+    assert_eq!(measured["entities"][0]["kind"], json!("polyline"));
+    assert_eq!(measured["entities"][0]["closed"], json!(true));
+    assert_eq!(measured["entities"][0]["length"], json!(40.0));
+    assert_eq!(measured["entities"][0]["area"], json!(100.0));
+    assert_eq!(measured["entities"][1]["closed"], json!(false));
+    assert_eq!(measured["entities"][1]["length"], json!(5.0));
+    assert_eq!(measured["entities"][1]["area"], json!(0.0));
 
-        assert_eq!(measure_entities(handle, &[]).expect_err("empty ids").code, "session/argument-invalid");
-        assert_eq!(measure_entities(handle, &["entity-9".to_string()]).expect_err("unknown id").code, "object/not-found");
-        close(handle).expect("close");
-    }
+    assert_eq!(measure_entities(handle, &[]).expect_err("empty ids").code, "session/argument-invalid");
+    assert_eq!(measure_entities(handle, &["entity-9".to_string()]).expect_err("unknown id").code, "object/not-found");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn measure_points_reports_distance_and_angle() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
+#[test]
+fn measure_points_reports_distance_and_angle() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
 
-        let distance = measure_points(handle, &[[0.0, 0.0], [3.0, 4.0]]).expect("distance");
-        assert_eq!(distance["kind"], json!("distance"));
-        assert_eq!(distance["points"], json!(2));
-        assert_eq!(distance["distance"], json!(5.0));
-        assert_eq!(distance["dx"], json!(3.0));
-        assert_eq!(distance["dy"], json!(4.0));
-        assert_eq!(distance["bearing"], json!(53.13010235415598));
+    let distance = measure_points(handle, &[[0.0, 0.0], [3.0, 4.0]]).expect("distance");
+    assert_eq!(distance["kind"], json!("distance"));
+    assert_eq!(distance["points"], json!(2));
+    assert_eq!(distance["distance"], json!(5.0));
+    assert_eq!(distance["dx"], json!(3.0));
+    assert_eq!(distance["dy"], json!(4.0));
+    assert_eq!(distance["bearing"], json!(53.13010235415598));
 
-        let angle = measure_points(handle, &[[0.0, 10.0], [0.0, 0.0], [5.0, 0.0]]).expect("angle");
-        assert_eq!(angle["kind"], json!("angle"));
-        assert_eq!(angle["points"], json!(3));
-        assert_eq!(angle["vertex"], json!([0.0, 0.0]));
-        assert_eq!(angle["angle"], json!(90.0));
-        assert_eq!(angle["first"], json!(10.0));
-        assert_eq!(angle["second"], json!(5.0));
-        assert_eq!(angle["span"], json!(11.180339887498949));
+    let angle = measure_points(handle, &[[0.0, 10.0], [0.0, 0.0], [5.0, 0.0]]).expect("angle");
+    assert_eq!(angle["kind"], json!("angle"));
+    assert_eq!(angle["points"], json!(3));
+    assert_eq!(angle["vertex"], json!([0.0, 0.0]));
+    assert_eq!(angle["angle"], json!(90.0));
+    assert_eq!(angle["first"], json!(10.0));
+    assert_eq!(angle["second"], json!(5.0));
+    assert_eq!(angle["span"], json!(11.180339887498949));
 
-        assert_eq!(measure_points(handle, &[[0.0, 0.0]]).expect_err("one point").code, "session/argument-invalid");
-        assert_eq!(measure_points(handle, &[[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]]).expect_err("degenerate").code, "session/argument-invalid");
-        close(handle).expect("close");
-    }
+    assert_eq!(measure_points(handle, &[[0.0, 0.0]]).expect_err("one point").code, "session/argument-invalid");
+    assert_eq!(measure_points(handle, &[[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]]).expect_err("degenerate").code, "session/argument-invalid");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn geometry_check_flags_a_zero_length_line() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [1.0, 1.0], [1.0, 1.0]).expect("add degenerate line");
-        let report = inspect(handle, Some(vec!["geometry".to_string()])).expect("inspect");
-        let codes =
-            report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        assert!(codes.contains(&"geometry/zero-length-line"), "got {codes:?}");
-        close(handle).expect("close");
-    }
+#[test]
+fn geometry_check_flags_a_zero_length_line() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [1.0, 1.0], [1.0, 1.0]).expect("add degenerate line");
+    let report = inspect(handle, Some(vec!["geometry".to_string()])).expect("inspect");
+    let codes = report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(codes.contains(&"geometry/zero-length-line"), "got {codes:?}");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn array_fills_a_rectangular_grid_in_row_major_order() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
-        let result = array(
-            handle,
-            ArrayRequest {
-                ids: vec!["entity-1".to_string()],
-                mode: ArrayMode::Rectangular { rows: 2, columns: 2, row_spacing: 5.0, column_spacing: 10.0 },
-            },
-        )
-        .expect("array");
-        assert_eq!(result["created"], json!(["entity-2", "entity-3", "entity-4"]));
-        assert_eq!(result["count"], json!(3));
-        assert_eq!(result["drawing"]["entities"], json!(4));
-        assert_eq!(result["revision"], json!(3));
-        let drawing = drawing_of(handle);
-        assert!(matches!(drawing.entities[1].kind, EntityKind::Line { from: [10.0, 0.0], to: [11.0, 0.0] }));
-        assert!(matches!(drawing.entities[2].kind, EntityKind::Line { from: [0.0, 5.0], to: [1.0, 5.0] }));
-        assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from: [10.0, 5.0], to: [11.0, 5.0] }));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn array_places_polar_copies_counter_clockwise() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [20.0, 0.0]).expect("line");
-        let result = array(
-            handle,
-            ArrayRequest { ids: vec!["entity-1".to_string()], mode: ArrayMode::Polar { center: [0.0, 0.0], count: 4, total_angle: 360.0 } },
-        )
-        .expect("array");
-        assert_eq!(result["created"], json!(["entity-2", "entity-3", "entity-4"]));
-        assert_eq!(result["count"], json!(3));
-        let drawing = drawing_of(handle);
-        let starts = drawing
-            .entities
-            .iter()
-            .map(|entity| match entity.kind {
-                EntityKind::Line { from, .. } => from,
-                _ => panic!("every array item is a line"),
-            })
-            .collect::<Vec<_>>();
-        assert!((starts[1][0]).abs() < 1e-9 && (starts[1][1] - 10.0).abs() < 1e-9, "{:?}", starts[1]);
-        assert!((starts[2][0] + 10.0).abs() < 1e-9 && starts[2][1].abs() < 1e-9, "{:?}", starts[2]);
-        assert!(starts[3][0].abs() < 1e-9 && (starts[3][1] + 10.0).abs() < 1e-9, "{:?}", starts[3]);
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn array_and_explode_validate_their_arguments() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
-        let rectangular = |rows, columns, row_spacing, column_spacing| ArrayRequest {
+#[test]
+fn array_fills_a_rectangular_grid_in_row_major_order() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    let result = array(
+        handle,
+        ArrayRequest {
             ids: vec!["entity-1".to_string()],
-            mode: ArrayMode::Rectangular { rows, columns, row_spacing, column_spacing },
-        };
-        assert_eq!(
-            array(handle, ArrayRequest { ids: Vec::new(), mode: ArrayMode::Polar { center: [0.0, 0.0], count: 2, total_angle: 90.0 } })
-                .expect_err("empty ids")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(array(handle, rectangular(1, 1, 1.0, 1.0)).expect_err("one position").code, "session/argument-invalid");
-        assert_eq!(array(handle, rectangular(2, 2, f64::NAN, 1.0)).expect_err("nan spacing").code, "session/argument-invalid");
-        let polar = |count, total_angle| ArrayRequest {
-            ids: vec!["entity-1".to_string()],
-            mode: ArrayMode::Polar { center: [0.0, 0.0], count, total_angle },
-        };
-        assert_eq!(array(handle, polar(1, 90.0)).expect_err("one item").code, "session/argument-invalid");
-        assert_eq!(array(handle, polar(2, 0.0)).expect_err("zero angle").code, "session/argument-invalid");
-        assert_eq!(
-            array(handle, ArrayRequest { ids: vec!["entity-9".to_string()], mode: polar(2, 90.0).mode }).expect_err("unknown id").code,
-            "object/not-found"
-        );
-        assert_eq!(explode(handle, "entity-9").expect_err("unknown id").code, "object/not-found");
-        assert_eq!(explode(handle, "entity-1").expect_err("line is not a polyline").code, "object/unsupported");
-        add_polyline(handle, DEFAULT_LAYER, vec![[1.0, 1.0]], false).expect("one-point polyline");
-        assert_eq!(explode(handle, "entity-2").expect_err("degenerate polyline").code, "session/argument-invalid");
-        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(array(handle, rectangular(2, 2, 1.0, 1.0)).expect_err("locked array").code, "drawing/layer-locked");
-        assert_eq!(explode(handle, "entity-2").expect_err("locked explode").code, "drawing/layer-locked");
-        close(handle).expect("close");
+            mode: ArrayMode::Rectangular { rows: 2, columns: 2, row_spacing: 5.0, column_spacing: 10.0 },
+        },
+    )
+    .expect("array");
+    assert_eq!(result["created"], json!(["entity-2", "entity-3", "entity-4"]));
+    assert_eq!(result["count"], json!(3));
+    assert_eq!(result["drawing"]["entities"], json!(4));
+    assert_eq!(result["revision"], json!(3));
+    let drawing = drawing_of(handle);
+    assert!(matches!(drawing.entities[1].kind, EntityKind::Line { from: [10.0, 0.0], to: [11.0, 0.0] }));
+    assert!(matches!(drawing.entities[2].kind, EntityKind::Line { from: [0.0, 5.0], to: [1.0, 5.0] }));
+    assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from: [10.0, 5.0], to: [11.0, 5.0] }));
+    close(handle).expect("close");
+}
+
+#[test]
+fn array_places_polar_copies_counter_clockwise() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [20.0, 0.0]).expect("line");
+    let result = array(
+        handle,
+        ArrayRequest { ids: vec!["entity-1".to_string()], mode: ArrayMode::Polar { center: [0.0, 0.0], count: 4, total_angle: 360.0 } },
+    )
+    .expect("array");
+    assert_eq!(result["created"], json!(["entity-2", "entity-3", "entity-4"]));
+    assert_eq!(result["count"], json!(3));
+    let drawing = drawing_of(handle);
+    let starts = drawing
+        .entities
+        .iter()
+        .map(|entity| match entity.kind {
+            EntityKind::Line { from, .. } => from,
+            _ => panic!("every array item is a line"),
+        })
+        .collect::<Vec<_>>();
+    assert!((starts[1][0]).abs() < 1e-9 && (starts[1][1] - 10.0).abs() < 1e-9, "{:?}", starts[1]);
+    assert!((starts[2][0] + 10.0).abs() < 1e-9 && starts[2][1].abs() < 1e-9, "{:?}", starts[2]);
+    assert!(starts[3][0].abs() < 1e-9 && (starts[3][1] + 10.0).abs() < 1e-9, "{:?}", starts[3]);
+    close(handle).expect("close");
+}
+
+#[test]
+fn array_and_explode_validate_their_arguments() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    let rectangular = |rows, columns, row_spacing, column_spacing| ArrayRequest {
+        ids: vec!["entity-1".to_string()],
+        mode: ArrayMode::Rectangular { rows, columns, row_spacing, column_spacing },
+    };
+    assert_eq!(
+        array(handle, ArrayRequest { ids: Vec::new(), mode: ArrayMode::Polar { center: [0.0, 0.0], count: 2, total_angle: 90.0 } })
+            .expect_err("empty ids")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(array(handle, rectangular(1, 1, 1.0, 1.0)).expect_err("one position").code, "session/argument-invalid");
+    assert_eq!(array(handle, rectangular(2, 2, f64::NAN, 1.0)).expect_err("nan spacing").code, "session/argument-invalid");
+    let polar = |count, total_angle| ArrayRequest {
+        ids: vec!["entity-1".to_string()],
+        mode: ArrayMode::Polar { center: [0.0, 0.0], count, total_angle },
+    };
+    assert_eq!(array(handle, polar(1, 90.0)).expect_err("one item").code, "session/argument-invalid");
+    assert_eq!(array(handle, polar(2, 0.0)).expect_err("zero angle").code, "session/argument-invalid");
+    assert_eq!(
+        array(handle, ArrayRequest { ids: vec!["entity-9".to_string()], mode: polar(2, 90.0).mode }).expect_err("unknown id").code,
+        "object/not-found"
+    );
+    assert_eq!(explode(handle, "entity-9").expect_err("unknown id").code, "object/not-found");
+    assert_eq!(explode(handle, "entity-1").expect_err("line is not a polyline").code, "object/unsupported");
+    add_polyline(handle, DEFAULT_LAYER, vec![[1.0, 1.0]], false).expect("one-point polyline");
+    assert_eq!(explode(handle, "entity-2").expect_err("degenerate polyline").code, "session/argument-invalid");
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(array(handle, rectangular(2, 2, 1.0, 1.0)).expect_err("locked array").code, "drawing/layer-locked");
+    assert_eq!(explode(handle, "entity-2").expect_err("locked explode").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn explode_replaces_a_closed_polyline_with_its_edges() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("square");
+    add_line(handle, DEFAULT_LAYER, [50.0, 50.0], [60.0, 60.0]).expect("marker");
+    let result = explode(handle, "entity-1").expect("explode");
+    assert_eq!(result["created"], json!(["entity-3", "entity-4", "entity-5", "entity-6"]));
+    assert_eq!(result["count"], json!(4));
+    assert_eq!(result["entity"], json!("entity-1"));
+    assert_eq!(result["drawing"]["entities"], json!(5));
+    assert_eq!(result["revision"], json!(4));
+    let drawing = drawing_of(handle);
+    assert!(matches!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] }));
+    assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from: [0.0, 10.0], to: [0.0, 0.0] }));
+    assert!(matches!(drawing.entities[4].kind, EntityKind::Line { from: [50.0, 50.0], to: [60.0, 60.0] }));
+    close(handle).expect("close");
+}
+
+#[test]
+fn dedicated_inspection_rules_flag_duplicates_and_zero_length() {
+    let mut drawing = Drawing::empty(None, Units::Mm);
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] },
+    });
+    drawing.entities.push(Entity {
+        id: "entity-2".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] },
+    });
+    drawing.entities.push(Entity {
+        id: "entity-3".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Line { from: [1.0, 1.0], to: [1.0, 1.0] },
+    });
+    drawing.entities.push(Entity {
+        id: "entity-4".to_string(),
+        layer: DEFAULT_LAYER.to_string(),
+        kind: EntityKind::Polyline { points: vec![[2.0, 2.0], [2.0, 2.0]], closed: false },
+    });
+    drawing.next_entity = 5;
+    let report = inspection::run(&drawing, &["duplicate-entity", "zero-length"]).to_json();
+    let issues = report["issues"].as_array().expect("issues");
+    let codes = issues.iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(codes.contains(&"inspection/duplicate-entity"), "got {codes:?}");
+    assert_eq!(codes.iter().filter(|code| **code == "inspection/zero-length").count(), 2, "got {codes:?}");
+    assert!(codes.iter().all(|code| !code.starts_with("geometry/")), "only the requested selectors ran: {codes:?}");
+    let duplicate = issues.iter().find(|issue| issue["code"] == json!("inspection/duplicate-entity")).expect("duplicate issue");
+    assert_eq!(duplicate["objectId"], json!("entity-2"));
+    assert_eq!(duplicate["severity"], json!("warning"));
+    assert_eq!(report["passed"], json!(false), "a zero-length entity is an error");
+}
+
+#[test]
+fn open_contour_check_flags_chains_that_do_not_close() {
+    let entity = |id: &str, kind| Entity { id: id.to_string(), layer: DEFAULT_LAYER.to_string(), kind };
+    let mut drawing = Drawing::empty(None, Units::Mm);
+    drawing.entities.push(entity("entity-1", EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] }));
+    drawing.entities.push(entity("entity-2", EntityKind::Line { from: [10.0, 0.0], to: [10.0, 10.0] }));
+    drawing.entities.push(entity("entity-3", EntityKind::Line { from: [10.0, 10.0], to: [0.0, 10.0] }));
+    drawing.entities.push(entity("entity-4", EntityKind::Line { from: [0.0, 10.0], to: [0.0, 0.0] }));
+    drawing
+        .entities
+        .push(entity("entity-5", EntityKind::Polyline { points: vec![[20.0, 0.0], [24.0, 0.0], [24.0, 4.0], [20.0, 4.0]], closed: true }));
+    let closed = inspection::run(&drawing, &["open-contour"]).to_json();
+    assert_eq!(closed["issues"], json!([]), "closed loops are not flagged");
+    assert_eq!(closed["passed"], json!(true));
+
+    drawing.entities.push(entity("entity-6", EntityKind::Line { from: [40.0, 0.0], to: [45.0, 0.0] }));
+    drawing.entities.push(entity("entity-7", EntityKind::Line { from: [45.0, 0.0], to: [45.0, 5.0] }));
+    drawing.entities.push(entity("entity-8", EntityKind::Line { from: [45.0, 5.0], to: [40.0, 5.0] }));
+    drawing.entities.push(entity("entity-9", EntityKind::Line { from: [60.0, 0.0], to: [65.0, 0.0] }));
+    let report = inspection::run(&drawing, &["open-contour"]).to_json();
+    let issues = report["issues"].as_array().expect("issues");
+    let codes = issues.iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(codes, ["inspection/open-contour"], "one open chain and one isolated line that is not a contour");
+    assert_eq!(issues[0]["objectId"], json!("entity-6"));
+    assert_eq!(issues[0]["severity"], json!("warning"));
+    assert_eq!(report["passed"], json!(true), "an open contour is a warning");
+}
+
+#[test]
+fn dxf_export_import_round_trip_keeps_core_geometry() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
+    add_arc(handle, DEFAULT_LAYER, [1.0, 2.0], 3.0, 30.0, 120.0).expect("arc");
+    add_text(handle, DEFAULT_LAYER, [3.0, 4.0], 2.5, "Site").expect("text");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("polyline");
+    let drawing = drawing_of(handle);
+    let (text, _) = exchange::dxf(&drawing);
+    for marker in ["$INSUNITS", "TABLES", "LAYER", "ENTITIES", "LINE", "CIRCLE", "ARC", "TEXT", "POLYLINE"] {
+        assert!(text.contains(marker), "export writes `{marker}`");
     }
 
-    #[test]
-    fn explode_replaces_a_closed_polyline_with_its_edges() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("square");
-        add_line(handle, DEFAULT_LAYER, [50.0, 50.0], [60.0, 60.0]).expect("marker");
-        let result = explode(handle, "entity-1").expect("explode");
-        assert_eq!(result["created"], json!(["entity-3", "entity-4", "entity-5", "entity-6"]));
-        assert_eq!(result["count"], json!(4));
-        assert_eq!(result["entity"], json!("entity-1"));
-        assert_eq!(result["drawing"]["entities"], json!(5));
-        assert_eq!(result["revision"], json!(4));
-        let drawing = drawing_of(handle);
-        assert!(matches!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] }));
-        assert!(matches!(drawing.entities[3].kind, EntityKind::Line { from: [0.0, 10.0], to: [0.0, 0.0] }));
-        assert!(matches!(drawing.entities[4].kind, EntityKind::Line { from: [50.0, 50.0], to: [60.0, 60.0] }));
-        close(handle).expect("close");
+    let (imported, _) = import::dxf(&text, None).expect("round trip import");
+    assert_eq!(imported.entities.len(), 5);
+    assert_eq!(imported.units, Units::Mm);
+    let mut kinds = imported.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
+    kinds.sort_unstable();
+    assert_eq!(kinds, vec!["arc", "circle", "line", "polyline", "text"]);
+    let line = imported.entities.iter().find_map(|entity| match &entity.kind {
+        EntityKind::Line { from, to } => Some((*from, *to)),
+        _ => None,
+    });
+    assert_eq!(line, Some(([0.0, 0.0], [10.0, 0.0])));
+    let circle = imported.entities.iter().find_map(|entity| match &entity.kind {
+        EntityKind::Circle { center, radius } => Some((*center, *radius)),
+        _ => None,
+    });
+    assert_eq!(circle, Some(([5.0, 5.0], 2.0)));
+    let arc = imported.entities.iter().find_map(|entity| match &entity.kind {
+        EntityKind::Arc { center, radius, start_angle, end_angle } => Some((*center, *radius, *start_angle, *end_angle)),
+        _ => None,
+    });
+    assert!(arc.is_some_and(|(center, radius, start_angle, end_angle)| {
+        center == [1.0, 2.0] && (radius - 3.0).abs() < 1e-9 && (start_angle - 30.0).abs() < 1e-9 && (end_angle - 120.0).abs() < 1e-9
+    }));
+    let text = imported.entities.iter().find_map(|entity| match &entity.kind {
+        EntityKind::Text { at, height, content } => Some((*at, *height, content.clone())),
+        _ => None,
+    });
+    assert_eq!(text, Some(([3.0, 4.0], 2.5, "Site".to_string())));
+    let polyline = imported.entities.iter().find_map(|entity| match &entity.kind {
+        EntityKind::Polyline { points, closed } => Some((points.clone(), *closed)),
+        _ => None,
+    });
+    assert_eq!(polyline, Some((vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true)));
+    close(handle).expect("close");
+}
+
+#[test]
+fn hatch_round_trips_through_dxf_with_its_pattern_name() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let hatch =
+        add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], Some("ANSI31".to_string())).expect("hatch");
+    assert_eq!(hatch["entity"]["kind"]["type"], json!("hatch"));
+    assert_eq!(hatch["entity"]["kind"]["pattern"], json!("ANSI31"));
+    let measured = measure(handle, None).expect("measure");
+    assert_eq!(measured["area"], json!(16.0));
+    assert_eq!(measured["length"], json!(16.0));
+
+    let (text, losses) = exchange::dxf(&drawing_of(handle));
+    assert!(text.contains("AC1015"), "a hatch needs a DXF version above R12");
+    assert!(text.contains("0\nHATCH\n"));
+    assert!(text.contains("2\nANSI31\n"));
+    assert!(losses.iter().any(|loss| loss.code == "dxf/hatch-pattern"));
+
+    let (imported, losses) = import::dxf(&text, None).expect("import the exported HATCH");
+    assert_eq!(imported.entities.len(), 1, "{losses:?}");
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+    let EntityKind::Hatch { points, pattern } = &imported.entities[0].kind
+    else {
+        panic!("expected a hatch, got {:?}", imported.entities[0].kind);
+    };
+    assert_eq!(points.as_slice(), &[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]);
+    assert_eq!(pattern, "ANSI31");
+    assert!(losses.iter().any(|loss| loss.code == "dxf/hatch-boundary"));
+
+    assert!(exchange::svg(&drawing_of(handle)).contains("data-open-cad"));
+
+    let solid = create(CreateRequest::default()).expect("create solid drawing");
+    let solid_handle = handle_of(&solid);
+    add_hatch(solid_handle, DEFAULT_LAYER, vec![[10.0, 10.0], [12.0, 10.0], [11.0, 12.0]], None).expect("solid hatch");
+    let (text, losses) = exchange::dxf(&drawing_of(solid_handle));
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/hatch-pattern"), "{losses:?}");
+    assert!(text.contains("2\nSOLID\n"));
+    close(solid_handle).expect("close solid drawing");
+
+    assert_eq!(
+        add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0]], None).expect_err("too few points").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0], [f64::NAN, 2.0]], None).expect_err("non-finite").code,
+        "session/argument-invalid"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn radial_and_ordinate_dimensions_round_trip_through_dxf() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let radial = add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 5.0, 0.0, 1.5, false, None).expect("radial");
+    assert_eq!(radial["entity"]["kind"]["type"], json!("radial_dimension"));
+    assert_eq!(radial["entity"]["kind"]["radius"], json!(5.0));
+    let diameter =
+        add_radial_dimension(handle, DIMENSION_LAYER, [10.0, 0.0], 3.0, 90.0, 0.0, true, Some("DIA 6".to_string())).expect("diameter");
+    assert_eq!(diameter["entity"]["kind"]["diameter"], json!(true));
+    let ordinate = add_ordinate_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [12.0, 4.0], OrdinateAxis::X, 2.0, None).expect("ordinate");
+    assert_eq!(ordinate["entity"]["kind"]["axis"], json!("x"));
+
+    let drawing = drawing_of(handle);
+    let kinds = drawing.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
+    assert_eq!(kinds, vec!["radial dimension", "radial dimension", "ordinate dimension"]);
+    let measured = measure(handle, None).expect("measure");
+    assert_eq!(measured["length"], json!(0.0), "annotations contribute no length");
+    assert_eq!(measured["area"], json!(0.0), "annotations contribute no area");
+
+    let (text, _) = exchange::dxf(&drawing);
+    assert!(text.contains("0\nDIMENSION\n"), "dimensions are written as DIMENSION records");
+    assert!(text.contains("70\n4\n"), "a radial dimension uses type 4");
+    assert!(text.contains("70\n3\n"), "a diameter dimension uses type 3");
+    assert!(text.contains("70\n70\n"), "an X ordinate sets the type-6 bit and the X-datum bit");
+
+    let (imported, losses) = import::dxf(&text, None).expect("import the exported DXF");
+    assert_eq!(imported.entities.len(), 3, "{losses:?}");
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+    let EntityKind::RadialDimension { center, radius, angle, offset, diameter, text } = &imported.entities[0].kind
+    else {
+        panic!("expected a radial dimension, got {:?}", imported.entities[0].kind);
+    };
+    assert_eq!(*center, [0.0, 0.0]);
+    assert!((radius - 5.0).abs() < 1e-9);
+    assert!(angle.abs() < 1e-9);
+    assert!((offset - 1.5).abs() < 1e-9);
+    assert!(!diameter);
+    assert_eq!(text, &None);
+    let EntityKind::RadialDimension { center, angle, diameter, text, .. } = &imported.entities[1].kind
+    else {
+        panic!("expected a diameter dimension, got {:?}", imported.entities[1].kind);
+    };
+    assert!((center[0] - 10.0).abs() < 1e-9 && center[1].abs() < 1e-9);
+    assert!((angle - 90.0).abs() < 1e-9);
+    assert!(diameter);
+    assert_eq!(text.as_deref(), Some("DIA 6"));
+    let EntityKind::OrdinateDimension { origin, feature, axis, offset, .. } = &imported.entities[2].kind
+    else {
+        panic!("expected an ordinate dimension, got {:?}", imported.entities[2].kind);
+    };
+    assert_eq!(*origin, [0.0, 0.0]);
+    assert_eq!(*feature, [12.0, 4.0]);
+    assert_eq!(*axis, OrdinateAxis::X);
+    assert!((offset - 2.0).abs() < 1e-9);
+
+    transform(
+        handle,
+        TransformRequest {
+            sheet: None,
+            target: TransformTarget::Ids(vec!["entity-1".to_string()]),
+            operation: TransformOp::Rotate { angle: 90.0, cx: 0.0, cy: 0.0 },
+        },
+    )
+    .expect("rotate the radial dimension");
+    let drawing = drawing_of(handle);
+    assert!(matches!(
+        drawing.entities[0].kind,
+        EntityKind::RadialDimension { angle, .. } if (angle - 90.0).abs() < 1e-12
+    ));
+    close(handle).expect("close");
+}
+
+#[test]
+fn angular_dimensions_render_validate_and_round_trip() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let added = add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 5.0, None).expect("angular dimension");
+    assert_eq!(added["entity"]["kind"]["type"], json!("angular_dimension"));
+    assert_eq!(added["entity"]["kind"]["offset"], json!(5.0));
+    assert_eq!(
+        add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [20.0, 0.0], 5.0, None).expect_err("collinear rays").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 0.0, None).expect_err("zero radius").code,
+        "session/argument-invalid"
+    );
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 1);
+    assert_eq!(kind_name(&drawing.entities[0].kind), "angular dimension");
+    let measured = measure(handle, None).expect("measure");
+    assert_eq!(measured["length"], json!(0.0));
+    assert_eq!(measured["area"], json!(0.0));
+
+    let svg = exchange::svg(&drawing);
+    assert!(svg.contains("90°"), "the SVG carries the measured angle: {svg}");
+    let (text, losses) = exchange::dxf(&drawing);
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+    assert!(text.contains("70\n5\n"), "an angular dimension uses type 5");
+    let (imported, losses) = import::dxf(&text, None).expect("import the exported DXF");
+    assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+    let Some(EntityKind::AngularDimension { center, first, second, offset, .. }) =
+        imported.entities.iter().map(|entity| &entity.kind).find(|kind| matches!(kind, EntityKind::AngularDimension { .. }))
+    else {
+        panic!("expected an imported angular dimension, got {:?}", imported.entities);
+    };
+    assert_eq!(*center, [0.0, 0.0]);
+    assert_eq!(*first, [10.0, 0.0]);
+    assert_eq!(*second, [0.0, 10.0]);
+    assert!((offset - 5.0).abs() < 1e-9);
+
+    let dir = TempDir::new("angular-dimension");
+    let path = dir.path.join("angle.ocad");
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    let EntityKind::AngularDimension { center, first, second, offset, .. } = &drawing.entities[0].kind
+    else {
+        panic!("expected an angular dimension, got {:?}", drawing.entities[0].kind);
+    };
+    assert_eq!(*center, [0.0, 0.0]);
+    assert_eq!(*first, [10.0, 0.0]);
+    assert_eq!(*second, [0.0, 10.0]);
+    assert!((offset - 5.0).abs() < 1e-9);
+    close(reopened).expect("close reopened");
+}
+
+#[test]
+fn radial_and_ordinate_dimensions_validate_and_inspect() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(
+        add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 0.0, 0.0, 0.0, false, None).expect_err("zero radius").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 1.0, f64::NAN, 0.0, false, None).expect_err("nan angle").code,
+        "session/argument-invalid"
+    );
+
+    let mut drawing = Drawing::empty(None, Units::Mm);
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: DIMENSION_LAYER.to_string(),
+        kind: EntityKind::RadialDimension {
+            center: [0.0, 0.0],
+            radius: 5.0,
+            angle: 0.0,
+            offset: 0.0,
+            diameter: false,
+            text: Some("  ".to_string()),
+        },
+    });
+    drawing.entities.push(Entity {
+        id: "entity-2".to_string(),
+        layer: DIMENSION_LAYER.to_string(),
+        kind: EntityKind::OrdinateDimension {
+            origin: [1.0, 2.0],
+            feature: [1.0, 2.0],
+            axis: OrdinateAxis::Y,
+            offset: 0.0,
+            text: Some("10 inch".to_string()),
+        },
+    });
+    let report = inspection::run(&drawing, &["dimensions", "units"]).to_json();
+    let codes = report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    for expected in ["dimensions/empty-text", "dimensions/degenerate", "units/dimension-label"] {
+        assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
+    }
+    assert_eq!(report["passed"], json!(false));
+    close(handle).expect("close");
+}
+
+#[test]
+fn add_point_stores_the_anchor_and_respects_layer_flags() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let point = add_point(handle, DEFAULT_LAYER, [5.0, 7.0]).expect("point");
+    assert_eq!(point["entity"]["id"], json!("entity-1"));
+    assert_eq!(point["revision"], json!(2));
+    assert_eq!(point["entity"]["kind"]["type"], json!("point"));
+    assert_eq!(point["entity"]["kind"]["at"], json!([5.0, 7.0]));
+    assert_eq!(add_point(handle, DEFAULT_LAYER, [f64::NAN, 0.0]).expect_err("non-finite").code, "session/argument-invalid");
+
+    add_layer(handle, "Structure", None).expect("layer");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(add_point(handle, "Structure", [0.0, 0.0]).expect_err("locked").code, "drawing/layer-locked");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(add_point(handle, "Structure", [0.0, 0.0]).expect_err("frozen").code, "drawing/layer-frozen");
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_copies_circles_and_arcs_with_a_new_radius() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
+    let grown = offset(handle, "entity-1", 2.0).expect("offset the circle outward");
+    assert_eq!(grown["entity"]["kind"]["type"], json!("circle"));
+    assert_eq!(grown["entity"]["kind"]["radius"], json!(12.0));
+    assert_eq!(grown["source"], json!("entity-1"));
+    assert_eq!(grown["revision"], json!(3));
+    let shrunk = offset(handle, "entity-1", -4.0).expect("offset the circle inward");
+    assert_eq!(shrunk["entity"]["kind"]["radius"], json!(6.0));
+    assert_eq!(offset(handle, "entity-1", -10.0).expect_err("collapsing radius").code, "session/argument-invalid");
+    assert_eq!(offset(handle, "entity-1", 0.0).expect_err("zero distance").code, "session/argument-invalid");
+
+    add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
+    let arc = offset(handle, "entity-4", 1.0).expect("offset the arc");
+    assert_eq!(arc["entity"]["kind"]["type"], json!("arc"));
+    assert_eq!(arc["entity"]["kind"]["radius"], json!(6.0));
+    assert_eq!(arc["entity"]["kind"]["start_angle"], json!(0.0));
+
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+    assert_eq!(offset(handle, "entity-6", 1.0).expect_err("text").code, "object/unsupported");
+    assert_eq!(offset(handle, "entity-404", 1.0).expect_err("missing").code, "object/not-found");
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_polylines_follow_mitered_normals() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let open = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("open polyline");
+    assert_eq!(open["entity"]["kind"]["type"], json!("polyline"));
+    let moved = offset(handle, "entity-1", 1.0).expect("offset the open polyline");
+    assert_eq!(moved["entity"]["kind"]["points"], json!([[0.0, 1.0], [9.0, 1.0], [9.0, 10.0]]));
+    assert_eq!(moved["entity"]["kind"]["closed"], json!(false));
+
+    let closed = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed polyline");
+    assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
+    let inset = offset(handle, "entity-3", 1.0).expect("offset the closed polyline inward");
+    assert_eq!(inset["entity"]["kind"]["points"], json!([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]));
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_lines_move_perpendicular_to_their_direction() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let left = offset(handle, "entity-1", 2.0).expect("offset the line left");
+    assert_eq!(left["entity"]["kind"]["type"], json!("line"));
+    assert_eq!(left["entity"]["kind"]["from"], json!([0.0, 2.0]));
+    assert_eq!(left["entity"]["kind"]["to"], json!([10.0, 2.0]));
+    assert_eq!(left["source"], json!("entity-1"));
+
+    let right = offset(handle, "entity-1", -3.0).expect("offset the line right");
+    assert_eq!(right["entity"]["kind"]["from"], json!([0.0, -3.0]));
+    assert_eq!(right["entity"]["kind"]["to"], json!([10.0, -3.0]));
+
+    let zero = add_line(handle, DEFAULT_LAYER, [5.0, 5.0], [5.0, 5.0]).expect("zero-length line");
+    let zero_id = zero["entity"]["id"].as_str().expect("id");
+    assert_eq!(offset(handle, zero_id, 1.0).expect_err("zero-length").code, "session/argument-invalid");
+    close(handle).expect("close");
+}
+
+#[test]
+fn offset_refuses_a_locked_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_circle(handle, "Structure", [0.0, 0.0], 4.0).expect("circle");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(offset(handle, "entity-1", 1.0).expect_err("locked").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn fillet_trims_two_lines_and_adds_a_tangent_arc() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
+    add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [10.0, 10.0]).expect("second line");
+    let result = fillet(handle, "entity-1", "entity-2", 2.0).expect("fillet");
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_eq!(result["entity"]["kind"]["radius"], json!(2.0));
+    let center = result["entity"]["kind"]["center"].as_array().expect("center");
+    assert!((center[0].as_f64().expect("x") - 8.0).abs() < 1e-9);
+    assert!((center[1].as_f64().expect("y") - 2.0).abs() < 1e-9);
+    assert!((result["entity"]["kind"]["start_angle"].as_f64().expect("start") + 90.0).abs() < 1e-9);
+    assert!(result["entity"]["kind"]["end_angle"].as_f64().expect("end").abs() < 1e-9);
+    assert_eq!(result["sources"], json!(["entity-1", "entity-2"]));
+    assert_eq!(result["revision"], json!(4));
+
+    let drawing = drawing_of(handle);
+    let EntityKind::Line { from, to } = drawing.entities[0].kind
+    else {
+        panic!("expected a trimmed line");
+    };
+    assert_eq!((from, to), ([0.0, 0.0], [8.0, 0.0]));
+    let EntityKind::Line { from, to } = drawing.entities[1].kind
+    else {
+        panic!("expected a trimmed line");
+    };
+    assert!((from[0] - 10.0).abs() < 1e-9 && (from[1] - 2.0).abs() < 1e-9, "trimmed from {from:?}");
+    assert_eq!(to, [10.0, 10.0]);
+
+    add_line(handle, DEFAULT_LAYER, [0.0, 5.0], [10.0, 5.0]).expect("parallel first");
+    add_line(handle, DEFAULT_LAYER, [0.0, 8.0], [10.0, 8.0]).expect("parallel second");
+    assert_eq!(fillet(handle, "entity-4", "entity-5", 1.0).expect_err("parallel").code, "session/argument-invalid");
+    assert_eq!(fillet(handle, "entity-1", "entity-2", 11.0).expect_err("radius too large").code, "session/argument-invalid");
+    assert_eq!(fillet(handle, "entity-1", "entity-1", 1.0).expect_err("same line").code, "session/argument-invalid");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 3.0).expect("circle");
+    assert_eq!(fillet(handle, "entity-1", "entity-6", 1.0).expect_err("circle").code, "object/unsupported");
+    assert_eq!(fillet(handle, "entity-1", "entity-404", 1.0).expect_err("missing").code, "object/not-found");
+    close(handle).expect("close");
+}
+
+#[test]
+fn chamfer_trims_two_lines_and_adds_the_bevel() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
+    add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [10.0, 10.0]).expect("second line");
+    let result = chamfer(handle, "entity-1", "entity-2", 3.0, 4.0).expect("chamfer");
+    assert_eq!(result["entity"]["kind"]["type"], json!("line"));
+    assert_eq!(result["entity"]["kind"]["from"], json!([7.0, 0.0]));
+    assert_eq!(result["entity"]["kind"]["to"], json!([10.0, 4.0]));
+    assert_eq!(result["sources"], json!(["entity-1", "entity-2"]));
+
+    let drawing = drawing_of(handle);
+    let EntityKind::Line { from, to } = drawing.entities[0].kind
+    else {
+        panic!("expected a trimmed line");
+    };
+    assert_eq!((from, to), ([0.0, 0.0], [7.0, 0.0]));
+    let EntityKind::Line { from, to } = drawing.entities[1].kind
+    else {
+        panic!("expected a trimmed line");
+    };
+    assert_eq!((from, to), ([10.0, 4.0], [10.0, 10.0]));
+
+    assert_eq!(chamfer(handle, "entity-1", "entity-2", 8.0, 1.0).expect_err("distance too large").code, "session/argument-invalid");
+    assert_eq!(chamfer(handle, "entity-1", "entity-2", 0.0, 1.0).expect_err("zero distance").code, "session/argument-invalid");
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+    assert_eq!(chamfer(handle, "entity-1", "entity-4", 1.0, 1.0).expect_err("text").code, "object/unsupported");
+    close(handle).expect("close");
+}
+
+#[test]
+fn fillet_and_chamfer_refuse_a_locked_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("first line");
+    add_line(handle, "Structure", [10.0, 0.0], [10.0, 10.0]).expect("second line");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(fillet(handle, "entity-1", "entity-2", 1.0).expect_err("locked fillet").code, "drawing/layer-locked");
+    assert_eq!(chamfer(handle, "entity-1", "entity-2", 1.0, 1.0).expect_err("locked chamfer").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn stats_group_length_and_area_by_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", Some("#ff0000")).expect("layer");
+    add_line(handle, "Walls", [0.0, 0.0], [3.0, 0.0]).expect("line");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("square");
+    add_circle(handle, DEFAULT_LAYER, [10.0, 10.0], 2.0).expect("circle");
+    add_text(handle, DIMENSION_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+
+    let summary = stats(handle).expect("stats");
+    assert_eq!(summary["units"], json!("mm"));
+    assert_eq!(summary["revision"], json!(6));
+    assert_eq!(summary["totals"]["entities"], json!(4));
+    let layers = summary["layers"].as_array().expect("layers");
+    let walls = layers.iter().find(|layer| layer["id"] == json!("Walls")).expect("walls layer");
+    assert_eq!(walls["entityCount"], json!(1));
+    assert_eq!(walls["length"], json!(3.0));
+    assert_eq!(walls["area"], json!(0.0));
+    let default = layers.iter().find(|layer| layer["id"] == json!(DEFAULT_LAYER)).expect("default layer");
+    assert_eq!(default["entityCount"], json!(2));
+    assert_eq!(default["length"], json!(16.0), "square perimeter only");
+    assert!((default["area"].as_f64().expect("area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9, "square and circle area");
+    let dimensions = layers.iter().find(|layer| layer["id"] == json!(DIMENSION_LAYER)).expect("dimension layer");
+    assert_eq!(dimensions["entityCount"], json!(1));
+    assert_eq!(dimensions["length"], json!(0.0));
+    assert!((summary["totals"]["area"].as_f64().expect("total area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9);
+    close(handle).expect("close");
+}
+
+#[test]
+fn empty_layer_check_is_opt_in_and_warns_per_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+
+    let default_report = inspect(handle, None).expect("default inspect");
+    let default_codes =
+        default_report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(!default_codes.contains(&"layers/empty"), "{default_codes:?}");
+
+    let report = inspect(handle, Some(vec!["empty-layer".to_string()])).expect("empty-layer inspect");
+    assert_eq!(report["passed"], json!(true), "empty layers are warnings");
+    let issues = report["issues"].as_array().expect("issues");
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["code"], json!("layers/empty"));
+    assert_eq!(issues[0]["layerId"], json!(DIMENSION_LAYER));
+    assert_eq!(issues[0]["recoverable"], json!(true));
+    close(handle).expect("close");
+}
+
+#[test]
+fn reorder_entity_changes_paint_order() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
+    add_line(handle, DEFAULT_LAYER, [2.0, 0.0], [12.0, 0.0]).expect("second line");
+    add_line(handle, DEFAULT_LAYER, [4.0, 0.0], [14.0, 0.0]).expect("third line");
+
+    let moved = reorder_entity(handle, "entity-1", DrawOrderAction::ToFront).expect("to front");
+    assert_eq!(moved["order"], json!(["entity-2", "entity-3", "entity-1"]));
+    assert_eq!(drawing_of(handle).ordered_entity_ids(), vec!["entity-2", "entity-3", "entity-1"]);
+
+    let moved = reorder_entity(handle, "entity-3", DrawOrderAction::ToBack).expect("to back");
+    assert_eq!(moved["order"], json!(["entity-3", "entity-2", "entity-1"]));
+    let moved = reorder_entity(handle, "entity-3", DrawOrderAction::Forward).expect("forward");
+    assert_eq!(moved["order"], json!(["entity-2", "entity-3", "entity-1"]));
+    let moved = reorder_entity(handle, "entity-3", DrawOrderAction::Backward).expect("backward");
+    assert_eq!(moved["order"], json!(["entity-3", "entity-2", "entity-1"]));
+
+    let svg = exchange::svg(&drawing_of(handle));
+    let first = svg.find("<line").expect("first line element");
+    let second = first + 1 + svg[first + 1..].find("<line").expect("second line element");
+    let start_x = |index: usize| {
+        svg[index..]
+            .split("x1=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .and_then(|value| value.parse::<f64>().ok())
+            .expect("line start x")
+    };
+    assert!(start_x(first) > start_x(second), "the front entity is painted last: {svg}");
+
+    delete_entity(handle, "entity-3").expect("delete");
+    assert_eq!(drawing_of(handle).ordered_entity_ids(), vec!["entity-2", "entity-1"]);
+    close(handle).expect("close");
+}
+
+#[test]
+fn reorder_entity_rejects_an_unknown_entity() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+    assert_eq!(reorder_entity(handle, "entity-404", DrawOrderAction::ToFront).expect_err("unknown entity").code, "object/not-found");
+    assert!(DrawOrderAction::parse("sideways").is_none());
+    assert_eq!(DrawOrderAction::parse(" Forward "), Some(DrawOrderAction::Forward));
+    close(handle).expect("close");
+}
+
+#[test]
+fn layouts_create_update_list_and_delete() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]], true).expect("square");
+
+    let created_layout =
+        create_layout(handle, LayoutRequest { name: "Sheet".to_string(), width: Some(200.0), height: Some(150.0), scale: None })
+            .expect("create layout");
+    assert_eq!(created_layout["drawing"]["layouts"], json!(1));
+    assert_eq!(created_layout["layout"]["name"], json!("Sheet"));
+    assert_eq!(created_layout["layout"]["width"], json!(200.0));
+    assert_eq!(created_layout["layout"]["view"]["center"], json!([50.0, 25.0]));
+    assert_eq!(created_layout["layout"]["view"]["drawingWidth"], json!(100.0));
+    assert_eq!(created_layout["layout"]["view"]["visibleWidth"], json!(200.0));
+    assert_eq!(created_layout["layout"]["view"]["fits"], json!(true));
+    assert_eq!(created_layout["layout"]["view"]["fitScale"], json!(2.0));
+
+    let updated = update_layout(handle, "Sheet", LayoutUpdate { width: Some(400.0), scale: Some(0.5), ..LayoutUpdate::default() })
+        .expect("update layout");
+    assert_eq!(updated["layout"]["width"], json!(400.0));
+    assert_eq!(updated["layout"]["view"]["visibleWidth"], json!(800.0));
+    assert_eq!(updated["layout"]["view"]["visibleHeight"], json!(300.0));
+    assert_eq!(updated["layout"]["view"]["fitScale"], json!(3.0));
+
+    let renamed = update_layout(handle, "Sheet", LayoutUpdate { name: Some("Site".to_string()), ..LayoutUpdate::default() }).expect("rename");
+    assert_eq!(renamed["layout"]["id"], json!("Site"));
+    let listed = list_layouts(handle).expect("list");
+    assert_eq!(listed["layouts"].as_array().expect("layouts").len(), 1);
+    assert_eq!(listed["layouts"][0]["name"], json!("Site"));
+
+    let deleted = delete_layout(handle, "Site").expect("delete");
+    assert_eq!(deleted["deleted"], json!("Site"));
+    assert_eq!(list_layouts(handle).expect("list after delete")["layouts"], json!([]));
+    close(handle).expect("close");
+}
+
+#[test]
+fn layouts_reject_duplicates_invalid_sizes_and_unknown_ids() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    create_layout(handle, LayoutRequest { name: "Sheet".to_string(), ..LayoutRequest::default() }).expect("layout");
+    assert_eq!(
+        create_layout(handle, LayoutRequest { name: "sheet".to_string(), ..LayoutRequest::default() }).expect_err("duplicate").code,
+        "drawing/layout-exists"
+    );
+    assert_eq!(
+        create_layout(handle, LayoutRequest { name: "Zero".to_string(), scale: Some(0.0), ..LayoutRequest::default() })
+            .expect_err("zero scale")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_layout(handle, "missing", LayoutUpdate { scale: Some(2.0), ..LayoutUpdate::default() }).expect_err("unknown").code,
+        "object/not-found"
+    );
+    assert_eq!(update_layout(handle, "Sheet", LayoutUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
+    assert_eq!(delete_layout(handle, "missing").expect_err("unknown delete").code, "object/not-found");
+    close(handle).expect("close");
+}
+
+#[test]
+fn dxf_r12_export_simplifies_entities_r12_cannot_carry() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_ellipse(handle, DEFAULT_LAYER, [20.0, 20.0], 10.0, 5.0, 0.0, 0.0, 360.0).expect("ellipse");
+    add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], None).expect("hatch");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 5.0]).expect("line");
+
+    let drawing = drawing_of(handle);
+    let (text, losses) = exchange::dxf_r12(&drawing);
+    assert!(text.contains("$ACADVER\n1\nAC1009\n"), "{text}");
+    assert!(!text.contains("$INSUNITS"), "{text}");
+    assert!(!text.contains("\nELLIPSE\n"), "{text}");
+    assert!(!text.contains("\nHATCH\n"), "{text}");
+    assert!(text.contains("\nPOLYLINE\n"), "{text}");
+    let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+    for code in ["dxf/r12-units", "dxf/r12-ellipse", "dxf/r12-hatch"] {
+        assert!(codes.contains(&code), "{codes:?}");
     }
 
-    #[test]
-    fn dedicated_inspection_rules_flag_duplicates_and_zero_length() {
-        let mut drawing = Drawing::empty(None, Units::Mm);
-        drawing.entities.push(Entity {
-            id: "entity-1".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] },
-        });
-        drawing.entities.push(Entity {
-            id: "entity-2".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] },
-        });
-        drawing.entities.push(Entity {
-            id: "entity-3".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Line { from: [1.0, 1.0], to: [1.0, 1.0] },
-        });
-        drawing.entities.push(Entity {
-            id: "entity-4".to_string(),
-            layer: DEFAULT_LAYER.to_string(),
-            kind: EntityKind::Polyline { points: vec![[2.0, 2.0], [2.0, 2.0]], closed: false },
-        });
-        drawing.next_entity = 5;
-        let report = inspection::run(&drawing, &["duplicate-entity", "zero-length"]).to_json();
-        let issues = report["issues"].as_array().expect("issues");
-        let codes = issues.iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        assert!(codes.contains(&"inspection/duplicate-entity"), "got {codes:?}");
-        assert_eq!(codes.iter().filter(|code| **code == "inspection/zero-length").count(), 2, "got {codes:?}");
-        assert!(codes.iter().all(|code| !code.starts_with("geometry/")), "only the requested selectors ran: {codes:?}");
-        let duplicate = issues.iter().find(|issue| issue["code"] == json!("inspection/duplicate-entity")).expect("duplicate issue");
-        assert_eq!(duplicate["objectId"], json!("entity-2"));
-        assert_eq!(duplicate["severity"], json!("warning"));
-        assert_eq!(report["passed"], json!(false), "a zero-length entity is an error");
-    }
+    let (auto, _) = exchange::dxf(&drawing);
+    assert!(auto.contains("\nELLIPSE\n"), "the default DXF target keeps analytic ellipses");
+    assert!(auto.contains("AC1015"), "the default target upgrades for a hatch");
+    close(handle).expect("close");
+}
 
-    #[test]
-    fn open_contour_check_flags_chains_that_do_not_close() {
-        let entity = |id: &str, kind| Entity { id: id.to_string(), layer: DEFAULT_LAYER.to_string(), kind };
-        let mut drawing = Drawing::empty(None, Units::Mm);
-        drawing.entities.push(entity("entity-1", EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] }));
-        drawing.entities.push(entity("entity-2", EntityKind::Line { from: [10.0, 0.0], to: [10.0, 10.0] }));
-        drawing.entities.push(entity("entity-3", EntityKind::Line { from: [10.0, 10.0], to: [0.0, 10.0] }));
-        drawing.entities.push(entity("entity-4", EntityKind::Line { from: [0.0, 10.0], to: [0.0, 0.0] }));
-        drawing
-            .entities
-            .push(entity("entity-5", EntityKind::Polyline { points: vec![[20.0, 0.0], [24.0, 0.0], [24.0, 4.0], [20.0, 4.0]], closed: true }));
-        let closed = inspection::run(&drawing, &["open-contour"]).to_json();
-        assert_eq!(closed["issues"], json!([]), "closed loops are not flagged");
-        assert_eq!(closed["passed"], json!(true));
+#[test]
+fn dxf_r12_omits_layer_flags_r12_cannot_write() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Hidden", Some("#ff0000")).expect("layer");
+    update_layer(handle, "Hidden", LayerUpdate { plottable: Some(false), lineweight: Some(0.5), ..LayerUpdate::default() })
+        .expect("update layer");
+    add_line(handle, "Hidden", [0.0, 0.0], [1.0, 0.0]).expect("line");
 
-        drawing.entities.push(entity("entity-6", EntityKind::Line { from: [40.0, 0.0], to: [45.0, 0.0] }));
-        drawing.entities.push(entity("entity-7", EntityKind::Line { from: [45.0, 0.0], to: [45.0, 5.0] }));
-        drawing.entities.push(entity("entity-8", EntityKind::Line { from: [45.0, 5.0], to: [40.0, 5.0] }));
-        drawing.entities.push(entity("entity-9", EntityKind::Line { from: [60.0, 0.0], to: [65.0, 0.0] }));
-        let report = inspection::run(&drawing, &["open-contour"]).to_json();
-        let issues = report["issues"].as_array().expect("issues");
-        let codes = issues.iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        assert_eq!(codes, ["inspection/open-contour"], "one open chain and one isolated line that is not a contour");
-        assert_eq!(issues[0]["objectId"], json!("entity-6"));
-        assert_eq!(issues[0]["severity"], json!("warning"));
-        assert_eq!(report["passed"], json!(true), "an open contour is a warning");
-    }
+    let (text, losses) = exchange::dxf_r12(&drawing_of(handle));
+    assert!(text.contains("0\nLAYER\n2\nHidden\n"), "{text}");
+    assert!(!text.contains("\n370\n"), "{text}");
+    assert!(!text.contains("\n290\n"), "{text}");
+    let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+    assert!(codes.contains(&"dxf/r12-lineweight"), "{codes:?}");
+    assert!(codes.contains(&"dxf/r12-plottable"), "{codes:?}");
+    close(handle).expect("close");
 
-    #[test]
-    fn dxf_export_import_round_trip_keeps_core_geometry() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
-        add_arc(handle, DEFAULT_LAYER, [1.0, 2.0], 3.0, 30.0, 120.0).expect("arc");
-        add_text(handle, DEFAULT_LAYER, [3.0, 4.0], 2.5, "Site").expect("text");
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("polyline");
-        let drawing = drawing_of(handle);
-        let (text, _) = exchange::dxf(&drawing);
-        for marker in ["$INSUNITS", "TABLES", "LAYER", "ENTITIES", "LINE", "CIRCLE", "ARC", "TEXT", "POLYLINE"] {
-            assert!(text.contains(marker), "export writes `{marker}`");
-        }
-
-        let (imported, _) = import::dxf(&text, None).expect("round trip import");
-        assert_eq!(imported.entities.len(), 5);
-        assert_eq!(imported.units, Units::Mm);
-        let mut kinds = imported.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
-        kinds.sort_unstable();
-        assert_eq!(kinds, vec!["arc", "circle", "line", "polyline", "text"]);
-        let line = imported.entities.iter().find_map(|entity| match &entity.kind {
-            EntityKind::Line { from, to } => Some((*from, *to)),
-            _ => None,
-        });
-        assert_eq!(line, Some(([0.0, 0.0], [10.0, 0.0])));
-        let circle = imported.entities.iter().find_map(|entity| match &entity.kind {
-            EntityKind::Circle { center, radius } => Some((*center, *radius)),
-            _ => None,
-        });
-        assert_eq!(circle, Some(([5.0, 5.0], 2.0)));
-        let arc = imported.entities.iter().find_map(|entity| match &entity.kind {
-            EntityKind::Arc { center, radius, start_angle, end_angle } => Some((*center, *radius, *start_angle, *end_angle)),
-            _ => None,
-        });
-        assert!(arc.is_some_and(|(center, radius, start_angle, end_angle)| {
-            center == [1.0, 2.0] && (radius - 3.0).abs() < 1e-9 && (start_angle - 30.0).abs() < 1e-9 && (end_angle - 120.0).abs() < 1e-9
-        }));
-        let text = imported.entities.iter().find_map(|entity| match &entity.kind {
-            EntityKind::Text { at, height, content } => Some((*at, *height, content.clone())),
-            _ => None,
-        });
-        assert_eq!(text, Some(([3.0, 4.0], 2.5, "Site".to_string())));
-        let polyline = imported.entities.iter().find_map(|entity| match &entity.kind {
-            EntityKind::Polyline { points, closed } => Some((points.clone(), *closed)),
-            _ => None,
-        });
-        assert_eq!(polyline, Some((vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true)));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn hatch_round_trips_through_dxf_with_its_pattern_name() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let hatch =
-            add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], Some("ANSI31".to_string())).expect("hatch");
-        assert_eq!(hatch["entity"]["kind"]["type"], json!("hatch"));
-        assert_eq!(hatch["entity"]["kind"]["pattern"], json!("ANSI31"));
-        let measured = measure(handle, None).expect("measure");
-        assert_eq!(measured["area"], json!(16.0));
-        assert_eq!(measured["length"], json!(16.0));
-
-        let (text, losses) = exchange::dxf(&drawing_of(handle));
-        assert!(text.contains("AC1015"), "a hatch needs a DXF version above R12");
-        assert!(text.contains("0\nHATCH\n"));
-        assert!(text.contains("2\nANSI31\n"));
-        assert!(losses.iter().any(|loss| loss.code == "dxf/hatch-pattern"));
-
-        let (imported, losses) = import::dxf(&text, None).expect("import the exported HATCH");
-        assert_eq!(imported.entities.len(), 1, "{losses:?}");
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
-        let EntityKind::Hatch { points, pattern } = &imported.entities[0].kind
-        else {
-            panic!("expected a hatch, got {:?}", imported.entities[0].kind);
-        };
-        assert_eq!(points.as_slice(), &[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]);
-        assert_eq!(pattern, "ANSI31");
-        assert!(losses.iter().any(|loss| loss.code == "dxf/hatch-boundary"));
-
-        assert!(exchange::svg(&drawing_of(handle)).contains("data-open-cad"));
-
-        let solid = create(CreateRequest::default()).expect("create solid drawing");
-        let solid_handle = handle_of(&solid);
-        add_hatch(solid_handle, DEFAULT_LAYER, vec![[10.0, 10.0], [12.0, 10.0], [11.0, 12.0]], None).expect("solid hatch");
-        let (text, losses) = exchange::dxf(&drawing_of(solid_handle));
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/hatch-pattern"), "{losses:?}");
-        assert!(text.contains("2\nSOLID\n"));
-        close(solid_handle).expect("close solid drawing");
-
-        assert_eq!(
-            add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0]], None).expect_err("too few points").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0], [f64::NAN, 2.0]], None).expect_err("non-finite").code,
-            "session/argument-invalid"
-        );
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn radial_and_ordinate_dimensions_round_trip_through_dxf() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let radial = add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 5.0, 0.0, 1.5, false, None).expect("radial");
-        assert_eq!(radial["entity"]["kind"]["type"], json!("radial_dimension"));
-        assert_eq!(radial["entity"]["kind"]["radius"], json!(5.0));
-        let diameter =
-            add_radial_dimension(handle, DIMENSION_LAYER, [10.0, 0.0], 3.0, 90.0, 0.0, true, Some("DIA 6".to_string())).expect("diameter");
-        assert_eq!(diameter["entity"]["kind"]["diameter"], json!(true));
-        let ordinate = add_ordinate_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [12.0, 4.0], OrdinateAxis::X, 2.0, None).expect("ordinate");
-        assert_eq!(ordinate["entity"]["kind"]["axis"], json!("x"));
-
-        let drawing = drawing_of(handle);
-        let kinds = drawing.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
-        assert_eq!(kinds, vec!["radial dimension", "radial dimension", "ordinate dimension"]);
-        let measured = measure(handle, None).expect("measure");
-        assert_eq!(measured["length"], json!(0.0), "annotations contribute no length");
-        assert_eq!(measured["area"], json!(0.0), "annotations contribute no area");
-
-        let (text, _) = exchange::dxf(&drawing);
-        assert!(text.contains("0\nDIMENSION\n"), "dimensions are written as DIMENSION records");
-        assert!(text.contains("70\n4\n"), "a radial dimension uses type 4");
-        assert!(text.contains("70\n3\n"), "a diameter dimension uses type 3");
-        assert!(text.contains("70\n70\n"), "an X ordinate sets the type-6 bit and the X-datum bit");
-
-        let (imported, losses) = import::dxf(&text, None).expect("import the exported DXF");
-        assert_eq!(imported.entities.len(), 3, "{losses:?}");
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
-        let EntityKind::RadialDimension { center, radius, angle, offset, diameter, text } = &imported.entities[0].kind
-        else {
-            panic!("expected a radial dimension, got {:?}", imported.entities[0].kind);
-        };
-        assert_eq!(*center, [0.0, 0.0]);
-        assert!((radius - 5.0).abs() < 1e-9);
-        assert!(angle.abs() < 1e-9);
-        assert!((offset - 1.5).abs() < 1e-9);
-        assert!(!diameter);
-        assert_eq!(text, &None);
-        let EntityKind::RadialDimension { center, angle, diameter, text, .. } = &imported.entities[1].kind
-        else {
-            panic!("expected a diameter dimension, got {:?}", imported.entities[1].kind);
-        };
-        assert!((center[0] - 10.0).abs() < 1e-9 && center[1].abs() < 1e-9);
-        assert!((angle - 90.0).abs() < 1e-9);
-        assert!(diameter);
-        assert_eq!(text.as_deref(), Some("DIA 6"));
-        let EntityKind::OrdinateDimension { origin, feature, axis, offset, .. } = &imported.entities[2].kind
-        else {
-            panic!("expected an ordinate dimension, got {:?}", imported.entities[2].kind);
-        };
-        assert_eq!(*origin, [0.0, 0.0]);
-        assert_eq!(*feature, [12.0, 4.0]);
-        assert_eq!(*axis, OrdinateAxis::X);
-        assert!((offset - 2.0).abs() < 1e-9);
-
-        transform(
-            handle,
-            TransformRequest {
-                sheet: None,
-                target: TransformTarget::Ids(vec!["entity-1".to_string()]),
-                operation: TransformOp::Rotate { angle: 90.0, cx: 0.0, cy: 0.0 },
-            },
-        )
-        .expect("rotate the radial dimension");
-        let drawing = drawing_of(handle);
-        assert!(matches!(
-            drawing.entities[0].kind,
-            EntityKind::RadialDimension { angle, .. } if (angle - 90.0).abs() < 1e-12
-        ));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn angular_dimensions_render_validate_and_round_trip() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let added = add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 5.0, None).expect("angular dimension");
-        assert_eq!(added["entity"]["kind"]["type"], json!("angular_dimension"));
-        assert_eq!(added["entity"]["kind"]["offset"], json!(5.0));
-        assert_eq!(
-            add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [20.0, 0.0], 5.0, None).expect_err("collinear rays").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 0.0, None).expect_err("zero radius").code,
-            "session/argument-invalid"
-        );
-
-        let drawing = drawing_of(handle);
-        assert_eq!(drawing.entities.len(), 1);
-        assert_eq!(kind_name(&drawing.entities[0].kind), "angular dimension");
-        let measured = measure(handle, None).expect("measure");
-        assert_eq!(measured["length"], json!(0.0));
-        assert_eq!(measured["area"], json!(0.0));
-
-        let svg = exchange::svg(&drawing);
-        assert!(svg.contains("90°"), "the SVG carries the measured angle: {svg}");
-        let (text, losses) = exchange::dxf(&drawing);
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
-        assert!(text.contains("70\n5\n"), "an angular dimension uses type 5");
-        let (imported, losses) = import::dxf(&text, None).expect("import the exported DXF");
-        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
-        let Some(EntityKind::AngularDimension { center, first, second, offset, .. }) =
-            imported.entities.iter().map(|entity| &entity.kind).find(|kind| matches!(kind, EntityKind::AngularDimension { .. }))
-        else {
-            panic!("expected an imported angular dimension, got {:?}", imported.entities);
-        };
-        assert_eq!(*center, [0.0, 0.0]);
-        assert_eq!(*first, [10.0, 0.0]);
-        assert_eq!(*second, [0.0, 10.0]);
-        assert!((offset - 5.0).abs() < 1e-9);
-
-        let dir = TempDir::new("angular-dimension");
-        let path = dir.path.join("angle.ocad");
-        save(handle, &path, true).expect("save");
-        close(handle).expect("close");
-        let opened = open(&path).expect("open");
-        let reopened = handle_of(&opened);
-        let drawing = drawing_of(reopened);
-        let EntityKind::AngularDimension { center, first, second, offset, .. } = &drawing.entities[0].kind
-        else {
-            panic!("expected an angular dimension, got {:?}", drawing.entities[0].kind);
-        };
-        assert_eq!(*center, [0.0, 0.0]);
-        assert_eq!(*first, [10.0, 0.0]);
-        assert_eq!(*second, [0.0, 10.0]);
-        assert!((offset - 5.0).abs() < 1e-9);
-        close(reopened).expect("close reopened");
-    }
-
-    #[test]
-    fn radial_and_ordinate_dimensions_validate_and_inspect() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        assert_eq!(
-            add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 0.0, 0.0, 0.0, false, None).expect_err("zero radius").code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 1.0, f64::NAN, 0.0, false, None).expect_err("nan angle").code,
-            "session/argument-invalid"
-        );
-
-        let mut drawing = Drawing::empty(None, Units::Mm);
-        drawing.entities.push(Entity {
-            id: "entity-1".to_string(),
-            layer: DIMENSION_LAYER.to_string(),
-            kind: EntityKind::RadialDimension {
-                center: [0.0, 0.0],
-                radius: 5.0,
-                angle: 0.0,
-                offset: 0.0,
-                diameter: false,
-                text: Some("  ".to_string()),
-            },
-        });
-        drawing.entities.push(Entity {
-            id: "entity-2".to_string(),
-            layer: DIMENSION_LAYER.to_string(),
-            kind: EntityKind::OrdinateDimension {
-                origin: [1.0, 2.0],
-                feature: [1.0, 2.0],
-                axis: OrdinateAxis::Y,
-                offset: 0.0,
-                text: Some("10 inch".to_string()),
-            },
-        });
-        let report = inspection::run(&drawing, &["dimensions", "units"]).to_json();
-        let codes =
-            report["issues"].as_array().expect("issues").iter().map(|issue| issue["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
-        for expected in ["dimensions/empty-text", "dimensions/degenerate", "units/dimension-label"] {
-            assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
-        }
-        assert_eq!(report["passed"], json!(false));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn add_point_stores_the_anchor_and_respects_layer_flags() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let point = add_point(handle, DEFAULT_LAYER, [5.0, 7.0]).expect("point");
-        assert_eq!(point["entity"]["id"], json!("entity-1"));
-        assert_eq!(point["revision"], json!(2));
-        assert_eq!(point["entity"]["kind"]["type"], json!("point"));
-        assert_eq!(point["entity"]["kind"]["at"], json!([5.0, 7.0]));
-        assert_eq!(add_point(handle, DEFAULT_LAYER, [f64::NAN, 0.0]).expect_err("non-finite").code, "session/argument-invalid");
-
-        add_layer(handle, "Structure", None).expect("layer");
-        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(add_point(handle, "Structure", [0.0, 0.0]).expect_err("locked").code, "drawing/layer-locked");
-        update_layer(handle, "Structure", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
-        assert_eq!(add_point(handle, "Structure", [0.0, 0.0]).expect_err("frozen").code, "drawing/layer-frozen");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn offset_copies_circles_and_arcs_with_a_new_radius() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
-        let grown = offset(handle, "entity-1", 2.0).expect("offset the circle outward");
-        assert_eq!(grown["entity"]["kind"]["type"], json!("circle"));
-        assert_eq!(grown["entity"]["kind"]["radius"], json!(12.0));
-        assert_eq!(grown["source"], json!("entity-1"));
-        assert_eq!(grown["revision"], json!(3));
-        let shrunk = offset(handle, "entity-1", -4.0).expect("offset the circle inward");
-        assert_eq!(shrunk["entity"]["kind"]["radius"], json!(6.0));
-        assert_eq!(offset(handle, "entity-1", -10.0).expect_err("collapsing radius").code, "session/argument-invalid");
-        assert_eq!(offset(handle, "entity-1", 0.0).expect_err("zero distance").code, "session/argument-invalid");
-
-        add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
-        let arc = offset(handle, "entity-4", 1.0).expect("offset the arc");
-        assert_eq!(arc["entity"]["kind"]["type"], json!("arc"));
-        assert_eq!(arc["entity"]["kind"]["radius"], json!(6.0));
-        assert_eq!(arc["entity"]["kind"]["start_angle"], json!(0.0));
-
-        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
-        assert_eq!(offset(handle, "entity-6", 1.0).expect_err("text").code, "object/unsupported");
-        assert_eq!(offset(handle, "entity-404", 1.0).expect_err("missing").code, "object/not-found");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn offset_polylines_follow_mitered_normals() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        let open = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("open polyline");
-        assert_eq!(open["entity"]["kind"]["type"], json!("polyline"));
-        let moved = offset(handle, "entity-1", 1.0).expect("offset the open polyline");
-        assert_eq!(moved["entity"]["kind"]["points"], json!([[0.0, 1.0], [9.0, 1.0], [9.0, 10.0]]));
-        assert_eq!(moved["entity"]["kind"]["closed"], json!(false));
-
-        let closed = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("closed polyline");
-        assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
-        let inset = offset(handle, "entity-3", 1.0).expect("offset the closed polyline inward");
-        assert_eq!(inset["entity"]["kind"]["points"], json!([[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn offset_lines_move_perpendicular_to_their_direction() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-        let left = offset(handle, "entity-1", 2.0).expect("offset the line left");
-        assert_eq!(left["entity"]["kind"]["type"], json!("line"));
-        assert_eq!(left["entity"]["kind"]["from"], json!([0.0, 2.0]));
-        assert_eq!(left["entity"]["kind"]["to"], json!([10.0, 2.0]));
-        assert_eq!(left["source"], json!("entity-1"));
-
-        let right = offset(handle, "entity-1", -3.0).expect("offset the line right");
-        assert_eq!(right["entity"]["kind"]["from"], json!([0.0, -3.0]));
-        assert_eq!(right["entity"]["kind"]["to"], json!([10.0, -3.0]));
-
-        let zero = add_line(handle, DEFAULT_LAYER, [5.0, 5.0], [5.0, 5.0]).expect("zero-length line");
-        let zero_id = zero["entity"]["id"].as_str().expect("id");
-        assert_eq!(offset(handle, zero_id, 1.0).expect_err("zero-length").code, "session/argument-invalid");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn offset_refuses_a_locked_layer() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
-        add_circle(handle, "Structure", [0.0, 0.0], 4.0).expect("circle");
-        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(offset(handle, "entity-1", 1.0).expect_err("locked").code, "drawing/layer-locked");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn fillet_trims_two_lines_and_adds_a_tangent_arc() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
-        add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [10.0, 10.0]).expect("second line");
-        let result = fillet(handle, "entity-1", "entity-2", 2.0).expect("fillet");
-        assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
-        assert_eq!(result["entity"]["kind"]["radius"], json!(2.0));
-        let center = result["entity"]["kind"]["center"].as_array().expect("center");
-        assert!((center[0].as_f64().expect("x") - 8.0).abs() < 1e-9);
-        assert!((center[1].as_f64().expect("y") - 2.0).abs() < 1e-9);
-        assert!((result["entity"]["kind"]["start_angle"].as_f64().expect("start") + 90.0).abs() < 1e-9);
-        assert!(result["entity"]["kind"]["end_angle"].as_f64().expect("end").abs() < 1e-9);
-        assert_eq!(result["sources"], json!(["entity-1", "entity-2"]));
-        assert_eq!(result["revision"], json!(4));
-
-        let drawing = drawing_of(handle);
-        let EntityKind::Line { from, to } = drawing.entities[0].kind
-        else {
-            panic!("expected a trimmed line");
-        };
-        assert_eq!((from, to), ([0.0, 0.0], [8.0, 0.0]));
-        let EntityKind::Line { from, to } = drawing.entities[1].kind
-        else {
-            panic!("expected a trimmed line");
-        };
-        assert!((from[0] - 10.0).abs() < 1e-9 && (from[1] - 2.0).abs() < 1e-9, "trimmed from {from:?}");
-        assert_eq!(to, [10.0, 10.0]);
-
-        add_line(handle, DEFAULT_LAYER, [0.0, 5.0], [10.0, 5.0]).expect("parallel first");
-        add_line(handle, DEFAULT_LAYER, [0.0, 8.0], [10.0, 8.0]).expect("parallel second");
-        assert_eq!(fillet(handle, "entity-4", "entity-5", 1.0).expect_err("parallel").code, "session/argument-invalid");
-        assert_eq!(fillet(handle, "entity-1", "entity-2", 11.0).expect_err("radius too large").code, "session/argument-invalid");
-        assert_eq!(fillet(handle, "entity-1", "entity-1", 1.0).expect_err("same line").code, "session/argument-invalid");
-        add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 3.0).expect("circle");
-        assert_eq!(fillet(handle, "entity-1", "entity-6", 1.0).expect_err("circle").code, "object/unsupported");
-        assert_eq!(fillet(handle, "entity-1", "entity-404", 1.0).expect_err("missing").code, "object/not-found");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn chamfer_trims_two_lines_and_adds_the_bevel() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
-        add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [10.0, 10.0]).expect("second line");
-        let result = chamfer(handle, "entity-1", "entity-2", 3.0, 4.0).expect("chamfer");
-        assert_eq!(result["entity"]["kind"]["type"], json!("line"));
-        assert_eq!(result["entity"]["kind"]["from"], json!([7.0, 0.0]));
-        assert_eq!(result["entity"]["kind"]["to"], json!([10.0, 4.0]));
-        assert_eq!(result["sources"], json!(["entity-1", "entity-2"]));
-
-        let drawing = drawing_of(handle);
-        let EntityKind::Line { from, to } = drawing.entities[0].kind
-        else {
-            panic!("expected a trimmed line");
-        };
-        assert_eq!((from, to), ([0.0, 0.0], [7.0, 0.0]));
-        let EntityKind::Line { from, to } = drawing.entities[1].kind
-        else {
-            panic!("expected a trimmed line");
-        };
-        assert_eq!((from, to), ([10.0, 4.0], [10.0, 10.0]));
-
-        assert_eq!(chamfer(handle, "entity-1", "entity-2", 8.0, 1.0).expect_err("distance too large").code, "session/argument-invalid");
-        assert_eq!(chamfer(handle, "entity-1", "entity-2", 0.0, 1.0).expect_err("zero distance").code, "session/argument-invalid");
-        add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
-        assert_eq!(chamfer(handle, "entity-1", "entity-4", 1.0, 1.0).expect_err("text").code, "object/unsupported");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn fillet_and_chamfer_refuse_a_locked_layer() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
-        add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("first line");
-        add_line(handle, "Structure", [10.0, 0.0], [10.0, 10.0]).expect("second line");
-        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
-        assert_eq!(fillet(handle, "entity-1", "entity-2", 1.0).expect_err("locked fillet").code, "drawing/layer-locked");
-        assert_eq!(chamfer(handle, "entity-1", "entity-2", 1.0, 1.0).expect_err("locked chamfer").code, "drawing/layer-locked");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn stats_group_length_and_area_by_layer() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Walls", Some("#ff0000")).expect("layer");
-        add_line(handle, "Walls", [0.0, 0.0], [3.0, 0.0]).expect("line");
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("square");
-        add_circle(handle, DEFAULT_LAYER, [10.0, 10.0], 2.0).expect("circle");
-        add_text(handle, DIMENSION_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
-
-        let summary = stats(handle).expect("stats");
-        assert_eq!(summary["units"], json!("mm"));
-        assert_eq!(summary["revision"], json!(6));
-        assert_eq!(summary["totals"]["entities"], json!(4));
-        let layers = summary["layers"].as_array().expect("layers");
-        let walls = layers.iter().find(|layer| layer["id"] == json!("Walls")).expect("walls layer");
-        assert_eq!(walls["entityCount"], json!(1));
-        assert_eq!(walls["length"], json!(3.0));
-        assert_eq!(walls["area"], json!(0.0));
-        let default = layers.iter().find(|layer| layer["id"] == json!(DEFAULT_LAYER)).expect("default layer");
-        assert_eq!(default["entityCount"], json!(2));
-        assert_eq!(default["length"], json!(16.0), "square perimeter only");
-        assert!((default["area"].as_f64().expect("area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9, "square and circle area");
-        let dimensions = layers.iter().find(|layer| layer["id"] == json!(DIMENSION_LAYER)).expect("dimension layer");
-        assert_eq!(dimensions["entityCount"], json!(1));
-        assert_eq!(dimensions["length"], json!(0.0));
-        assert!((summary["totals"]["area"].as_f64().expect("total area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9);
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn empty_layer_check_is_opt_in_and_warns_per_layer() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
-
-        let default_report = inspect(handle, None).expect("default inspect");
-        let default_codes = default_report["issues"]
-            .as_array()
-            .expect("issues")
-            .iter()
-            .map(|issue| issue["code"].as_str().unwrap_or_default())
-            .collect::<Vec<_>>();
-        assert!(!default_codes.contains(&"layers/empty"), "{default_codes:?}");
-
-        let report = inspect(handle, Some(vec!["empty-layer".to_string()])).expect("empty-layer inspect");
-        assert_eq!(report["passed"], json!(true), "empty layers are warnings");
-        let issues = report["issues"].as_array().expect("issues");
-        assert_eq!(issues.len(), 1, "{issues:?}");
-        assert_eq!(issues[0]["code"], json!("layers/empty"));
-        assert_eq!(issues[0]["layerId"], json!(DIMENSION_LAYER));
-        assert_eq!(issues[0]["recoverable"], json!(true));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn reorder_entity_changes_paint_order() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first line");
-        add_line(handle, DEFAULT_LAYER, [2.0, 0.0], [12.0, 0.0]).expect("second line");
-        add_line(handle, DEFAULT_LAYER, [4.0, 0.0], [14.0, 0.0]).expect("third line");
-
-        let moved = reorder_entity(handle, "entity-1", DrawOrderAction::ToFront).expect("to front");
-        assert_eq!(moved["order"], json!(["entity-2", "entity-3", "entity-1"]));
-        assert_eq!(drawing_of(handle).ordered_entity_ids(), vec!["entity-2", "entity-3", "entity-1"]);
-
-        let moved = reorder_entity(handle, "entity-3", DrawOrderAction::ToBack).expect("to back");
-        assert_eq!(moved["order"], json!(["entity-3", "entity-2", "entity-1"]));
-        let moved = reorder_entity(handle, "entity-3", DrawOrderAction::Forward).expect("forward");
-        assert_eq!(moved["order"], json!(["entity-2", "entity-3", "entity-1"]));
-        let moved = reorder_entity(handle, "entity-3", DrawOrderAction::Backward).expect("backward");
-        assert_eq!(moved["order"], json!(["entity-3", "entity-2", "entity-1"]));
-
-        let svg = exchange::svg(&drawing_of(handle));
-        let first = svg.find("<line").expect("first line element");
-        let second = first + 1 + svg[first + 1..].find("<line").expect("second line element");
-        let start_x = |index: usize| {
-            svg[index..]
-                .split("x1=\"")
-                .nth(1)
-                .and_then(|rest| rest.split('"').next())
-                .and_then(|value| value.parse::<f64>().ok())
-                .expect("line start x")
-        };
-        assert!(start_x(first) > start_x(second), "the front entity is painted last: {svg}");
-
-        delete_entity(handle, "entity-3").expect("delete");
-        assert_eq!(drawing_of(handle).ordered_entity_ids(), vec!["entity-2", "entity-1"]);
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn reorder_entity_rejects_an_unknown_entity() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
-
-        assert_eq!(reorder_entity(handle, "entity-404", DrawOrderAction::ToFront).expect_err("unknown entity").code, "object/not-found");
-        assert!(DrawOrderAction::parse("sideways").is_none());
-        assert_eq!(DrawOrderAction::parse(" Forward "), Some(DrawOrderAction::Forward));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn layouts_create_update_list_and_delete() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]], true).expect("square");
-
-        let created_layout =
-            create_layout(handle, LayoutRequest { name: "Sheet".to_string(), width: Some(200.0), height: Some(150.0), scale: None })
-                .expect("create layout");
-        assert_eq!(created_layout["drawing"]["layouts"], json!(1));
-        assert_eq!(created_layout["layout"]["name"], json!("Sheet"));
-        assert_eq!(created_layout["layout"]["width"], json!(200.0));
-        assert_eq!(created_layout["layout"]["view"]["center"], json!([50.0, 25.0]));
-        assert_eq!(created_layout["layout"]["view"]["drawingWidth"], json!(100.0));
-        assert_eq!(created_layout["layout"]["view"]["visibleWidth"], json!(200.0));
-        assert_eq!(created_layout["layout"]["view"]["fits"], json!(true));
-        assert_eq!(created_layout["layout"]["view"]["fitScale"], json!(2.0));
-
-        let updated = update_layout(handle, "Sheet", LayoutUpdate { width: Some(400.0), scale: Some(0.5), ..LayoutUpdate::default() })
-            .expect("update layout");
-        assert_eq!(updated["layout"]["width"], json!(400.0));
-        assert_eq!(updated["layout"]["view"]["visibleWidth"], json!(800.0));
-        assert_eq!(updated["layout"]["view"]["visibleHeight"], json!(300.0));
-        assert_eq!(updated["layout"]["view"]["fitScale"], json!(3.0));
-
-        let renamed =
-            update_layout(handle, "Sheet", LayoutUpdate { name: Some("Site".to_string()), ..LayoutUpdate::default() }).expect("rename");
-        assert_eq!(renamed["layout"]["id"], json!("Site"));
-        let listed = list_layouts(handle).expect("list");
-        assert_eq!(listed["layouts"].as_array().expect("layouts").len(), 1);
-        assert_eq!(listed["layouts"][0]["name"], json!("Site"));
-
-        let deleted = delete_layout(handle, "Site").expect("delete");
-        assert_eq!(deleted["deleted"], json!("Site"));
-        assert_eq!(list_layouts(handle).expect("list after delete")["layouts"], json!([]));
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn layouts_reject_duplicates_invalid_sizes_and_unknown_ids() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        create_layout(handle, LayoutRequest { name: "Sheet".to_string(), ..LayoutRequest::default() }).expect("layout");
-        assert_eq!(
-            create_layout(handle, LayoutRequest { name: "sheet".to_string(), ..LayoutRequest::default() }).expect_err("duplicate").code,
-            "drawing/layout-exists"
-        );
-        assert_eq!(
-            create_layout(handle, LayoutRequest { name: "Zero".to_string(), scale: Some(0.0), ..LayoutRequest::default() })
-                .expect_err("zero scale")
-                .code,
-            "session/argument-invalid"
-        );
-        assert_eq!(
-            update_layout(handle, "missing", LayoutUpdate { scale: Some(2.0), ..LayoutUpdate::default() }).expect_err("unknown").code,
-            "object/not-found"
-        );
-        assert_eq!(update_layout(handle, "Sheet", LayoutUpdate::default()).expect_err("empty update").code, "session/argument-invalid");
-        assert_eq!(delete_layout(handle, "missing").expect_err("unknown delete").code, "object/not-found");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn dxf_r12_export_simplifies_entities_r12_cannot_carry() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_ellipse(handle, DEFAULT_LAYER, [20.0, 20.0], 10.0, 5.0, 0.0, 0.0, 360.0).expect("ellipse");
-        add_hatch(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], None).expect("hatch");
-        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 5.0]).expect("line");
-
-        let drawing = drawing_of(handle);
-        let (text, losses) = exchange::dxf_r12(&drawing);
-        assert!(text.contains("$ACADVER\n1\nAC1009\n"), "{text}");
-        assert!(!text.contains("$INSUNITS"), "{text}");
-        assert!(!text.contains("\nELLIPSE\n"), "{text}");
-        assert!(!text.contains("\nHATCH\n"), "{text}");
-        assert!(text.contains("\nPOLYLINE\n"), "{text}");
-        let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
-        for code in ["dxf/r12-units", "dxf/r12-ellipse", "dxf/r12-hatch"] {
-            assert!(codes.contains(&code), "{codes:?}");
-        }
-
-        let (auto, _) = exchange::dxf(&drawing);
-        assert!(auto.contains("\nELLIPSE\n"), "the default DXF target keeps analytic ellipses");
-        assert!(auto.contains("AC1015"), "the default target upgrades for a hatch");
-        close(handle).expect("close");
-    }
-
-    #[test]
-    fn dxf_r12_omits_layer_flags_r12_cannot_write() {
-        let created = create(CreateRequest::default()).expect("create");
-        let handle = handle_of(&created);
-        add_layer(handle, "Hidden", Some("#ff0000")).expect("layer");
-        update_layer(handle, "Hidden", LayerUpdate { plottable: Some(false), lineweight: Some(0.5), ..LayerUpdate::default() })
-            .expect("update layer");
-        add_line(handle, "Hidden", [0.0, 0.0], [1.0, 0.0]).expect("line");
-
-        let (text, losses) = exchange::dxf_r12(&drawing_of(handle));
-        assert!(text.contains("0\nLAYER\n2\nHidden\n"), "{text}");
-        assert!(!text.contains("\n370\n"), "{text}");
-        assert!(!text.contains("\n290\n"), "{text}");
-        let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
-        assert!(codes.contains(&"dxf/r12-lineweight"), "{codes:?}");
-        assert!(codes.contains(&"dxf/r12-plottable"), "{codes:?}");
-        close(handle).expect("close");
-
-        let empty = create(CreateRequest::default()).expect("empty create");
-        let empty_handle = handle_of(&empty);
-        let (text, losses) = exchange::dxf_r12(&drawing_of(empty_handle));
-        assert!(text.contains("$ACADVER\n1\nAC1009\n"), "{text}");
-        let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
-        assert!(codes.contains(&"dxf/r12-units"), "{codes:?}");
-        assert!(!codes.contains(&"dxf/r12-lineweight"), "{codes:?}");
-        assert!(!codes.contains(&"dxf/r12-plottable"), "{codes:?}");
-        close(empty_handle).expect("close");
-    }
+    let empty = create(CreateRequest::default()).expect("empty create");
+    let empty_handle = handle_of(&empty);
+    let (text, losses) = exchange::dxf_r12(&drawing_of(empty_handle));
+    assert!(text.contains("$ACADVER\n1\nAC1009\n"), "{text}");
+    let codes = losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+    assert!(codes.contains(&"dxf/r12-units"), "{codes:?}");
+    assert!(!codes.contains(&"dxf/r12-lineweight"), "{codes:?}");
+    assert!(!codes.contains(&"dxf/r12-plottable"), "{codes:?}");
+    close(empty_handle).expect("close");
+}

@@ -201,6 +201,7 @@ fn hsv_hex(hue: f64, saturation: f64, value: f64) -> String {
 struct LayerEntry {
     name: String,
     color: Option<i64>,
+    true_color: Option<i64>,
     linetype: Option<String>,
     lineweight: Option<i64>,
     frozen: bool,
@@ -216,6 +217,7 @@ fn parse_layer(block: &[Pair]) -> Option<LayerEntry> {
     Some(LayerEntry {
         name,
         color: integer(block, 62),
+        true_color: integer(block, 420),
         linetype: field(block, 6).map(str::trim).filter(|name| !name.is_empty()).map(str::to_string),
         lineweight: integer(block, 370),
         frozen: flags & 1 != 0,
@@ -776,15 +778,18 @@ impl Reader {
     }
 
     fn apply_layer_table_entry(&mut self, entry: LayerEntry) {
-        let color = match entry.color {
-            Some(index) => match aci_color(index) {
-                Some(value) => value,
-                None => {
-                    self.unsupported_colors += 1;
-                    "#d0d7de".to_string()
-                }
+        let color = match entry.true_color {
+            Some(value) => format!("#{:06x}", (value as u64) & 0x00ff_ffff),
+            None => match entry.color {
+                Some(index) => match aci_color(index) {
+                    Some(value) => value,
+                    None => {
+                        self.unsupported_colors += 1;
+                        "#d0d7de".to_string()
+                    }
+                },
+                None => "#d0d7de".to_string(),
             },
-            None => "#d0d7de".to_string(),
         };
         let linetype = entry.linetype.unwrap_or_else(|| CONTINUOUS_LINETYPE.to_string());
         if self.drawing.linetypes.iter().all(|existing| existing.id != linetype) {
