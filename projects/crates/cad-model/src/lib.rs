@@ -1060,29 +1060,41 @@ pub struct PolylineUpdate {
     pub insert_point: Option<[f64; 2]>,
     /// Zero-based index of the vertex to remove.
     pub remove_at: Option<usize>,
+    /// Zero-based index of the vertex to move.
+    pub move_at: Option<usize>,
+    /// New position of the moved vertex, required together with `move_at`.
+    pub move_to: Option<[f64; 2]>,
 }
 
 /// Edits the vertices or the closed flag of one polyline.
 ///
 /// The caller passes a replacement `points` list, an `insert_at`/`insert_point`
-/// pair, a `remove_at` index or a new `closed` flag. Replacing the list cannot
-/// be combined with a single-vertex edit. A polyline always keeps at least two
-/// vertices, and an index outside the current list reports
-/// `session/argument-invalid`. A non-polyline reports `object/unsupported` and
-/// a locked or frozen layer reports `drawing/layer-locked` or
-/// `drawing/layer-frozen`. The response carries `{ revision, drawing, entity }`.
+/// pair, a `remove_at` index, a `move_at`/`move_to` pair or a new `closed` flag.
+/// Replacing the list cannot be combined with a single-vertex edit and one call
+/// edits at most one vertex. A polyline always keeps at least two vertices, and
+/// an index outside the current list reports `session/argument-invalid`. A
+/// non-polyline reports `object/unsupported` and a locked or frozen layer
+/// reports `drawing/layer-locked` or `drawing/layer-frozen`. The response
+/// carries `{ revision, drawing, entity }`.
 pub fn update_polyline(handle: u64, entity: &str, update: PolylineUpdate) -> Result<Value, ServiceError> {
     let replacing = update.points.is_some();
     let inserting = update.insert_at.is_some();
     let removing = update.remove_at.is_some();
-    if !replacing && update.closed.is_none() && !inserting && !removing {
-        return Err(argument("pass at least one of `points`, `closed`, `insertAt` or `removeAt`"));
+    let moving = update.move_at.is_some();
+    if !replacing && update.closed.is_none() && !inserting && !removing && !moving {
+        return Err(argument("pass at least one of `points`, `closed`, `insertAt`, `removeAt` or `moveAt`"));
     }
-    if replacing && (inserting || removing) {
+    if replacing && (inserting || removing || moving) {
         return Err(argument("replace the vertex list or edit one vertex, not both"));
+    }
+    if [inserting, removing, moving].into_iter().filter(|edit| *edit).count() > 1 {
+        return Err(argument("insert, remove and move edit one vertex at a time"));
     }
     if inserting != update.insert_point.is_some() {
         return Err(argument("`insertAt` and `insertPoint` must be passed together"));
+    }
+    if moving != update.move_to.is_some() {
+        return Err(argument("`moveAt` and `moveTo` must be passed together"));
     }
     if let Some(points) = &update.points {
         require_finite(points, "points")?;
@@ -1092,6 +1104,9 @@ pub fn update_polyline(handle: u64, entity: &str, update: PolylineUpdate) -> Res
     }
     if let Some(point) = update.insert_point {
         require_finite(&[point], "insertPoint")?;
+    }
+    if let Some(point) = update.move_to {
+        require_finite(&[point], "moveTo")?;
     }
     store::edit(handle, |drawing| {
         let index = entity_index(drawing, entity)?;
@@ -1129,6 +1144,12 @@ pub fn update_polyline(handle: u64, entity: &str, update: PolylineUpdate) -> Res
                 return Err(argument("a polyline needs at least 2 vertices"));
             }
             points.remove(at);
+        }
+        if let Some(at) = update.move_at {
+            if at >= points.len() {
+                return Err(argument(format!("`moveAt` {at} is outside the polyline's {} vertices", points.len())));
+            }
+            points[at] = update.move_to.expect("the moved point is validated above");
         }
         drawing.revision += 1;
         Ok(())
@@ -5530,6 +5551,12 @@ mod tests {
             update_polyline(handle, "entity-1", PolylineUpdate { remove_at: Some(1), ..PolylineUpdate::default() }).expect("remove a vertex");
         assert_eq!(removed["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
 
+        let moved =
+            update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(1), move_to: Some([12.0, 3.0]), ..PolylineUpdate::default() })
+                .expect("move a vertex");
+        assert_eq!(moved["entity"]["kind"]["points"][1], json!([12.0, 3.0]));
+        assert_eq!(moved["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
+
         let replaced = update_polyline(
             handle,
             "entity-1",
@@ -5565,6 +5592,28 @@ mod tests {
                 PolylineUpdate { insert_at: Some(99), insert_point: Some([0.0, 0.0]), ..PolylineUpdate::default() }
             )
             .expect_err("index beyond the list")
+            .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(0), ..PolylineUpdate::default() })
+                .expect_err("move without a point")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(handle, "entity-1", PolylineUpdate { move_at: Some(99), move_to: Some([1.0, 1.0]), ..PolylineUpdate::default() })
+                .expect_err("move index beyond the list")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(
+                handle,
+                "entity-1",
+                PolylineUpdate { remove_at: Some(0), move_at: Some(0), move_to: Some([1.0, 1.0]), ..PolylineUpdate::default() }
+            )
+            .expect_err("one vertex edit per call")
             .code,
             "session/argument-invalid"
         );

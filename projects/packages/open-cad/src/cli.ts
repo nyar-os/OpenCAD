@@ -1394,6 +1394,37 @@ polyline
         }
     });
 
+polyline
+    .command('move-vertex', 'cli.cmd.polyline-move')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--index <number>', 'cli.opt.vertex-index')
+    .option('--at <x,y>', 'cli.opt.vertex-move-at')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const index = number(options, 'index');
+        const at = point(options, 'at');
+        if (id === undefined || index === undefined || !Number.isInteger(index) || index < 0 || at === undefined) {
+            ctx.fail('open-cad.cli.polyline-move-required', {
+                message: '`--id <entity>`, `--index <number>` and `--at x,y` are required, with a non-negative integer index',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updatePolyline({ entityId: id, moveAt: index, moveTo: at }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 cli
     .command('transform', 'cli.cmd.transform')
     .option('--ids <list>', 'cli.opt.ids')

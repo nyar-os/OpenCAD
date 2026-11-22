@@ -832,6 +832,10 @@ test('polyline vertices and the closed flag are editable', { skip: withAddon }, 
         if (removed.kind.type === 'polyline') {
             assert.deepEqual(removed.kind.points, [[0, 0], [10, 0], [10, 10]]);
         }
+        const moved = document.updatePolyline({ entityId: polyline.id, moveAt: 1, moveTo: [12, 3] });
+        if (moved.kind.type === 'polyline') {
+            assert.deepEqual(moved.kind.points, [[0, 0], [12, 3], [10, 10]]);
+        }
 
         const replaced = document.updatePolyline({
             entityId: polyline.id,

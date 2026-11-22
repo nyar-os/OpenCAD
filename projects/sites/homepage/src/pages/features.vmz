@@ -85,7 +85,9 @@
                     <p>
                         Lines, circles, polylines, text and linear dimensions can
                         be added, listed, moved, updated and deleted through the
-                        SDK, the CLI and the native JSON-RPC surface. Geometry on
+                        SDK, the CLI and the native JSON-RPC surface. Polyline
+                        vertices can be replaced, inserted, removed and moved.
+                        Geometry on
                         a locked layer refuses with <code>drawing/layer-locked</code>.
                     </p>
                 </article>

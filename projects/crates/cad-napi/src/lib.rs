@@ -1241,8 +1241,14 @@ fn call_update_polyline(handle: u64, request: &Value) -> std::result::Result<Val
     let insert_at = request_index(request, "insertAt")?;
     let insert_point = if request.get("insertPoint").is_some() { Some(request_point(request, "insertPoint")?) } else { None };
     let remove_at = request_index(request, "removeAt")?;
-    open_cad_drawing::update_polyline(handle, &entity, open_cad_drawing::PolylineUpdate { points, closed, insert_at, insert_point, remove_at })
-        .map_err(service_failure)
+    let move_at = request_index(request, "moveAt")?;
+    let move_to = if request.get("moveTo").is_some() { Some(request_point(request, "moveTo")?) } else { None };
+    open_cad_drawing::update_polyline(
+        handle,
+        &entity,
+        open_cad_drawing::PolylineUpdate { points, closed, insert_at, insert_point, remove_at, move_at, move_to },
+    )
+    .map_err(service_failure)
 }
 
 fn call_update_arc(handle: u64, request: &Value) -> std::result::Result<Value, String> {

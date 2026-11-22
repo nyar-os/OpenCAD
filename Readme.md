@@ -14,6 +14,8 @@ and reopened; lines, circles, arcs, ellipses, polylines, text, linear
 dimensions, radial/diameter dimensions, ordinate dimensions, angular dimensions and hatches are real
 entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode, offset, fillet, chamfer and measure are supported;
+a polyline's vertices can be replaced, inserted, removed and moved and its
+closed flag toggled in one history step;
 a selected entity or set of entities can be measured for its path length and
 enclosed area; two points can be measured for distance and three points for the
 angle at the middle vertex; each handle

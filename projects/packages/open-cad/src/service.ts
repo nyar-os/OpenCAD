@@ -756,6 +756,8 @@ export function updatePolyline(handle: number, request: UpdatePolylineRequest): 
                 insertAt: request.insertAt,
                 insertPoint: request.insertPoint,
                 removeAt: request.removeAt,
+                moveAt: request.moveAt,
+                moveTo: request.moveTo,
             }),
         ),
     );

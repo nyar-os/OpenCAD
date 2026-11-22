@@ -1087,9 +1087,9 @@ export interface UpdateEntityRequest {
  * Arguments of `updatePolyline()`.
  *
  * Pass a replacement `points` list, one `insertAt`/`insertPoint` pair, one
- * `removeAt` index or a new `closed` flag. Replacing the list cannot be
- * combined with a single-vertex edit; a polyline always keeps at least two
- * vertices.
+ * `removeAt` index, one `moveAt`/`moveTo` pair or a new `closed` flag.
+ * Replacing the list cannot be combined with a single-vertex edit and one call
+ * edits at most one vertex; a polyline always keeps at least two vertices.
  */
 export interface UpdatePolylineRequest {
     readonly entityId: EntityId;
@@ -1103,6 +1103,10 @@ export interface UpdatePolylineRequest {
     readonly insertPoint?: Point;
     /** Zero-based index of the vertex to remove. */
     readonly removeAt?: number;
+    /** Zero-based index of the vertex to move. */
+    readonly moveAt?: number;
+    /** New vertex position; required together with `moveAt`. */
+    readonly moveTo?: Point;
 }
 
 /**
