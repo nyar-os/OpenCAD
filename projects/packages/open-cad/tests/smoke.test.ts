@@ -451,6 +451,48 @@ test('snap reports endpoints, midpoints, centres and intersections', { skip: wit
     }
 });
 
+test('snap covers quadrant, nearest and curved intersections', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Snap modes' });
+        const circle = document.addCircle({ layer: '0', center: [0, 0], radius: 2 });
+        const arc = document.addArc({ layer: '0', center: [100, 0], radius: 10, startAngle: 0, endAngle: 90 });
+        const line = document.addLine({ layer: '0', from: [-5, 0], to: [5, 0] });
+        const outer = document.addCircle({ layer: '0', center: [0, 0], radius: 5 });
+        const second = document.addCircle({ layer: '0', center: [6, 0], radius: 5 });
+        const hasPoint = (result: { points: readonly { point: readonly [number, number] }[] }, expected: readonly [number, number]) =>
+            result.points.some((entry) => Math.abs(entry.point[0] - expected[0]) < 1e-9 && Math.abs(entry.point[1] - expected[1]) < 1e-9);
+
+        const quadrants = document.snap({ modes: ['quadrant'], ids: [circle.id, arc.id] });
+        assert.equal(quadrants.count, 6);
+        assert.ok(hasPoint(quadrants, [100, 10]));
+        assert.ok(!hasPoint(quadrants, [100, -10]), 'an arc must not report a quadrant outside its sweep');
+
+        const nearest = document.snap({ modes: ['nearest'], point: [20, 0], ids: [circle.id] });
+        assert.equal(nearest.count, 1);
+        assert.equal(nearest.points[0]?.kind, 'nearest');
+        assert.ok(hasPoint(nearest, [2, 0]));
+
+        const lineCircle = document.snap({ modes: ['intersection'], ids: [line.id, circle.id] });
+        assert.equal(lineCircle.count, 2);
+        assert.ok(hasPoint(lineCircle, [-2, 0]));
+        assert.ok(hasPoint(lineCircle, [2, 0]));
+
+        const circleCircle = document.snap({ modes: ['intersection'], ids: [outer.id, second.id] });
+        assert.equal(circleCircle.count, 2);
+        assert.ok(hasPoint(circleCircle, [3, 4]));
+        assert.ok(hasPoint(circleCircle, [3, -4]));
+
+        assert.throws(
+            () => document.snap({ modes: ['nearest'] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('unit conversion scales lengths and round trips', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

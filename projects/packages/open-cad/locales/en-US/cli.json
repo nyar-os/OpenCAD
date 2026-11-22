@@ -129,7 +129,7 @@
             "box": "Selection rectangle as x1,y1,x2,y2",
             "crossing": "Select entities that cross or touch the box instead of only fully contained ones",
             "select-layer": "Restrict the selection to one layer id",
-            "snap-modes": "Comma-separated snap modes: endpoint, midpoint, center, intersection (defaults to all)",
+            "snap-modes": "Comma-separated snap modes: endpoint, midpoint, center, quadrant, nearest, intersection (defaults to endpoint, midpoint, center, intersection)",
             "ucs-origin": "UCS origin in world coordinates as x,y; defaults to 0,0",
             "ucs-rotation": "Angle of the UCS X axis from the world X axis in degrees; defaults to 0",
             "ucs-direction": "Conversion direction: to-world converts UCS values into world coordinates, to-ucs converts world coordinates into the UCS",

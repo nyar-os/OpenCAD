@@ -4298,7 +4298,13 @@ fn on_segment(a: [f64; 2], b: [f64; 2], point: [f64; 2]) -> bool {
 }
 
 /// Snap modes [`snap_points`] accepts.
-pub const SNAP_MODES: &[&str] = &["endpoint", "midpoint", "center", "intersection"];
+pub const SNAP_MODES: &[&str] = &["endpoint", "midpoint", "center", "quadrant", "nearest", "intersection"];
+
+/// Modes an empty request selects.
+///
+/// `quadrant` and `nearest` are opt-in, so a query that names no modes keeps the
+/// candidates it reported before those modes existed.
+pub const SNAP_DEFAULT_MODES: &[&str] = &["endpoint", "midpoint", "center", "intersection"];
 
 /// Most snap candidates one query returns.
 const SNAP_LIMIT: usize = 1000;
@@ -4370,11 +4376,148 @@ fn edge_midpoint(from: [f64; 2], to: [f64; 2]) -> [f64; 2] {
     [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]
 }
 
-/// Collects the endpoints, midpoints and centres one entity contributes.
-fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandidate>) {
+/// Whether `angle` lies on the counter-clockwise sweep that starts at
+/// `start_angle` and spans `sweep` degrees.
+fn angle_within_sweep(start_angle: f64, sweep: f64, angle: f64) -> bool {
+    sweep >= 360.0 - 1e-9 || normalize_angle(angle - start_angle) <= sweep + 1e-9
+}
+
+/// Closest point on the bounded segment `from -> to`.
+fn segment_nearest(from: [f64; 2], to: [f64; 2], probe: [f64; 2]) -> [f64; 2] {
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    let length_squared = delta[0] * delta[0] + delta[1] * delta[1];
+    if length_squared < 1e-24 {
+        return from;
+    }
+    let offset = [probe[0] - from[0], probe[1] - from[1]];
+    let parameter = ((offset[0] * delta[0] + offset[1] * delta[1]) / length_squared).clamp(0.0, 1.0);
+    [from[0] + delta[0] * parameter, from[1] + delta[1] * parameter]
+}
+
+/// Closest point on a point chain, one segment at a time.
+fn polyline_nearest(points: &[[f64; 2]], closed: bool, probe: [f64; 2]) -> Option<[f64; 2]> {
+    let mut edges = points.windows(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
+    if closed && points.len() > 2 {
+        edges.push((points[points.len() - 1], points[0]));
+    }
+    edges
+        .into_iter()
+        .map(|(from, to)| segment_nearest(from, to, probe))
+        .min_by(|left, right| point_distance(*left, probe).total_cmp(&point_distance(*right, probe)))
+}
+
+/// Closest point on a full circle; a probe at the centre resolves to the
+/// quadrant on the positive X axis so the result stays deterministic.
+fn circle_nearest(center: [f64; 2], radius: f64, probe: [f64; 2]) -> [f64; 2] {
+    let offset = [probe[0] - center[0], probe[1] - center[1]];
+    let length = offset[0].hypot(offset[1]);
+    if length < 1e-12 {
+        return [center[0] + radius, center[1]];
+    }
+    [center[0] + offset[0] / length * radius, center[1] + offset[1] / length * radius]
+}
+
+/// Closest point on an arc, clamped to its start and end angles.
+fn arc_nearest(center: [f64; 2], radius: f64, start_angle: f64, sweep: f64, probe: [f64; 2]) -> [f64; 2] {
+    let offset = [probe[0] - center[0], probe[1] - center[1]];
+    let length = offset[0].hypot(offset[1]);
+    if length < 1e-12 {
+        return arc_point(center, radius, start_angle);
+    }
+    let probe_angle = offset[1].atan2(offset[0]).to_degrees();
+    if angle_within_sweep(start_angle, sweep, probe_angle) {
+        return arc_point(center, radius, probe_angle);
+    }
+    let start = arc_point(center, radius, start_angle);
+    let end = arc_point(center, radius, start_angle + sweep);
+    let angle = if point_distance(start, probe) <= point_distance(end, probe) { start_angle } else { start_angle + sweep };
+    arc_point(center, radius, angle)
+}
+
+/// Circle geometry of an entity, skipping a degenerate radius.
+fn circle_geometry(kind: &EntityKind) -> Option<([f64; 2], f64)> {
+    match kind {
+        EntityKind::Circle { center, radius } if radius.abs() > 1e-12 => Some((*center, radius.abs())),
+        _ => None,
+    }
+}
+
+/// Points where a bounded segment meets a full circle; a tangent gives none.
+fn segment_circle_intersections(from: [f64; 2], to: [f64; 2], center: [f64; 2], radius: f64) -> Vec<[f64; 2]> {
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    let offset = [from[0] - center[0], from[1] - center[1]];
+    let quadratic = delta[0] * delta[0] + delta[1] * delta[1];
+    if quadratic < 1e-24 {
+        return Vec::new();
+    }
+    let linear = 2.0 * (offset[0] * delta[0] + offset[1] * delta[1]);
+    let constant = offset[0] * offset[0] + offset[1] * offset[1] - radius * radius;
+    let discriminant = linear * linear - 4.0 * quadratic * constant;
+    if discriminant <= 1e-9 * quadratic * radius * radius {
+        return Vec::new();
+    }
+    let root = discriminant.sqrt();
+    let mut points = Vec::new();
+    for parameter in [(-linear - root) / (2.0 * quadratic), (-linear + root) / (2.0 * quadratic)] {
+        if within_segment(parameter) {
+            points.push([from[0] + delta[0] * parameter, from[1] + delta[1] * parameter]);
+        }
+    }
+    points
+}
+
+/// Points where two full circles meet; tangency, coincidence and separation
+/// give none.
+fn circle_circle_intersections(first: ([f64; 2], f64), second: ([f64; 2], f64)) -> Vec<[f64; 2]> {
+    let ((first_center, first_radius), (second_center, second_radius)) = (first, second);
+    let delta = [second_center[0] - first_center[0], second_center[1] - first_center[1]];
+    let distance = delta[0].hypot(delta[1]);
+    let scale = (first_radius + second_radius).max(1e-12);
+    if distance < 1e-12
+        || distance <= (first_radius - second_radius).abs() + 1e-9 * scale
+        || distance >= first_radius + second_radius - 1e-9 * scale
+    {
+        return Vec::new();
+    }
+    let along = (first_radius * first_radius - second_radius * second_radius + distance * distance) / (2.0 * distance);
+    let height_squared = first_radius * first_radius - along * along;
+    if height_squared <= 0.0 {
+        return Vec::new();
+    }
+    let height = height_squared.sqrt();
+    let base = [first_center[0] + delta[0] / distance * along, first_center[1] + delta[1] / distance * along];
+    let offset = [-delta[1] / distance * height, delta[0] / distance * height];
+    vec![[base[0] + offset[0], base[1] + offset[1]], [base[0] - offset[0], base[1] - offset[1]]]
+}
+
+/// Intersections one unordered entity pair contributes, in a deterministic
+/// order: line to line, line to circle, then circle to circle.
+fn pair_intersections(first: &EntityKind, second: &EntityKind) -> Vec<[f64; 2]> {
+    let first_line = line_endpoints(first);
+    let second_line = line_endpoints(second);
+    if let (Some((first_from, first_to)), Some((second_from, second_to))) = (first_line, second_line) {
+        return segment_intersection(first_from, first_to, second_from, second_to).into_iter().collect();
+    }
+    if let (Some((from, to)), Some((center, radius))) = (first_line, circle_geometry(second)) {
+        return segment_circle_intersections(from, to, center, radius);
+    }
+    if let (Some((center, radius)), Some((from, to))) = (circle_geometry(first), second_line) {
+        return segment_circle_intersections(from, to, center, radius);
+    }
+    if let (Some(first_circle), Some(second_circle)) = (circle_geometry(first), circle_geometry(second)) {
+        return circle_circle_intersections(first_circle, second_circle);
+    }
+    Vec::new()
+}
+
+/// Collects the endpoints, midpoints, centres, quadrant points and nearest
+/// points one entity contributes.
+fn entity_snap_points(entity: &Entity, modes: &[&str], probe: Option<[f64; 2]>, out: &mut Vec<SnapCandidate>) {
     let endpoint = modes.contains(&"endpoint");
     let midpoint = modes.contains(&"midpoint");
     let center = modes.contains(&"center");
+    let quadrant = modes.contains(&"quadrant");
+    let nearest = modes.contains(&"nearest");
     match &entity.kind {
         EntityKind::Line { from, to } => {
             if endpoint {
@@ -4384,23 +4527,52 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandida
             if midpoint {
                 push_snap(out, "midpoint", &entity.id, edge_midpoint(*from, *to));
             }
+            if nearest && let Some(probe) = probe {
+                push_snap(out, "nearest", &entity.id, segment_nearest(*from, *to, probe));
+            }
         }
-        EntityKind::Circle { center: at, .. } => {
+        EntityKind::Circle { center: at, radius } => {
+            let radius = radius.abs();
             if center {
                 push_snap(out, "center", &entity.id, *at);
+            }
+            if radius <= 1e-12 {
+                return;
+            }
+            if quadrant {
+                for angle in [0.0, 90.0, 180.0, 270.0] {
+                    push_snap(out, "quadrant", &entity.id, arc_point(*at, radius, angle));
+                }
+            }
+            if nearest && let Some(probe) = probe {
+                push_snap(out, "nearest", &entity.id, circle_nearest(*at, radius, probe));
             }
         }
         EntityKind::Arc { center: at, radius, start_angle, end_angle } => {
             let sweep = arc_sweep(*start_angle, *end_angle);
+            let radius = radius.abs();
             if endpoint {
-                push_snap(out, "endpoint", &entity.id, arc_point(*at, radius.abs(), *start_angle));
-                push_snap(out, "endpoint", &entity.id, arc_point(*at, radius.abs(), *start_angle + sweep));
+                push_snap(out, "endpoint", &entity.id, arc_point(*at, radius, *start_angle));
+                push_snap(out, "endpoint", &entity.id, arc_point(*at, radius, *start_angle + sweep));
             }
             if midpoint {
-                push_snap(out, "midpoint", &entity.id, arc_point(*at, radius.abs(), *start_angle + sweep * 0.5));
+                push_snap(out, "midpoint", &entity.id, arc_point(*at, radius, *start_angle + sweep * 0.5));
             }
             if center {
                 push_snap(out, "center", &entity.id, *at);
+            }
+            if radius <= 1e-12 {
+                return;
+            }
+            if quadrant {
+                for angle in [0.0, 90.0, 180.0, 270.0] {
+                    if angle_within_sweep(*start_angle, sweep, angle) {
+                        push_snap(out, "quadrant", &entity.id, arc_point(*at, radius, angle));
+                    }
+                }
+            }
+            if nearest && let Some(probe) = probe {
+                push_snap(out, "nearest", &entity.id, arc_nearest(*at, radius, *start_angle, sweep, probe));
             }
         }
         EntityKind::Ellipse { center: at, rx, ry, rotation, start_angle, end_angle } => {
@@ -4437,6 +4609,12 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandida
                 {
                     push_snap(out, "midpoint", &entity.id, edge_midpoint(*last, *first));
                 }
+            }
+            if nearest
+                && let Some(probe) = probe
+                && let Some(point) = polyline_nearest(points, *closed, probe)
+            {
+                push_snap(out, "nearest", &entity.id, point);
             }
         }
         EntityKind::Hatch { points, .. } => {
@@ -4481,26 +4659,28 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandida
     }
 }
 
-/// Computes snap candidates (endpoints, midpoints, centres and line
-/// intersections) without changing the drawing.
+/// Computes snap candidates without changing the drawing.
 ///
-/// `modes` defaults to every mode. `point` sorts candidates by distance and
-/// `tolerance` keeps only candidates within that distance; a tolerance without
-/// a point is refused. `ids` and `layer` narrow the entity set, and an unknown
-/// id or layer reports `object/not-found`. The response carries
+/// Modes are `endpoint`, `midpoint`, `center`, `quadrant`, `nearest` and
+/// `intersection`. An empty list selects `endpoint`, `midpoint`, `center` and
+/// `intersection`, the modes that predate `quadrant` and `nearest`. `point`
+/// sorts candidates by distance and `tolerance` keeps only candidates within
+/// that distance; a tolerance without a point is refused, and so is `nearest`
+/// without a point. `ids` and `layer` narrow the entity set, and an unknown id
+/// or layer reports `object/not-found`. The response carries
 /// `{ revision, modes, point, tolerance, count, truncated, points }`, where each
 /// point is `{ kind, point, entities, distance? }`.
 pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceError> {
     let mut selected_modes: Vec<&'static str> = Vec::new();
     if request.modes.is_empty() {
-        selected_modes.extend_from_slice(SNAP_MODES);
+        selected_modes.extend_from_slice(SNAP_DEFAULT_MODES);
     }
     else {
         for raw in &request.modes {
             let mode = raw.trim().to_ascii_lowercase();
             let Some(mode) = SNAP_MODES.iter().copied().find(|candidate| *candidate == mode)
             else {
-                return Err(argument(format!("`{raw}` is not a snap mode; use endpoint, midpoint, center or intersection")));
+                return Err(argument(format!("`{raw}` is not a snap mode; use endpoint, midpoint, center, quadrant, nearest or intersection")));
             };
             if !selected_modes.contains(&mode) {
                 selected_modes.push(mode);
@@ -4511,6 +4691,9 @@ pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceEr
         && !finite_point(point)
     {
         return Err(argument("the snap point needs two finite coordinates"));
+    }
+    if selected_modes.contains(&"nearest") && request.point.is_none() {
+        return Err(argument("a nearest snap needs a point to measure from"));
     }
     if let Some(tolerance) = request.tolerance {
         if request.point.is_none() {
@@ -4551,24 +4734,14 @@ pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceEr
 
         let mut candidates = Vec::new();
         for entity in &selected {
-            entity_snap_points(entity, &selected_modes, &mut candidates);
+            entity_snap_points(entity, &selected_modes, request.point, &mut candidates);
         }
         if selected_modes.contains(&"intersection") {
             for (index, first) in selected.iter().enumerate() {
-                let Some((first_from, first_to)) = line_endpoints(&first.kind)
-                else {
-                    continue;
-                };
                 for second in selected.iter().skip(index + 1) {
-                    let Some((second_from, second_to)) = line_endpoints(&second.kind)
-                    else {
-                        continue;
-                    };
-                    let Some(point) = segment_intersection(first_from, first_to, second_from, second_to)
-                    else {
-                        continue;
-                    };
-                    candidates.push(SnapCandidate { kind: "intersection", point, entities: vec![first.id.clone(), second.id.clone()] });
+                    for point in pair_intersections(&first.kind, &second.kind) {
+                        candidates.push(SnapCandidate { kind: "intersection", point, entities: vec![first.id.clone(), second.id.clone()] });
+                    }
                 }
             }
         }
@@ -4580,8 +4753,8 @@ pub fn snap_points(handle: u64, request: SnapRequest) -> Result<Value, ServiceEr
                 point_distance(origin, a.point)
                     .partial_cmp(&point_distance(origin, b.point))
                     .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.kind.cmp(b.kind))
                     .then_with(|| a.entities.cmp(&b.entities))
+                    .then_with(|| a.kind.cmp(b.kind))
             });
             candidates
                 .into_iter()

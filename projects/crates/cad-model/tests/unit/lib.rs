@@ -766,7 +766,7 @@ fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
     let all = snap_points(handle, SnapRequest::default()).expect("snap");
     assert_eq!(all["count"], json!(8));
     let modes = all["modes"].as_array().expect("modes");
-    assert_eq!(modes.len(), SNAP_MODES.len());
+    assert_eq!(modes.len(), SNAP_DEFAULT_MODES.len());
 
     let intersections =
         snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ..SnapRequest::default() }).expect("intersect");
@@ -794,6 +794,197 @@ fn snap_points_report_endpoints_midpoints_centres_and_intersections() {
     assert!(snap_points(handle, SnapRequest { modes: vec!["edge".to_string()], ..SnapRequest::default() }).is_err());
     assert!(snap_points(handle, SnapRequest { ids: Some(vec!["entity-99".to_string()]), ..SnapRequest::default() }).is_err());
     assert!(snap_points(handle, SnapRequest { tolerance: Some(1.0), ..SnapRequest::default() }).is_err());
+    close(handle).expect("close");
+}
+
+/// Every candidate point of one snap response.
+fn snap_candidate_points(value: &Value) -> Vec<[f64; 2]> {
+    value["points"]
+        .as_array()
+        .expect("points")
+        .iter()
+        .map(|entry| [entry["point"][0].as_f64().expect("x"), entry["point"][1].as_f64().expect("y")])
+        .collect()
+}
+
+/// Whether one snap response reports `expected` within a numeric tolerance.
+fn snap_has_point(value: &Value, expected: [f64; 2]) -> bool {
+    snap_candidate_points(value).iter().any(|point| (point[0] - expected[0]).abs() < 1e-9 && (point[1] - expected[1]).abs() < 1e-9)
+}
+
+#[test]
+fn snap_reports_centres_quadrants_nearest_points_and_clips_arcs() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let circle = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
+    let circle_id = circle["entity"]["id"].clone();
+    let arc = add_arc(handle, DEFAULT_LAYER, [100.0, 0.0], 10.0, 0.0, 90.0).expect("arc");
+    let arc_id = arc["entity"]["id"].clone();
+    let line = add_line(handle, DEFAULT_LAYER, [0.0, 20.0], [20.0, 20.0]).expect("line");
+    let line_id = line["entity"]["id"].clone();
+    let chain = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, -20.0], [10.0, -20.0], [10.0, -30.0]], false).expect("polyline");
+    let chain_id = chain["entity"]["id"].clone();
+
+    let centres = snap_points(handle, SnapRequest { modes: vec!["center".to_string()], ..SnapRequest::default() }).expect("center");
+    assert!(snap_has_point(&centres, [0.0, 0.0]));
+    assert!(snap_has_point(&centres, [100.0, 0.0]));
+
+    let quadrants = snap_points(handle, SnapRequest { modes: vec!["quadrant".to_string()], ..SnapRequest::default() }).expect("quadrant");
+    assert_eq!(quadrants["count"], json!(6), "four circle quadrants and the two arc quadrants inside its sweep");
+    assert!(snap_has_point(&quadrants, [10.0, 0.0]));
+    assert!(snap_has_point(&quadrants, [0.0, 10.0]));
+    assert!(snap_has_point(&quadrants, [110.0, 0.0]));
+    assert!(snap_has_point(&quadrants, [100.0, 10.0]));
+    assert!(!snap_has_point(&quadrants, [100.0, -10.0]), "an arc must not report a quadrant outside its sweep");
+
+    let line_nearest = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["nearest".to_string()],
+            point: Some([5.0, 21.0]),
+            ids: Some(vec![line_id.as_str().unwrap().to_string()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("line nearest");
+    assert_eq!(line_nearest["count"], json!(1));
+    assert!(snap_has_point(&line_nearest, [5.0, 20.0]));
+
+    let arc_nearest = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["nearest".to_string()],
+            point: Some([95.0, 15.0]),
+            ids: Some(vec![arc_id.as_str().unwrap().to_string()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("arc nearest");
+    assert!(snap_has_point(&arc_nearest, [100.0, 10.0]), "the nearest point clamps to the arc end angle");
+
+    let chain_nearest = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["nearest".to_string()],
+            point: Some([15.0, -25.0]),
+            ids: Some(vec![chain_id.as_str().unwrap().to_string()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("polyline nearest");
+    assert!(snap_has_point(&chain_nearest, [10.0, -25.0]), "a polyline nearest point is found segment by segment");
+
+    let circle_nearest = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["nearest".to_string()],
+            point: Some([20.0, 0.0]),
+            ids: Some(vec![circle_id.as_str().unwrap().to_string()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("circle nearest");
+    assert!(snap_has_point(&circle_nearest, [10.0, 0.0]), "a circle nearest point sits on the radius towards the probe");
+
+    assert!(
+        snap_points(handle, SnapRequest { modes: vec!["nearest".to_string()], ..SnapRequest::default() }).is_err(),
+        "nearest needs a probe point"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_intersections_cover_line_circle_and_circle_circle() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let line = add_line(handle, DEFAULT_LAYER, [-5.0, 0.0], [5.0, 0.0]).expect("line");
+    let circle = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0).expect("circle");
+    let second = add_circle(handle, DEFAULT_LAYER, [6.0, 0.0], 5.0).expect("second circle");
+    let outer = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0).expect("outer circle");
+
+    let ids = |values: &[&Value]| Some(values.iter().map(|value| value["entity"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+    let line_circle =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&line, &circle]), ..SnapRequest::default() })
+            .expect("line circle");
+    assert_eq!(line_circle["count"], json!(2));
+    assert!(snap_has_point(&line_circle, [-2.0, 0.0]));
+    assert!(snap_has_point(&line_circle, [2.0, 0.0]));
+
+    let circles =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&outer, &second]), ..SnapRequest::default() })
+            .expect("circle circle");
+    assert_eq!(circles["count"], json!(2));
+    assert!(snap_has_point(&circles, [3.0, 4.0]));
+    assert!(snap_has_point(&circles, [3.0, -4.0]));
+
+    let tangent = add_line(handle, DEFAULT_LAYER, [-5.0, 1.0], [5.0, 1.0]).expect("tangent line");
+    let unit = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0).expect("unit circle");
+    let tangency =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&tangent, &unit]), ..SnapRequest::default() })
+            .expect("tangent");
+    assert_eq!(tangency["count"], json!(0), "a tangent contact is not an intersection candidate");
+
+    let parallel = add_line(handle, DEFAULT_LAYER, [-5.0, 10.0], [5.0, 10.0]).expect("parallel");
+    let parallel_run = snap_points(
+        handle,
+        SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&tangent, &parallel]), ..SnapRequest::default() },
+    )
+    .expect("parallel");
+    assert_eq!(parallel_run["count"], json!(0));
+
+    let degenerate = add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0).expect("degenerate circle");
+    let degenerate_run =
+        snap_points(handle, SnapRequest { modes: vec!["intersection".to_string()], ids: ids(&[&line, &degenerate]), ..SnapRequest::default() })
+            .expect("degenerate");
+    assert_eq!(degenerate_run["count"], json!(0), "a zero-radius circle contributes nothing");
+    close(handle).expect("close");
+}
+
+#[test]
+fn snap_ordering_tolerance_and_defaults_stay_deterministic() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let left = add_point(handle, DEFAULT_LAYER, [-5.0, 0.0]).expect("left");
+    let right = add_point(handle, DEFAULT_LAYER, [5.0, 0.0]).expect("right");
+    let circle = add_circle(handle, DEFAULT_LAYER, [0.0, 30.0], 10.0).expect("circle");
+
+    let ordered = snap_points(handle, SnapRequest { modes: vec!["endpoint".to_string()], point: Some([0.0, 0.0]), ..SnapRequest::default() })
+        .expect("ordered");
+    assert_eq!(ordered["count"], json!(2));
+    assert_eq!(ordered["points"][0]["entities"][0], left["entity"]["id"], "equal distances sort by entity id");
+    assert_eq!(ordered["points"][1]["entities"][0], right["entity"]["id"]);
+    let again = snap_points(handle, SnapRequest { modes: vec!["endpoint".to_string()], point: Some([0.0, 0.0]), ..SnapRequest::default() })
+        .expect("again");
+    assert_eq!(ordered["points"], again["points"]);
+
+    let filtered = snap_points(
+        handle,
+        SnapRequest { modes: vec!["endpoint".to_string()], point: Some([0.0, 0.0]), tolerance: Some(4.9), ..SnapRequest::default() },
+    )
+    .expect("filtered");
+    assert_eq!(filtered["count"], json!(0), "a tolerance below the nearest candidate drops every point");
+    let kept = snap_points(
+        handle,
+        SnapRequest { modes: vec!["endpoint".to_string()], point: Some([0.0, 0.0]), tolerance: Some(5.1), ..SnapRequest::default() },
+    )
+    .expect("kept");
+    assert_eq!(kept["count"], json!(2));
+
+    let default = snap_points(handle, SnapRequest::default()).expect("default");
+    let modes = default["modes"].as_array().expect("modes").iter().map(|value| value.as_str().expect("mode").to_string()).collect::<Vec<_>>();
+    assert_eq!(modes, SNAP_DEFAULT_MODES.iter().map(|mode| (*mode).to_string()).collect::<Vec<_>>());
+    assert!(!modes.contains(&"quadrant".to_string()), "quadrant is opt-in");
+    assert!(!modes.contains(&"nearest".to_string()), "nearest is opt-in");
+    let circle_endpoints = snap_points(
+        handle,
+        SnapRequest {
+            modes: vec!["endpoint".to_string()],
+            ids: Some(vec![circle["entity"]["id"].as_str().unwrap().to_string()]),
+            ..SnapRequest::default()
+        },
+    )
+    .expect("circle endpoints");
+    assert_eq!(circle_endpoints["count"], json!(0), "a circle still reports no endpoints");
     close(handle).expect("close");
 }
 
