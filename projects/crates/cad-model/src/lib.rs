@@ -116,8 +116,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
-/// trim, fillet, chamfer and measure); constraint solving and a 3D kernel stay
-/// unsupported.
+/// offset, trim, extend, fillet, chamfer and measure); constraint solving and a
+/// 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -184,6 +184,7 @@ pub fn capabilities() -> Value {
                 "explode",
                 "offset",
                 "trim",
+                "extend",
                 "fillet",
                 "chamfer",
                 "measure",
@@ -203,7 +204,7 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "fillet" | "chamfer" | "measure" | "measure-entity"
+                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "fillet" | "chamfer" | "measure" | "measure-entity"
                 | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap"
                 | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
@@ -2700,6 +2701,172 @@ pub fn trim(handle: u64, target_id: &str, cutter_id: &str) -> Result<Value, Serv
             "drawing": session.summary(),
             "entity": updated,
             "cutter": cutter_id,
+        })
+    })
+}
+
+/// Which endpoint of a line [`extend`] moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtendSide {
+    /// Extend past the `to` endpoint, along the `from`-to-`to` direction.
+    End,
+    /// Extend past the `from` endpoint, along the `to`-to-`from` direction.
+    Start,
+}
+
+impl ExtendSide {
+    /// Parses `end` or `start`, ignoring case and surrounding whitespace.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "end" => Some(Self::End),
+            "start" => Some(Self::Start),
+            _ => None,
+        }
+    }
+
+    /// Name used in JSON responses and the CLI.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::End => "end",
+            Self::Start => "start",
+        }
+    }
+}
+
+/// Ray a line is extended along: its moving endpoint as the origin and the unit
+/// direction it travels away from the line.
+struct ExtendRay {
+    /// Point the extension starts from, which is the endpoint being replaced.
+    origin: [f64; 2],
+    /// Unit direction away from the line.
+    direction: [f64; 2],
+    /// The endpoint that stays put.
+    anchor: [f64; 2],
+}
+
+fn extend_ray(from: [f64; 2], to: [f64; 2], side: ExtendSide) -> Option<ExtendRay> {
+    let (origin, anchor, tip) = match side {
+        ExtendSide::End => (to, from, from),
+        ExtendSide::Start => (from, to, to),
+    };
+    let direction = unit_direction(tip, origin)?;
+    Some(ExtendRay { origin, direction, anchor })
+}
+
+/// Parameters along an extension ray where it meets a full circle.
+fn ray_circle_parameters(ray: &ExtendRay, center: [f64; 2], radius: f64) -> Vec<f64> {
+    let offset = [ray.origin[0] - center[0], ray.origin[1] - center[1]];
+    let half = offset[0] * ray.direction[0] + offset[1] * ray.direction[1];
+    let constant = offset[0] * offset[0] + offset[1] * offset[1] - radius * radius;
+    let discriminant = half * half - constant;
+    let tolerance = 1e-9 * radius.abs().max(1.0);
+    if discriminant < -tolerance {
+        return Vec::new();
+    }
+    if discriminant <= tolerance {
+        return vec![-half];
+    }
+    let root = discriminant.sqrt();
+    vec![-half - root, -half + root]
+}
+
+/// Parameter along an extension ray where it meets one bounded line segment.
+fn ray_line_parameter(ray: &ExtendRay, from: [f64; 2], to: [f64; 2]) -> Option<f64> {
+    let segment = [to[0] - from[0], to[1] - from[1]];
+    let denominator = cross(ray.direction, segment);
+    if denominator.abs() <= 1e-12 {
+        return None;
+    }
+    let offset = [from[0] - ray.origin[0], from[1] - ray.origin[1]];
+    let along_boundary = cross(offset, ray.direction) / denominator;
+    if !within_segment(along_boundary) {
+        return None;
+    }
+    Some(cross(offset, segment) / denominator)
+}
+
+/// Parameters where the extension ray meets one line, circle or arc boundary.
+fn extend_boundary_parameters(ray: &ExtendRay, boundary: &EntityKind, boundary_id: &str) -> Result<Vec<f64>, ServiceError> {
+    match boundary {
+        EntityKind::Line { from, to } => Ok(ray_line_parameter(ray, *from, *to).into_iter().collect()),
+        EntityKind::Circle { center, radius } => Ok(ray_circle_parameters(ray, *center, radius.abs())),
+        EntityKind::Arc { center, radius, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            Ok(ray_circle_parameters(ray, *center, radius.abs())
+                .into_iter()
+                .filter(|parameter| {
+                    let point = [ray.origin[0] + ray.direction[0] * parameter, ray.origin[1] + ray.direction[1] * parameter];
+                    angle_within_sweep(*start_angle, sweep, (point[1] - center[1]).atan2(point[0] - center[0]).to_degrees())
+                })
+                .collect())
+        }
+        other => Err(ServiceError::new(
+            "object/unsupported",
+            format!("entity `{boundary_id}` is a {} and cannot bound an extension", kind_name(other)),
+        )),
+    }
+}
+
+/// Extends one line until it meets a line, circle or arc boundary.
+///
+/// The target must be a line; the boundary may be a line, circle or arc.
+/// `side` chooses which endpoint moves: `end` keeps `from` and moves `to`,
+/// while `start` keeps `to` and moves `from`. Only crossings ahead of the moving
+/// endpoint count, and the nearest one becomes the new endpoint, so the line
+/// grows and never folds back. A line boundary is its bounded drawn segment; a
+/// circle or arc crossing must lie on the arc's counter-clockwise sweep.
+///
+/// The response carries `{ revision, drawing, entity, boundary, side }`, where
+/// `entity` is the extended line. An extension that never meets the boundary
+/// reports `extend/no-intersection`; a non-line target or an unsupported
+/// boundary reports `object/unsupported`; an unknown id reports
+/// `object/not-found`; a locked target layer reports `drawing/layer-locked`; a
+/// zero-length line or the same id for target and boundary reports
+/// `session/argument-invalid`.
+pub fn extend(handle: u64, target_id: &str, boundary_id: &str, side: ExtendSide) -> Result<Value, ServiceError> {
+    if target_id == boundary_id {
+        return Err(argument("an extend needs two different entities"));
+    }
+    let updated = store::edit(handle, |drawing| {
+        let target_index = entity_index(drawing, target_id)?;
+        let boundary_index = entity_index(drawing, boundary_id)?;
+        let (from, to) = line_endpoints(&drawing.entities[target_index].kind).ok_or_else(|| {
+            ServiceError::new(
+                "object/unsupported",
+                format!("entity `{target_id}` is a {} and cannot be extended", kind_name(&drawing.entities[target_index].kind)),
+            )
+        })?;
+        if let Some(error) = locked_layer(drawing, &drawing.entities[target_index].layer) {
+            return Err(error);
+        }
+        let ray = extend_ray(from, to, side).ok_or_else(|| argument(format!("line `{target_id}` has zero length and cannot be extended")))?;
+        let boundary = drawing.entities[boundary_index].kind.clone();
+        let nearest = extend_boundary_parameters(&ray, &boundary, boundary_id)?
+            .into_iter()
+            .filter(|parameter| *parameter > 1e-9)
+            .min_by(|left, right| left.total_cmp(right));
+        let Some(parameter) = nearest
+        else {
+            return Err(ServiceError::new(
+                "extend/no-intersection",
+                format!("boundary `{boundary_id}` does not meet the extension of line `{target_id}`"),
+            ));
+        };
+        let endpoint = [ray.origin[0] + ray.direction[0] * parameter, ray.origin[1] + ray.direction[1] * parameter];
+        drawing.entities[target_index].kind = match side {
+            ExtendSide::End => EntityKind::Line { from: ray.anchor, to: endpoint },
+            ExtendSide::Start => EntityKind::Line { from: endpoint, to: ray.anchor },
+        };
+        drawing.revision += 1;
+        Ok(drawing.entities[target_index].clone())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": updated,
+            "boundary": boundary_id,
+            "side": side.as_str(),
         })
     })
 }

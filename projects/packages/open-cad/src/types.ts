@@ -59,6 +59,7 @@ export type OperationName =
     | 'explode'
     | 'offset'
     | 'trim'
+    | 'extend'
     | 'measure'
     | 'measure-entity'
     | 'stats'
@@ -1008,6 +1009,29 @@ export interface TrimResult {
     readonly drawing: Drawing;
     readonly entity: Entity;
     readonly cutter: EntityId;
+}
+
+/**
+ * Which endpoint of a line `extend()` moves.
+ *
+ * `end` keeps `from` and moves `to` along the `from`-to-`to` direction; `start`
+ * keeps `to` and moves `from` along the `to`-to-`from` direction.
+ */
+export type ExtendSide = 'end' | 'start';
+
+/**
+ * Result of `extend()`.
+ *
+ * `entity` is the target line after the chosen endpoint moved to the nearest
+ * crossing ahead of it, and `boundary` names the line, circle or arc that
+ * stopped the extension.
+ */
+export interface ExtendResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly boundary: EntityId;
+    readonly side: ExtendSide;
 }
 
 /**

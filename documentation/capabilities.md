@@ -34,7 +34,7 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 `ordinate-dimension`, `angular-dimension`, `hatch`.
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
-`offset`, `trim`, `fillet`, `chamfer`, `measure`, `measure-entity`,
+`offset`, `trim`, `extend`, `fillet`, `chamfer`, `measure`, `measure-entity`,
 `measure-points`, `stats`, `dimension-style`, `text-style`, `text-search`,
 `group`, `select`, `properties`, `snap`, `linetype`, `ucs`. `constraints` and
 `kernel3d` are reported as unsupported.
@@ -263,6 +263,26 @@ that is not a line, or a cutter that is not a line, circle or arc, reports
 layer reports `drawing/layer-locked`, and the same id for target and cutter
 reports `session/argument-invalid`.
 
+## Extend
+
+`extend(id, boundary, side)` lengthens one line until it meets a line, circle
+or arc boundary. `side` is `end` by default: the `from` endpoint stays put and
+`to` moves along the `from`-to-`to` direction. `side = start` keeps `to` and
+moves `from` along the `to`-to-`from` direction. Only crossings ahead of the
+moving endpoint count, and the nearest one becomes the new endpoint, so the
+line grows and never folds back. A line boundary is its bounded drawn segment;
+a circle or arc crossing must lie on the arc's counter-clockwise sweep.
+
+The response carries `{ revision, drawing, entity, boundary, side }`, where
+`entity` is the extended line. The boundary never moves, only the target's
+layer is checked for locks, and the edit is one history step.
+
+A boundary the extension ray never reaches reports `extend/no-intersection`. A
+target that is not a line, or a boundary that is not a line, circle or arc,
+reports `object/unsupported`; an unknown id reports `object/not-found`, a
+locked target layer reports `drawing/layer-locked`, and a zero-length target or
+the same id for target and boundary reports `session/argument-invalid`.
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -286,6 +306,9 @@ reports `session/argument-invalid`.
 - Fillet and chamfer accept two straight lines only.
 - Trim cuts a line only, and its cutter must be a line, circle or arc; it does
   not trim polylines, splines, ellipses, circles or arcs themselves.
+- Extend lengthens a line only, and its boundary must be a line, circle or arc.
+  It does not extend polylines, arcs, circles, ellipses or splines, and it does
+  not follow a boundary past its drawn extent.
 - Offset covers lines, straight-segment polylines, circles and arcs only. It
   does not clip self-intersections, miter arc or bulge segments (polylines have
   none) or offset ellipses, splines, points, text, hatches and dimensions.

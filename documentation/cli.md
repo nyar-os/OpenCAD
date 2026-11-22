@@ -84,6 +84,7 @@ exactly one transform.
 | `explode` | `--id <id>` (a block reference; unsupported for other kinds) |
 | `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
 | `trim` | `--id <line>`, `--cutter <entity>` (a line, circle or arc) |
+| `extend` | `--id <line>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -94,6 +95,8 @@ open-cad array plan.ocad --ids entity-3 --rows 2 --columns 3 --row-spacing 400
 open-cad offset plan.ocad --id entity-3 --distance 5
 open-cad offset plan.ocad --id entity-3 --distance 5 --side left
 open-cad trim plan.ocad --id entity-3 --cutter entity-4
+open-cad extend plan.ocad --id entity-3 --to entity-4
+open-cad extend plan.ocad --id entity-3 --to entity-4 --side start
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
 
@@ -112,6 +115,12 @@ file. One crossing keeps the longer side; two crossings keep the longer of the
 two outer segments. A cutter without a valid crossing reports
 `trim/no-intersection`; tangency, collinearity, a zero-length input or a cut on
 an endpoint reports `trim/degenerate`.
+
+`extend` lengthens the `--id` line until it meets the `--to` line, circle or
+arc and saves the file. By default the `to` endpoint moves; `--side start` moves
+the `from` endpoint instead. Only crossings ahead of the moving endpoint count
+and the nearest one becomes the new endpoint. A boundary the ray never reaches
+reports `extend/no-intersection`.
 
 ## Measure and select
 

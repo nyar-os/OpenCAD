@@ -787,6 +787,29 @@ test('trim cuts a line at a cutter and keeps the longer side', { skip: withAddon
     }
 });
 
+test('extend lengthens a line to its nearest boundary', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Extend' });
+        const target = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const boundary = document.addCircle({ layer: '0', center: [16, 0], radius: 2 });
+        const extended = document.extend(target.id, boundary.id);
+        assert.equal(extended.boundary, boundary.id);
+        assert.equal(extended.side, 'end');
+        assert.equal(extended.entity.id, target.id);
+        assert.deepEqual(extended.entity.kind, { type: 'line', from: [0, 0], to: [14, 0] });
+
+        const text = document.addText({ layer: '0', at: [0, 0], height: 2, content: 'note' });
+        assert.throws(
+            () => document.extend(target.id, text.id),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/unsupported',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('entity measurement reports area and perimeter', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

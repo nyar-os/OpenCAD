@@ -55,6 +55,8 @@ import type {
     ExplodeResult,
     ExportFormat,
     ExportReport,
+    ExtendResult,
+    ExtendSide,
     FindTextRequest,
     GroupChange,
     GroupDeletion,
@@ -896,6 +898,13 @@ export function offsetBySide(handle: number, request: OffsetBySideRequest): Offs
 /** Trims one line at a line, circle or arc cutter, keeping the longer side. */
 export function trim(handle: number, id: string, cutter: string): TrimResult {
     return decode<TrimResult>(() => binding('drawing.trim').drawing_trim(handle, JSON.stringify({ id, cutter })));
+}
+
+/** Extends one line to its nearest line, circle or arc boundary. */
+export function extend(handle: number, id: string, boundary: string, side: ExtendSide): ExtendResult {
+    return decode<ExtendResult>(() =>
+        binding('drawing.extend').drawing_extend(handle, JSON.stringify({ id, boundary, side })),
+    );
 }
 
 /** Measures bounds, path length and enclosed area. */

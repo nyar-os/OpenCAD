@@ -64,6 +64,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "explode",
         "offset",
         "trim",
+        "extend",
         "fillet",
         "chamfer",
         "measure",
@@ -3770,6 +3771,109 @@ fn trim_refuses_a_locked_target_layer() {
     add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 2.0).expect("cutter");
     update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
     assert_eq!(trim(handle, "entity-1", "entity-2").expect_err("locked trim").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_line_with_line_moves_the_near_endpoint_to_the_crossing() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_line(handle, DEFAULT_LAYER, [16.0, -5.0], [16.0, 5.0]).expect("boundary");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend");
+    assert_eq!(result["entity"]["id"], json!("entity-1"));
+    assert_eq!(result["boundary"], json!("entity-2"));
+    assert_eq!(result["side"], json!("end"));
+    assert_eq!(result["revision"], json!(4));
+    assert_eq!(result["entity"]["kind"]["type"], json!("line"));
+    assert_point(&result["entity"]["kind"]["from"], [0.0, 0.0]);
+    assert_point(&result["entity"]["kind"]["to"], [16.0, 0.0]);
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [16.0, -5.0], to: [16.0, 5.0] }, "the boundary stays put");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_line_with_circle_stops_at_the_near_crossing() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_circle(handle, DEFAULT_LAYER, [16.0, 0.0], 2.0).expect("boundary");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend to the circle");
+    assert_point(&result["entity"]["kind"]["from"], [0.0, 0.0]);
+    assert_point(&result["entity"]["kind"]["to"], [14.0, 0.0]);
+    assert_eq!(result["boundary"], json!("entity-2"));
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_line_with_arc_filters_the_sweep() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first target");
+    add_arc(handle, DEFAULT_LAYER, [16.0, 0.0], 2.0, 0.0, 180.0).expect("right-half arc");
+    add_line(handle, DEFAULT_LAYER, [0.0, 2.0], [10.0, 2.0]).expect("second target");
+    add_arc(handle, DEFAULT_LAYER, [16.0, 2.0], 2.0, 45.0, 135.0).expect("upper arc outside the crossings");
+
+    let extended = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend to the arc");
+    assert_point(&extended["entity"]["kind"]["from"], [0.0, 0.0]);
+    assert_point(&extended["entity"]["kind"]["to"], [14.0, 0.0]);
+
+    assert_eq!(
+        extend(handle, "entity-3", "entity-4", ExtendSide::End).expect_err("both crossings miss the sweep").code,
+        "extend/no-intersection"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_start_side_moves_the_from_endpoint() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_line(handle, DEFAULT_LAYER, [-6.0, -5.0], [-6.0, 5.0]).expect("boundary");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::Start).expect("extend from the start");
+    assert_eq!(result["side"], json!("start"));
+    assert_point(&result["entity"]["kind"]["from"], [-6.0, 0.0]);
+    assert_point(&result["entity"]["kind"]["to"], [10.0, 0.0]);
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_reports_missing_intersections_and_unsupported_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_line(handle, DEFAULT_LAYER, [0.0, 4.0], [20.0, 4.0]).expect("parallel boundary");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 2.0).expect("circle behind the target");
+    add_line(handle, DEFAULT_LAYER, [6.0, -5.0], [6.0, 5.0]).expect("boundary before the endpoint");
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+    add_line(handle, DEFAULT_LAYER, [4.0, 4.0], [4.0, 4.0]).expect("zero-length target");
+
+    assert_eq!(extend(handle, "entity-1", "entity-2", ExtendSide::End).expect_err("parallel").code, "extend/no-intersection");
+    assert_eq!(extend(handle, "entity-1", "entity-3", ExtendSide::End).expect_err("behind").code, "extend/no-intersection");
+    assert_eq!(extend(handle, "entity-1", "entity-4", ExtendSide::End).expect_err("before the endpoint").code, "extend/no-intersection");
+    assert_eq!(extend(handle, "entity-5", "entity-1", ExtendSide::End).expect_err("text target").code, "object/unsupported");
+    assert_eq!(extend(handle, "entity-1", "entity-5", ExtendSide::End).expect_err("text boundary").code, "object/unsupported");
+    assert_eq!(extend(handle, "entity-1", "entity-404", ExtendSide::End).expect_err("missing boundary").code, "object/not-found");
+    assert_eq!(extend(handle, "entity-1", "entity-1", ExtendSide::End).expect_err("same entity").code, "session/argument-invalid");
+    assert_eq!(extend(handle, "entity-6", "entity-1", ExtendSide::End).expect_err("zero-length target").code, "session/argument-invalid");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_refuses_a_locked_target_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_line(handle, DEFAULT_LAYER, [16.0, -5.0], [16.0, 5.0]).expect("boundary");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(extend(handle, "entity-1", "entity-2", ExtendSide::End).expect_err("locked extend").code, "drawing/layer-locked");
     close(handle).expect("close");
 }
 

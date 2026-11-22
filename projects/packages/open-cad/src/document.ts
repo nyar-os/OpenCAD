@@ -58,6 +58,8 @@ import type {
     ExplodeResult,
     ExportOptions,
     ExportReport,
+    ExtendResult,
+    ExtendSide,
     FindTextRequest,
     GroupDeletion,
     GroupMembersRequest,
@@ -763,6 +765,18 @@ export class DrawingDocument {
      */
     trim(id: EntityId, cutter: EntityId): TrimResult {
         return this.edit((handle) => service.trim(handle, id, cutter), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Extends a line past one endpoint until it meets a line, circle or arc.
+     * `side` defaults to `end`; only crossings ahead of that endpoint count, so
+     * the line grows to the nearest one. A boundary the ray never reaches
+     * reports `extend/no-intersection`.
+     */
+    extend(id: EntityId, boundary: EntityId, side: ExtendSide = 'end'): ExtendResult {
+        return this.edit((handle) => service.extend(handle, id, boundary, side), (result) => {
             this.state = result.drawing;
         });
     }

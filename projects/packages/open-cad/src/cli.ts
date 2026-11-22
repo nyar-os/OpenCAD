@@ -36,6 +36,8 @@ import type {
     EntityMeasureResult,
     ExplodeResult,
     ExportFormat,
+    ExtendResult,
+    ExtendSide,
     GroupDeletion,
     HistoryResult,
     ImportLoss,
@@ -309,6 +311,12 @@ function describeTrim(result: TrimResult): string {
     const kind = result.entity.kind;
     const span = kind.type === 'line' ? ` from=${kind.from[0]},${kind.from[1]} to=${kind.to[0]},${kind.to[1]}` : '';
     return `trimmed ${result.entity.id} with ${result.cutter}${span} revision=${result.revision}`;
+}
+
+function describeExtend(result: ExtendResult): string {
+    const kind = result.entity.kind;
+    const span = kind.type === 'line' ? ` from=${kind.from[0]},${kind.from[1]} to=${kind.to[0]},${kind.to[1]}` : '';
+    return `extended ${result.entity.id} ${result.side} to ${result.boundary}${span} revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1728,6 +1736,34 @@ cli
         try {
             const result = await guard(ctx, () => opened.trim(id, cutter));
             ctx.emitResult(result, describeTrim(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('extend', 'cli.cmd.extend')
+    .option('--id <line>', 'cli.opt.id')
+    .option('--to <entity>', 'cli.opt.extend-to')
+    .option('--side <side>', 'cli.opt.extend-side', { enum: ['end', 'start'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const boundary = text(options, 'to');
+        const side = (text(options, 'side') as ExtendSide | undefined) ?? 'end';
+        if (id === undefined || boundary === undefined) {
+            ctx.fail('open-cad.cli.extend-required', { message: '`--id <line>` and `--to <entity>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.extend(id, boundary, side));
+            ctx.emitResult(result, describeExtend(result));
             return 0;
         } finally {
             opened.close();

@@ -27,8 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
-    ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, ExtendSide, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide,
+    OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -839,6 +839,24 @@ fn drawing_trim(ctx: CallContext) -> Result<JsValue> {
         return Err(Error::new("session/argument-invalid: `id` and `cutter` entity ids are required"));
     }
     let result = open_cad_drawing::trim(handle, target, cutter).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Extends one line to its nearest line, circle or arc boundary.
+#[function]
+fn drawing_extend(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let target = request.get("id").and_then(Value::as_str).unwrap_or_default().trim();
+    let boundary = request.get("boundary").or_else(|| request.get("to")).and_then(Value::as_str).unwrap_or_default().trim();
+    if target.is_empty() || boundary.is_empty() {
+        return Err(Error::new("session/argument-invalid: `id` and `boundary` entity ids are required"));
+    }
+    let side = match request.get("side").and_then(Value::as_str).map(str::trim) {
+        None | Some("") => ExtendSide::End,
+        Some(raw) => ExtendSide::parse(raw).ok_or_else(|| Error::new("session/argument-invalid: `side` must be end or start"))?,
+    };
+    let result = open_cad_drawing::extend(handle, target, boundary, side).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2390,6 +2408,7 @@ register_module![
     drawing_offset,
     drawing_offset_by_side,
     drawing_trim,
+    drawing_extend,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,
