@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Builds a minimal ASCII DXF with optional BLOCKS content and the given
