@@ -58,6 +58,7 @@ export type OperationName =
     | 'array'
     | 'explode'
     | 'offset'
+    | 'trim'
     | 'measure'
     | 'measure-entity'
     | 'stats'
@@ -994,6 +995,19 @@ export interface CornerResult {
     readonly drawing: Drawing;
     readonly entity: Entity;
     readonly sources: readonly EntityId[];
+}
+
+/**
+ * Result of `trim()`.
+ *
+ * `entity` is the target line after its endpoints moved to the kept side and
+ * `cutter` names the line, circle or arc that produced the cut.
+ */
+export interface TrimResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly entity: Entity;
+    readonly cutter: EntityId;
 }
 
 /**

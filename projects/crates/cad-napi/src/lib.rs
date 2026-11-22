@@ -828,6 +828,20 @@ fn corner_pair(request: &Value) -> std::result::Result<(String, String), String>
     Ok((first, second))
 }
 
+/// Trims one line at a line, circle or arc cutter, keeping the longer side.
+#[function]
+fn drawing_trim(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let target = request.get("id").and_then(Value::as_str).unwrap_or_default().trim();
+    let cutter = request.get("cutter").and_then(Value::as_str).unwrap_or_default().trim();
+    if target.is_empty() || cutter.is_empty() {
+        return Err(Error::new("session/argument-invalid: `id` and `cutter` entity ids are required"));
+    }
+    let result = open_cad_drawing::trim(handle, target, cutter).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Summarises entity count, path length and enclosed area per layer.
 #[function]
 fn drawing_stats(ctx: CallContext) -> Result<JsValue> {
@@ -2375,6 +2389,7 @@ register_module![
     drawing_explode,
     drawing_offset,
     drawing_offset_by_side,
+    drawing_trim,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

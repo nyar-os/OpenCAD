@@ -33,6 +33,8 @@ export const errorCodes = [
     'offset/miter-limit',
     'offset/not-found',
     'offset/unsupported-entity',
+    'trim/degenerate',
+    'trim/no-intersection',
     'format/unsupported',
     'format/unsupported-version',
     'format/invalid',

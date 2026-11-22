@@ -95,6 +95,7 @@ import type {
     TextReplaceResult,
     TransformRequest,
     TransformResult,
+    TrimResult,
     UcsRequest,
     UcsResult,
     UnitsConversion,
@@ -750,6 +751,18 @@ export class DrawingDocument {
      */
     offsetBySide(request: OffsetBySideRequest): OffsetBySideResult {
         return this.edit((handle) => service.offsetBySide(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Trims a line at a line, circle or arc cutter, keeping the longer side.
+     * Tangency, collinearity, a zero-length input and a cut on a target
+     * endpoint report `trim/degenerate`; a cutter without a crossing reports
+     * `trim/no-intersection`.
+     */
+    trim(id: EntityId, cutter: EntityId): TrimResult {
+        return this.edit((handle) => service.trim(handle, id, cutter), (result) => {
             this.state = result.drawing;
         });
     }

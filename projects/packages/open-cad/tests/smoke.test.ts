@@ -765,6 +765,28 @@ test('fillet and chamfer trim two lines and append the corner entity', { skip: w
     }
 });
 
+test('trim cuts a line at a cutter and keeps the longer side', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Trim' });
+        const target = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const cutter = document.addCircle({ layer: '0', center: [7, 0], radius: 2 });
+        const trimmed = document.trim(target.id, cutter.id);
+        assert.equal(trimmed.cutter, cutter.id);
+        assert.equal(trimmed.entity.id, target.id);
+        assert.deepEqual(trimmed.entity.kind, { type: 'line', from: [0, 0], to: [5, 0] });
+
+        const text = document.addText({ layer: '0', at: [0, 0], height: 2, content: 'note' });
+        assert.throws(
+            () => document.trim(target.id, text.id),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/unsupported',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('entity measurement reports area and perimeter', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

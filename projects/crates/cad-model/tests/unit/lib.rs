@@ -34,6 +34,12 @@ fn drawing_of(handle: u64) -> Drawing {
     store::read(handle, |session| session.drawing.clone()).expect("read drawing")
 }
 
+fn assert_point(actual: &Value, expected: [f64; 2]) {
+    let x = actual[0].as_f64().expect("x");
+    let y = actual[1].as_f64().expect("y");
+    assert!((x - expected[0]).abs() < 1e-9 && (y - expected[1]).abs() < 1e-9, "{actual:?} is not {expected:?}");
+}
+
 #[test]
 fn capability_matrix_matches_the_implemented_surface() {
     let matrix = capabilities();
@@ -57,6 +63,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "array",
         "explode",
         "offset",
+        "trim",
         "fillet",
         "chamfer",
         "measure",
@@ -3661,6 +3668,108 @@ fn fillet_and_chamfer_refuse_a_locked_layer() {
     update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
     assert_eq!(fillet(handle, "entity-1", "entity-2", 1.0).expect_err("locked fillet").code, "drawing/layer-locked");
     assert_eq!(chamfer(handle, "entity-1", "entity-2", 1.0, 1.0).expect_err("locked chamfer").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_line_with_line_keeps_the_longer_side() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_line(handle, DEFAULT_LAYER, [3.0, -5.0], [3.0, 5.0]).expect("cutter");
+
+    let result = trim(handle, "entity-1", "entity-2").expect("trim");
+    assert_eq!(result["entity"]["id"], json!("entity-1"));
+    assert_eq!(result["cutter"], json!("entity-2"));
+    assert_eq!(result["revision"], json!(4));
+    assert_eq!(result["entity"]["kind"]["type"], json!("line"));
+    assert_point(&result["entity"]["kind"]["from"], [3.0, 0.0]);
+    assert_point(&result["entity"]["kind"]["to"], [10.0, 0.0]);
+
+    let drawing = drawing_of(handle);
+    let EntityKind::Line { from, to } = drawing.entities[0].kind
+    else {
+        panic!("expected a trimmed line");
+    };
+    assert!((from[0] - 3.0).abs() < 1e-9 && from[1].abs() < 1e-9, "trimmed from {from:?}");
+    assert!((to[0] - 10.0).abs() < 1e-9 && to[1].abs() < 1e-9, "trimmed to {to:?}");
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [3.0, -5.0], to: [3.0, 5.0] }, "the cutter stays put");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_line_with_circle_keeps_the_longer_outer_segment() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first target");
+    add_circle(handle, DEFAULT_LAYER, [7.0, 0.0], 2.0).expect("two-crossing circle");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("second target");
+    add_circle(handle, DEFAULT_LAYER, [1.0, 0.0], 3.0).expect("one-crossing circle");
+
+    let both = trim(handle, "entity-1", "entity-2").expect("trim across the circle");
+    assert_point(&both["entity"]["kind"]["from"], [0.0, 0.0]);
+    assert_point(&both["entity"]["kind"]["to"], [5.0, 0.0]);
+
+    let one = trim(handle, "entity-3", "entity-4").expect("trim at the single crossing");
+    assert_point(&one["entity"]["kind"]["from"], [4.0, 0.0]);
+    assert_point(&one["entity"]["kind"]["to"], [10.0, 0.0]);
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_line_with_arc_keeps_the_longer_side_and_filters_the_sweep() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first target");
+    add_arc(handle, DEFAULT_LAYER, [7.0, 0.0], 2.0, 0.0, 180.0).expect("two-crossing arc");
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("second target");
+    add_arc(handle, DEFAULT_LAYER, [5.0, 0.0], 3.0, 90.0, 270.0).expect("half-circle arc");
+
+    let both = trim(handle, "entity-1", "entity-2").expect("trim across the arc");
+    assert_point(&both["entity"]["kind"]["from"], [0.0, 0.0]);
+    assert_point(&both["entity"]["kind"]["to"], [5.0, 0.0]);
+
+    let one = trim(handle, "entity-3", "entity-4").expect("only the left crossing lies on the sweep");
+    assert_point(&one["entity"]["kind"]["from"], [2.0, 0.0]);
+    assert_point(&one["entity"]["kind"]["to"], [10.0, 0.0]);
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_reports_missing_intersections_and_degenerate_cutters() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_line(handle, DEFAULT_LAYER, [0.0, 4.0], [10.0, 4.0]).expect("parallel cutter");
+    add_line(handle, DEFAULT_LAYER, [2.0, 0.0], [8.0, 0.0]).expect("collinear cutter");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 1.0], 1.0).expect("tangent circle");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 10.0], 1.0).expect("distant circle");
+    add_line(handle, DEFAULT_LAYER, [0.0, -5.0], [0.0, 5.0]).expect("endpoint cutter");
+    add_line(handle, DEFAULT_LAYER, [4.0, 4.0], [4.0, 4.0]).expect("zero-length target");
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+
+    assert_eq!(trim(handle, "entity-1", "entity-2").expect_err("parallel").code, "trim/no-intersection");
+    assert_eq!(trim(handle, "entity-1", "entity-3").expect_err("collinear").code, "trim/degenerate");
+    assert_eq!(trim(handle, "entity-1", "entity-4").expect_err("tangent").code, "trim/degenerate");
+    assert_eq!(trim(handle, "entity-1", "entity-5").expect_err("distant").code, "trim/no-intersection");
+    assert_eq!(trim(handle, "entity-1", "entity-6").expect_err("endpoint cut").code, "trim/degenerate");
+    assert_eq!(trim(handle, "entity-7", "entity-2").expect_err("zero-length target").code, "trim/degenerate");
+    assert_eq!(trim(handle, "entity-1", "entity-8").expect_err("text cutter").code, "object/unsupported");
+    assert_eq!(trim(handle, "entity-8", "entity-1").expect_err("text target").code, "object/unsupported");
+    assert_eq!(trim(handle, "entity-1", "entity-404").expect_err("missing cutter").code, "object/not-found");
+    assert_eq!(trim(handle, "entity-1", "entity-1").expect_err("same entity").code, "session/argument-invalid");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_refuses_a_locked_target_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("target");
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 2.0).expect("cutter");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(trim(handle, "entity-1", "entity-2").expect_err("locked trim").code, "drawing/layer-locked");
     close(handle).expect("close");
 }
 

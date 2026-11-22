@@ -83,6 +83,7 @@ exactly one transform.
 | `array` | `--ids a,b`, then `--rows n --columns n [--row-spacing n --column-spacing n]` or `--center x,y --count n --angle deg` |
 | `explode` | `--id <id>` (a block reference; unsupported for other kinds) |
 | `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
+| `trim` | `--id <line>`, `--cutter <entity>` (a line, circle or arc) |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -92,6 +93,7 @@ open-cad copy plan.ocad --ids entity-3,entity-4 --dx 500 --dy 0 --count 3
 open-cad array plan.ocad --ids entity-3 --rows 2 --columns 3 --row-spacing 400
 open-cad offset plan.ocad --id entity-3 --distance 5
 open-cad offset plan.ocad --id entity-3 --distance 5 --side left
+open-cad trim plan.ocad --id entity-3 --cutter entity-4
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
 
@@ -104,6 +106,12 @@ polyline and measure along its travel direction, while `--side outside` and
 `--side inside` apply to a circle or arc and change only the radius. A polyline
 corner that would need a miter longer than four times the distance is refused
 when `--side` is used.
+
+`trim` cuts the `--id` line at the `--cutter` line, circle or arc and saves the
+file. One crossing keeps the longer side; two crossings keep the longer of the
+two outer segments. A cutter without a valid crossing reports
+`trim/no-intersection`; tangency, collinearity, a zero-length input or a cut on
+an endpoint reports `trim/degenerate`.
 
 ## Measure and select
 

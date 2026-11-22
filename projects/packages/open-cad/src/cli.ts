@@ -64,6 +64,7 @@ import type {
     TransformOperation,
     TransformResult,
     TransformTarget,
+    TrimResult,
     UcsResult,
     UnitsConversion,
 } from './types.js';
@@ -302,6 +303,12 @@ function describeOffset(result: OffsetResult): string {
 
 function describeOffsetBySide(result: OffsetBySideResult): string {
     return `offset ${result.source} ${result.side} by ${result.distance} into ${result.entity.id} revision=${result.revision}`;
+}
+
+function describeTrim(result: TrimResult): string {
+    const kind = result.entity.kind;
+    const span = kind.type === 'line' ? ` from=${kind.from[0]},${kind.from[1]} to=${kind.to[0]},${kind.to[1]}` : '';
+    return `trimmed ${result.entity.id} with ${result.cutter}${span} revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1695,6 +1702,32 @@ cli
                 const result = await guard(ctx, () => opened.offsetBySide({ entityId: id, distance, side }));
                 ctx.emitResult(result, describeOffsetBySide(result));
             }
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('trim', 'cli.cmd.trim')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--cutter <entity>', 'cli.opt.cutter')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const cutter = text(options, 'cutter');
+        if (id === undefined || cutter === undefined) {
+            ctx.fail('open-cad.cli.trim-required', { message: '`--id <entity>` and `--cutter <entity>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.trim(id, cutter));
+            ctx.emitResult(result, describeTrim(result));
             return 0;
         } finally {
             opened.close();

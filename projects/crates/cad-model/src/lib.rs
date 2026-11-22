@@ -115,8 +115,9 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// export direction is implemented: `exportTargets.step` and
 /// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
-/// operations (transform, copy, rectangular/polar array, polyline explode and
-/// measure); constraint solving and a 3D kernel stay unsupported.
+/// operations (transform, copy, rectangular/polar array, polyline explode,
+/// trim, fillet, chamfer and measure); constraint solving and a 3D kernel stay
+/// unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -182,6 +183,7 @@ pub fn capabilities() -> Value {
                 "array",
                 "explode",
                 "offset",
+                "trim",
                 "fillet",
                 "chamfer",
                 "measure",
@@ -201,7 +203,7 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "fillet" | "chamfer" | "measure" | "measure-entity"
+                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "fillet" | "chamfer" | "measure" | "measure-entity"
                 | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap"
                 | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
@@ -2525,6 +2527,179 @@ pub fn chamfer(handle: u64, first_id: &str, second_id: &str, distance_a: f64, di
             "drawing": session.summary(),
             "entity": created,
             "sources": [first_id, second_id],
+        })
+    })
+}
+
+/// Intersections a straight target segment finds with one cutter.
+enum CutterHits {
+    /// The cutter is tangent, so the two roots collapse into one contact point.
+    Tangent([f64; 2]),
+    /// Distinct points where the target crosses the cutter, still bounded by the
+    /// target segment.
+    Points(Vec<[f64; 2]>),
+    /// The cutter does not meet the target.
+    None,
+}
+
+fn trim_degenerate(message: impl Into<String>) -> ServiceError {
+    ServiceError::new("trim/degenerate", message)
+}
+
+fn cross(first: [f64; 2], second: [f64; 2]) -> f64 {
+    first[0] * second[1] - first[1] * second[0]
+}
+
+/// Roots of the target segment against a full circle, keeping only the roots
+/// that lie on the bounded segment.
+fn line_circle_hits(from: [f64; 2], to: [f64; 2], center: [f64; 2], radius: f64) -> CutterHits {
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    let offset = [from[0] - center[0], from[1] - center[1]];
+    let quadratic = delta[0] * delta[0] + delta[1] * delta[1];
+    if quadratic < 1e-24 || radius.abs() <= 1e-12 {
+        return CutterHits::None;
+    }
+    let linear = 2.0 * (offset[0] * delta[0] + offset[1] * delta[1]);
+    let constant = offset[0] * offset[0] + offset[1] * offset[1] - radius * radius;
+    let discriminant = linear * linear - 4.0 * quadratic * constant;
+    let tolerance = 1e-9 * quadratic * radius * radius;
+    if discriminant < -tolerance {
+        return CutterHits::None;
+    }
+    if discriminant <= tolerance {
+        let parameter = -linear / (2.0 * quadratic);
+        if !within_segment(parameter) {
+            return CutterHits::None;
+        }
+        return CutterHits::Tangent([from[0] + delta[0] * parameter, from[1] + delta[1] * parameter]);
+    }
+    let root = discriminant.sqrt();
+    let points = [(-linear - root) / (2.0 * quadratic), (-linear + root) / (2.0 * quadratic)]
+        .into_iter()
+        .filter(|parameter| within_segment(*parameter))
+        .map(|parameter| [from[0] + delta[0] * parameter, from[1] + delta[1] * parameter])
+        .collect::<Vec<_>>();
+    if points.len() == 2 && distance(points[0], points[1]) <= 1e-9 * radius.abs().max(1.0) {
+        return CutterHits::Tangent(points[0]);
+    }
+    CutterHits::Points(points)
+}
+
+/// Points where the target segment meets one line, circle or arc cutter.
+fn line_cutter_hits(from: [f64; 2], to: [f64; 2], cutter: &EntityKind, cutter_id: &str) -> Result<Vec<[f64; 2]>, ServiceError> {
+    let target_length = distance(from, to);
+    if target_length <= 1e-12 {
+        return Err(trim_degenerate("the target line has zero length"));
+    }
+    match cutter {
+        EntityKind::Line { from: cutter_from, to: cutter_to } => {
+            let cutter_length = distance(*cutter_from, *cutter_to);
+            if cutter_length <= 1e-12 {
+                return Err(trim_degenerate(format!("cutter `{cutter_id}` has zero length")));
+            }
+            let first = [to[0] - from[0], to[1] - from[1]];
+            let second = [cutter_to[0] - cutter_from[0], cutter_to[1] - cutter_from[1]];
+            let denominator = cross(first, second);
+            let offset = [cutter_from[0] - from[0], cutter_from[1] - from[1]];
+            if denominator.abs() <= 1e-12 * target_length * cutter_length {
+                let perpendicular = (cross(offset, first) / target_length).abs();
+                if perpendicular <= 1e-9 * target_length.max(1.0) {
+                    return Err(trim_degenerate(format!("the line and cutter `{cutter_id}` are collinear")));
+                }
+                return Ok(Vec::new());
+            }
+            let along_target = cross(offset, second) / denominator;
+            let along_cutter = cross(offset, first) / denominator;
+            if within_segment(along_target) && within_segment(along_cutter) {
+                Ok(vec![[from[0] + first[0] * along_target, from[1] + first[1] * along_target]])
+            }
+            else {
+                Ok(Vec::new())
+            }
+        }
+        EntityKind::Circle { center, radius } => match line_circle_hits(from, to, *center, radius.abs()) {
+            CutterHits::Tangent(_) => Err(trim_degenerate(format!("cutter `{cutter_id}` is tangent to the target line"))),
+            CutterHits::Points(points) => Ok(points),
+            CutterHits::None => Ok(Vec::new()),
+        },
+        EntityKind::Arc { center, radius, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            let within_sweep =
+                |point: [f64; 2]| angle_within_sweep(*start_angle, sweep, (point[1] - center[1]).atan2(point[0] - center[0]).to_degrees());
+            match line_circle_hits(from, to, *center, radius.abs()) {
+                CutterHits::Tangent(point) if within_sweep(point) => {
+                    Err(trim_degenerate(format!("cutter `{cutter_id}` is tangent to the target line")))
+                }
+                CutterHits::Tangent(_) | CutterHits::None => Ok(Vec::new()),
+                CutterHits::Points(points) => Ok(points.into_iter().filter(|point| within_sweep(*point)).collect()),
+            }
+        }
+        other => Err(ServiceError::new("object/unsupported", format!("entity `{cutter_id}` is a {} and cannot cut a line", kind_name(other)))),
+    }
+}
+
+/// Trims one line at a cutter, keeping the longer side.
+///
+/// The target must be a line; the cutter may be a line, circle or arc. One
+/// intersection keeps the longer of the two sides. Two intersections keep the
+/// longer of the two outer segments, so the span between the cut points is
+/// discarded. A target and cutter without a valid crossing report
+/// `trim/no-intersection`; tangency, collinearity, a zero-length input or a cut
+/// on a target endpoint reports `trim/degenerate`. The response carries
+/// `{ revision, drawing, entity, cutter }`, where `entity` is the trimmed line.
+pub fn trim(handle: u64, target_id: &str, cutter_id: &str) -> Result<Value, ServiceError> {
+    if target_id == cutter_id {
+        return Err(argument("a trim needs two different entities"));
+    }
+    let updated = store::edit(handle, |drawing| {
+        let target_index = entity_index(drawing, target_id)?;
+        let cutter_index = entity_index(drawing, cutter_id)?;
+        let (from, to) = line_endpoints(&drawing.entities[target_index].kind).ok_or_else(|| {
+            ServiceError::new(
+                "object/unsupported",
+                format!("entity `{target_id}` is a {} and cannot be trimmed", kind_name(&drawing.entities[target_index].kind)),
+            )
+        })?;
+        if let Some(error) = locked_layer(drawing, &drawing.entities[target_index].layer) {
+            return Err(error);
+        }
+        let cutter = drawing.entities[cutter_index].kind.clone();
+        let length = distance(from, to);
+        let parameter =
+            |point: [f64; 2]| ((point[0] - from[0]) * (to[0] - from[0]) + (point[1] - from[1]) * (to[1] - from[1])) / (length * length);
+        let mut hits = line_cutter_hits(from, to, &cutter, cutter_id)?.into_iter().map(|point| (parameter(point), point)).collect::<Vec<_>>();
+        hits.sort_by(|left, right| left.0.total_cmp(&right.0));
+        hits.dedup_by(|left, right| distance(left.1, right.1) <= 1e-9 * length.max(1.0));
+        if hits.is_empty() {
+            return Err(ServiceError::new("trim/no-intersection", format!("cutter `{cutter_id}` does not meet the target line `{target_id}`")));
+        }
+        let (new_from, new_to) = if hits.len() == 1 {
+            let cut = hits[0].0.clamp(0.0, 1.0);
+            let before = cut * length;
+            let after = (1.0 - cut) * length;
+            if before.min(after) <= 1e-9 * length {
+                return Err(trim_degenerate("the intersection lies on a target endpoint, so there is nothing to trim"));
+            }
+            if before >= after { (from, hits[0].1) } else { (hits[0].1, to) }
+        }
+        else {
+            let before = hits[0].0.clamp(0.0, 1.0) * length;
+            let after = (1.0 - hits[1].0.clamp(0.0, 1.0)) * length;
+            if before.max(after) <= 1e-9 * length {
+                return Err(trim_degenerate("both intersections lie on the target endpoints, so there is nothing to trim"));
+            }
+            if before >= after { (from, hits[0].1) } else { (hits[1].1, to) }
+        };
+        drawing.entities[target_index].kind = EntityKind::Line { from: new_from, to: new_to };
+        drawing.revision += 1;
+        Ok(drawing.entities[target_index].clone())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": updated,
+            "cutter": cutter_id,
         })
     })
 }

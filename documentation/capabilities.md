@@ -34,10 +34,10 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 `ordinate-dimension`, `angular-dimension`, `hatch`.
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
-`offset`, `fillet`, `chamfer`, `measure`, `measure-entity`, `measure-points`,
-`stats`, `dimension-style`, `text-style`, `text-search`, `group`, `select`,
-`properties`, `snap`, `linetype`, `ucs`. `constraints` and `kernel3d` are
-reported as unsupported.
+`offset`, `trim`, `fillet`, `chamfer`, `measure`, `measure-entity`,
+`measure-points`, `stats`, `dimension-style`, `text-style`, `text-search`,
+`group`, `select`, `properties`, `snap`, `linetype`, `ucs`. `constraints` and
+`kernel3d` are reported as unsupported.
 
 ## DXF import subset
 
@@ -241,6 +241,28 @@ new edge crosses another edge is returned as computed. Polylines hold straight
 segments only, so there are no arc or bulge segments to miter. Ellipse, spline,
 point, text, hatch and dimension entities stay unsupported.
 
+## Trim
+
+`trim(id, cutter)` cuts one line at a line, circle or arc and updates that line
+in place. Both intersections are bounded: a line cutter must cross the target
+segment, and a circle or arc crossing must lie on the arc's counter-clockwise
+sweep. Of the two sides a single crossing produces, the longer one is kept. When
+the cutter crosses twice, the longer of the two outer segments is kept, so the
+span between the cut points and the shorter outer piece are discarded. Equal
+lengths keep the side that starts at the target's original `from` endpoint.
+
+The response carries `{ revision, drawing, entity, cutter }`, where `entity` is
+the updated line. The cutter never moves, only the target's layer is checked for
+locks, and the edit is one history step.
+
+A cutter that never meets the target reports `trim/no-intersection`. Tangency,
+collinearity, a zero-length target or cutter, and a crossing that falls on a
+target endpoint (so nothing would be removed) report `trim/degenerate`. A target
+that is not a line, or a cutter that is not a line, circle or arc, reports
+`object/unsupported`; an unknown id reports `object/not-found`, a locked target
+layer reports `drawing/layer-locked`, and the same id for target and cutter
+reports `session/argument-invalid`.
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -262,6 +284,8 @@ point, text, hatch and dimension entities stay unsupported.
 - Dimension styles and text styles are limited to the fields exposed by the
   style commands.
 - Fillet and chamfer accept two straight lines only.
+- Trim cuts a line only, and its cutter must be a line, circle or arc; it does
+  not trim polylines, splines, ellipses, circles or arcs themselves.
 - Offset covers lines, straight-segment polylines, circles and arcs only. It
   does not clip self-intersections, miter arc or bulge segments (polylines have
   none) or offset ellipses, splines, points, text, hatches and dimensions.

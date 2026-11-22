@@ -53,7 +53,7 @@ types.
 | :--- | :--- |
 | Session | `cad.capabilities()`, `cad.create()`, `cad.open()`, `cad.importDxf()`, `cad.inspect()`, `cad.dispose()` |
 | Draw | `addLine`, `addPoint`, `addCircle`, `addArc`, `addEllipse`, `addPolyline`, `addSpline`, `addRectangle`, `addPolygon`, `addText`, `addHatch`, `addDimension`, `addRadialDimension`, `addOrdinateDimension`, `addAngularDimension` |
-| Edit | `moveEntity`, `updateEntity`, `updateArc`, `updatePolyline`, `assignEntityLayer`, `deleteEntity`, `transform`, `copy`, `array`, `explode`, `offset`, `offsetBySide`, `fillet`, `chamfer`, `reorderEntity` |
+| Edit | `moveEntity`, `updateEntity`, `updateArc`, `updatePolyline`, `assignEntityLayer`, `deleteEntity`, `transform`, `copy`, `array`, `explode`, `offset`, `offsetBySide`, `trim`, `fillet`, `chamfer`, `reorderEntity` |
 | Layers and styles | `addLayer`, `updateLayer`, `mergeLayer`, `deleteLayer`, `addLinetype`, `updateLinetype`, `deleteLinetype`, `addDimStyle`, `updateDimStyle`, `deleteDimStyle`, `addTextStyle`, `updateTextStyle`, `deleteTextStyle` |
 | Groups and layouts | `createGroup`, `addGroupMembers`, `removeGroupMembers`, `deleteGroup`, `createLayout`, `updateLayout`, `deleteLayout` |
 | Inspect and measure | `inspect`, `stats`, `measure`, `measureEntities`, `measurePoints`, `select`, `snap`, `ucs`, `findText`, `replaceText` |

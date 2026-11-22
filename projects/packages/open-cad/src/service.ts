@@ -98,6 +98,7 @@ import type {
     TextReplaceResult,
     TransformRequest,
     TransformResult,
+    TrimResult,
     UcsRequest,
     UcsResult,
     UnitsConversion,
@@ -890,6 +891,11 @@ export function offsetBySide(handle: number, request: OffsetBySideRequest): Offs
             JSON.stringify({ entityId: request.entityId, distance: request.distance, side: request.side }),
         ),
     );
+}
+
+/** Trims one line at a line, circle or arc cutter, keeping the longer side. */
+export function trim(handle: number, id: string, cutter: string): TrimResult {
+    return decode<TrimResult>(() => binding('drawing.trim').drawing_trim(handle, JSON.stringify({ id, cutter })));
 }
 
 /** Measures bounds, path length and enclosed area. */
