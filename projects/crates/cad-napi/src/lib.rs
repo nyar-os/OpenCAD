@@ -233,6 +233,15 @@ fn drawing_add_ordinate_dimension(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Adds an angular dimension to an open drawing.
+#[function]
+fn drawing_add_angular_dimension(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_angular_dimension(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Adds a hatch bounded by one closed polygon to an open drawing.
 #[function]
 fn drawing_add_hatch(ctx: CallContext) -> Result<JsValue> {
@@ -1017,6 +1026,16 @@ fn call_add_ordinate_dimension(handle: u64, request: &Value) -> std::result::Res
     open_cad_drawing::add_ordinate_dimension(handle, &layer, origin, feature, axis, offset, text).map_err(service_failure)
 }
 
+fn call_add_angular_dimension(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let center = request_point(request, "center")?;
+    let first = request_point(request, "first")?;
+    let second = request_point(request, "second")?;
+    let offset = request.get("offset").and_then(Value::as_f64).unwrap_or(10.0);
+    let text = request.get("text").and_then(Value::as_str).map(str::to_string);
+    open_cad_drawing::add_angular_dimension(handle, &layer, center, first, second, offset, text).map_err(service_failure)
+}
+
 fn call_add_hatch(handle: u64, request: &Value) -> std::result::Result<Value, String> {
     let layer = request_layer(request)?;
     let points = request_points(request)?;
@@ -1644,6 +1663,17 @@ impl IpcHandler for StudioIpcHandler {
                     Err(message) => failure(id, "addOrdinateDimensionError", message),
                 }
             }
+            "drawing.addAngularDimension" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "addAngularDimensionError", "an addAngularDimension request needs a drawing handle".to_string());
+                };
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                match call_add_angular_dimension(handle, &request) {
+                    Ok(result) => reply(id, "addAngularDimensionResult", result),
+                    Err(message) => failure(id, "addAngularDimensionError", message),
+                }
+            }
             "drawing.addHatch" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -2184,6 +2214,7 @@ register_module![
     drawing_add_dimension,
     drawing_add_radial_dimension,
     drawing_add_ordinate_dimension,
+    drawing_add_angular_dimension,
     drawing_add_hatch,
     drawing_delete_entity,
     drawing_list_entities,

@@ -15,8 +15,8 @@ use geometry_planar::{Point as PlanarPoint, Rect, signed_polygon_area};
 use serde::Serialize;
 
 use crate::schema::{
-    CONTINUOUS_LINETYPE, Drawing, Entity, EntityKind, OrdinateAxis, Units, arc_sweep, offset_points, ordinate_points, ordinate_value,
-    radial_label, radial_target, sample_arc, sample_ellipse,
+    CONTINUOUS_LINETYPE, Drawing, Entity, EntityKind, OrdinateAxis, Units, angular_points, angular_sweep, angular_value, arc_sweep,
+    offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// One item an exchange target could not keep.
@@ -116,6 +116,13 @@ fn ordinate_dimension_label(origin: [f64; 2], feature: [f64; 2], axis: OrdinateA
         return text.clone();
     }
     num(ordinate_value(origin, feature, axis))
+}
+
+fn angular_dimension_label(center: [f64; 2], first: [f64; 2], second: [f64; 2], text: &Option<String>) -> String {
+    if let Some(text) = text {
+        return text.clone();
+    }
+    format!("{}°", num(angular_value(center, first, second)))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -287,6 +294,28 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
                 Shape::Text {
                     at: map(midpoint),
                     text: ordinate_dimension_label(*origin, *feature, *axis, text),
+                    size: projection.label_size.max(0.01),
+                },
+                text_style.clone(),
+            ));
+        }
+        EntityKind::AngularDimension { center, first, second, offset, text } => {
+            let radius = offset.abs();
+            let (start, sweep) = angular_sweep(*center, *first, *second);
+            let start_point = radial_target(*center, radius, start);
+            let end_point = radial_target(*center, radius, start + sweep);
+            let label_point = radial_target(*center, radius, start + sweep / 2.0);
+            for (leg_from, leg_to) in [(*first, start_point), (*second, end_point)] {
+                flat.push(Element::new(Shape::Line { from: map(leg_from), to: map(leg_to) }, stroke_style.clone()));
+            }
+            flat.push(Element::new(
+                Shape::Arc { center: map(*center), radius: radius * scale, start_degrees: -start, end_degrees: -(start + sweep) },
+                stroke_style.clone(),
+            ));
+            flat.push(Element::new(
+                Shape::Text {
+                    at: map(label_point),
+                    text: angular_dimension_label(*center, *first, *second, text),
                     size: projection.label_size.max(0.01),
                 },
                 text_style.clone(),
@@ -695,6 +724,31 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
                 dxf_pair(&mut out, 34, "0");
                 dxf_pair(&mut out, 10, num_exact(base[0]));
                 dxf_pair(&mut out, 20, num_exact(base[1]));
+                dxf_pair(&mut out, 30, "0");
+                match text {
+                    Some(label) => dxf_pair(&mut out, 1, dxf_text(label)),
+                    None => dxf_pair(&mut out, 1, "<>"),
+                }
+            }
+            EntityKind::AngularDimension { center, first, second, offset, text } => {
+                let (start_point, _end_point, middle) = angular_points(*center, *first, *second, *offset);
+                dxf_pair(&mut out, 0, "DIMENSION");
+                dxf_pair(&mut out, 8, dxf_layer_name(&entity.layer));
+                dxf_pair(&mut out, 70, 5);
+                dxf_pair(&mut out, 13, num_exact(first[0]));
+                dxf_pair(&mut out, 23, num_exact(first[1]));
+                dxf_pair(&mut out, 33, "0");
+                dxf_pair(&mut out, 14, num_exact(second[0]));
+                dxf_pair(&mut out, 24, num_exact(second[1]));
+                dxf_pair(&mut out, 34, "0");
+                dxf_pair(&mut out, 15, num_exact(center[0]));
+                dxf_pair(&mut out, 25, num_exact(center[1]));
+                dxf_pair(&mut out, 35, "0");
+                dxf_pair(&mut out, 16, num_exact(start_point[0]));
+                dxf_pair(&mut out, 26, num_exact(start_point[1]));
+                dxf_pair(&mut out, 36, "0");
+                dxf_pair(&mut out, 10, num_exact(middle[0]));
+                dxf_pair(&mut out, 20, num_exact(middle[1]));
                 dxf_pair(&mut out, 30, "0");
                 match text {
                     Some(label) => dxf_pair(&mut out, 1, dxf_text(label)),

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use boost_check::{CheckReport, Issue, Severity};
 use serde_json::{Value, json};
 
-use crate::schema::{Drawing, EntityKind, Units};
+use crate::schema::{Drawing, EntityKind, Units, angular_sweep};
 
 /// Checks this build executes.
 pub(crate) const SUPPORTED_CHECKS: &[&str] =
@@ -491,6 +491,28 @@ impl<'a> Collector<'a> {
                                 label.trim(),
                                 self.drawing.units.as_str()
                             ),
+                        );
+                    }
+                }
+                EntityKind::AngularDimension { center, first, second, text, .. } => {
+                    if self.dimensions && angular_sweep(*center, *first, *second).1 <= 1e-9 {
+                        self.push(
+                            "dimensions/degenerate",
+                            Severity::Error,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("angular dimension `{}` measures zero degrees", entity.id),
+                        );
+                    }
+                    if self.dimensions && text.as_deref().is_some_and(|label| label.trim().is_empty()) {
+                        self.push(
+                            "dimensions/empty-text",
+                            Severity::Warning,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("angular dimension `{}` carries an empty label; the measured value is used", entity.id),
                         );
                     }
                 }

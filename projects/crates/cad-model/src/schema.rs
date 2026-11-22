@@ -530,6 +530,25 @@ pub enum EntityKind {
         #[serde(default)]
         text: Option<String>,
     },
+    /// An angular dimension between two rays that share `center`.
+    ///
+    /// The measured angle is swept counter-clockwise from the `first` ray to the
+    /// `second` ray and is reported in degrees. `offset` is the positive radius
+    /// of the dimension arc.
+    AngularDimension {
+        /// Vertex shared by both measured rays `[x, y]`.
+        center: [f64; 2],
+        /// A point on the first ray `[x, y]`.
+        first: [f64; 2],
+        /// A point on the second ray `[x, y]`.
+        second: [f64; 2],
+        /// Radius of the dimension arc in drawing units.
+        #[serde(default = "default_angular_radius")]
+        offset: f64,
+        /// Optional label; the measured angle in degrees is used when absent.
+        #[serde(default)]
+        text: Option<String>,
+    },
     /// A filled region bounded by one closed polygon.
     ///
     /// The pattern name is kept as a description; the exporters paint a solid
@@ -546,6 +565,11 @@ pub enum EntityKind {
 /// Default pattern of a [`EntityKind::Hatch`] that does not name one.
 pub fn default_hatch_pattern() -> String {
     "SOLID".to_string()
+}
+
+/// Default arc radius of an angular dimension that does not set one.
+pub fn default_angular_radius() -> f64 {
+    10.0
 }
 
 /// Axis an ordinate dimension measures.
@@ -610,6 +634,10 @@ impl Entity {
                 let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
                 vec![*origin, *feature, base, guide]
             }
+            EntityKind::AngularDimension { center, first, second, offset, .. } => {
+                let (start, end, middle) = angular_points(*center, *first, *second, *offset);
+                vec![*center, *first, *second, start, end, middle]
+            }
             EntityKind::Hatch { points, .. } => points.clone(),
         }
     }
@@ -635,6 +663,7 @@ impl Entity {
             EntityKind::Dimension { from, .. } => *from,
             EntityKind::RadialDimension { center, .. } => *center,
             EntityKind::OrdinateDimension { origin, .. } => *origin,
+            EntityKind::AngularDimension { center, .. } => *center,
             EntityKind::Hatch { points, .. } => points.first().copied().unwrap_or([0.0, 0.0]),
         }
     }
@@ -668,6 +697,11 @@ impl Entity {
             EntityKind::OrdinateDimension { origin, feature, .. } => {
                 shift(origin);
                 shift(feature);
+            }
+            EntityKind::AngularDimension { center, first, second, .. } => {
+                shift(center);
+                shift(first);
+                shift(second);
             }
             EntityKind::Hatch { points, .. } => {
                 for point in points {
@@ -703,6 +737,9 @@ impl Entity {
             EntityKind::OrdinateDimension { origin, feature, offset, .. } => {
                 finite_point(*origin) && finite_point(*feature) && offset.is_finite()
             }
+            EntityKind::AngularDimension { center, first, second, offset, .. } => {
+                finite_point(*center) && finite_point(*first) && finite_point(*second) && offset.is_finite()
+            }
             EntityKind::Hatch { points, .. } => points.iter().all(|point| finite_point(*point)),
         }
     }
@@ -728,6 +765,15 @@ impl Entity {
             }
             EntityKind::Hatch { points, .. } if points.len() < 3 => {
                 return Err(format!("entity `{}` hatch needs at least 3 boundary points", self.id));
+            }
+            EntityKind::AngularDimension { center, first, second, offset, .. } => {
+                if non_positive(*offset) {
+                    return Err(format!("entity `{}` has a non-positive angular dimension radius", self.id));
+                }
+                let (_, sweep) = angular_sweep(*center, *first, *second);
+                if sweep <= 1e-9 {
+                    return Err(format!("entity `{}` has collinear angular dimension rays", self.id));
+                }
             }
             _ => {}
         }
@@ -779,6 +825,27 @@ pub fn ordinate_value(origin: [f64; 2], feature: [f64; 2], axis: OrdinateAxis) -
         OrdinateAxis::X => feature[0] - origin[0],
         OrdinateAxis::Y => feature[1] - origin[1],
     }
+}
+
+/// Start angle and positive counter-clockwise sweep, in degrees, of an angular
+/// dimension between the rays `center -> first` and `center -> second`.
+pub fn angular_sweep(center: [f64; 2], first: [f64; 2], second: [f64; 2]) -> (f64, f64) {
+    let start = (first[1] - center[1]).atan2(first[0] - center[0]).to_degrees();
+    let end = (second[1] - center[1]).atan2(second[0] - center[0]).to_degrees();
+    let sweep = (end - start).rem_euclid(360.0);
+    (start, sweep)
+}
+
+/// Start, end and middle points of the dimension arc of an angular dimension.
+pub fn angular_points(center: [f64; 2], first: [f64; 2], second: [f64; 2], radius: f64) -> ([f64; 2], [f64; 2], [f64; 2]) {
+    let (start, sweep) = angular_sweep(center, first, second);
+    let radius = radius.abs();
+    (arc_point(center, radius, start), arc_point(center, radius, start + sweep), arc_point(center, radius, start + sweep / 2.0))
+}
+
+/// Measured value of an angular dimension in degrees.
+pub fn angular_value(center: [f64; 2], first: [f64; 2], second: [f64; 2]) -> f64 {
+    angular_sweep(center, first, second).1
 }
 
 /// A drawing document.

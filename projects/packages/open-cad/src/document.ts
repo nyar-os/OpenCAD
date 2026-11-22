@@ -24,6 +24,7 @@ import type {
     AddLineRequest,
     AddLinetypeRequest,
     AddOrdinateDimensionRequest,
+    AddAngularDimensionRequest,
     AddPointRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
@@ -397,6 +398,11 @@ export class DrawingDocument {
     /** Adds an ordinate dimension and returns the created entity. */
     addOrdinateDimension(request: AddOrdinateDimensionRequest): Entity {
         return this.adopt(this.edit((handle) => service.addOrdinateDimension(handle, request)));
+    }
+
+    /** Adds an angular dimension swept counter-clockwise from `first` to `second`. */
+    addAngularDimension(request: AddAngularDimensionRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addAngularDimension(handle, request)));
     }
 
     /** Adds a filled hatch bounded by one closed polygon. */

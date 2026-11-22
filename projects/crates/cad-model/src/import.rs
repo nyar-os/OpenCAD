@@ -23,6 +23,7 @@ use crate::{
     ServiceError,
     schema::{
         CONTINUOUS_LINETYPE, DimensionStyle, Drawing, Entity, EntityKind, Layer, Linetype, MAX_LINEWEIGHT, OrdinateAxis, TextStyle, Units,
+        angular_sweep,
     },
 };
 
@@ -1110,10 +1111,37 @@ impl Reader {
                             };
                             self.push(layer, EntityKind::OrdinateDimension { origin, feature, axis, offset, text });
                         }
+                        // Three-point angular (5) carries a point on each ray in
+                        // 13/23 and 14/24, the shared vertex in 15/25 and a
+                        // point on the dimension arc in 10/20.
+                        5 => {
+                            let (Some(center), Some(first), Some(second)) =
+                                (point_at(block, 15, 25), point_at(block, 13, 23), point_at(block, 14, 24))
+                            else {
+                                self.skip("DIMENSION (missing angular vertex or ray points)", block);
+                                index = end;
+                                continue;
+                            };
+                            let center = xform.apply(center);
+                            let first = xform.apply(first);
+                            let second = xform.apply(second);
+                            if angular_sweep(center, first, second).1 <= 1e-9 {
+                                self.skip("DIMENSION (collinear angular rays)", block);
+                                index = end;
+                                continue;
+                            }
+                            let offset = point_at(block, 10, 20)
+                                .map(|definition| {
+                                    let definition = xform.apply(definition);
+                                    ((definition[0] - center[0]).powi(2) + (definition[1] - center[1]).powi(2)).sqrt()
+                                })
+                                .filter(|radius| *radius > 1e-9)
+                                .unwrap_or_else(|| 10.0 * xform.factor());
+                            self.push(layer, EntityKind::AngularDimension { center, first, second, offset, text });
+                        }
                         other => {
                             let label = match other {
                                 2 => "DIMENSION (angular)",
-                                5 => "DIMENSION (3-point angular)",
                                 _ => "DIMENSION (unknown type)",
                             };
                             self.skip(label, block);

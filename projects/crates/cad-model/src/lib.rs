@@ -31,9 +31,9 @@ mod store;
 pub use schema::{
     CONTINUOUS_LINETYPE, CURVE_STEP_DEGREES, DEFAULT_LAYER, DEFAULT_LAYOUT_HEIGHT, DEFAULT_LAYOUT_WIDTH, DIMENSION_LAYER, DimensionStyle,
     Drawing, DrawingProperties, Entity, EntityGroup, EntityKind, LINETYPE_PATTERN_LIMIT, Layer, Layout, Linetype, MAX_LINEWEIGHT, OrdinateAxis,
-    PROPERTY_VALUE_LIMIT, TextStyle, Units, arc_point, arc_sweep, default_dimension_styles, default_hatch_pattern, default_linetypes,
-    default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points, ordinate_points, ordinate_value, radial_label,
-    radial_target, sample_arc, sample_ellipse,
+    PROPERTY_VALUE_LIMIT, TextStyle, Units, angular_points, angular_sweep, angular_value, arc_point, arc_sweep, default_dimension_styles,
+    default_hatch_pattern, default_linetypes, default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points,
+    ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -165,11 +165,12 @@ pub fn capabilities() -> Value {
                 "dimension",
                 "radial-dimension",
                 "ordinate-dimension",
+                "angular-dimension",
                 "hatch",
             ],
             |name| match name {
                 "line" | "circle" | "arc" | "ellipse" | "point" | "polyline" | "text" | "dimension" | "radial-dimension"
-                | "ordinate-dimension" | "hatch" => "supported",
+                | "ordinate-dimension" | "angular-dimension" | "hatch" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -743,6 +744,31 @@ pub fn add_ordinate_dimension(
         return Err(argument("`offset` must be finite"));
     }
     push_entity(handle, layer, EntityKind::OrdinateDimension { origin, feature, axis, offset, text })
+}
+
+/// Adds an angular dimension between two rays that share `center`.
+///
+/// The angle is swept counter-clockwise from the `first` ray to the `second` ray
+/// and is reported in degrees. `offset` is the positive radius of the dimension
+/// arc; the rays must be distinct and non-collinear.
+pub fn add_angular_dimension(
+    handle: u64,
+    layer: &str,
+    center: [f64; 2],
+    first: [f64; 2],
+    second: [f64; 2],
+    offset: f64,
+    text: Option<String>,
+) -> Result<Value, ServiceError> {
+    require_finite(&[center, first, second], "center/first/second")?;
+    if !offset.is_finite() || offset <= 0.0 {
+        return Err(argument("`offset` must be a positive finite number"));
+    }
+    let (_, sweep) = angular_sweep(center, first, second);
+    if sweep <= 1e-9 {
+        return Err(argument("the two rays of an angular dimension must not be collinear"));
+    }
+    push_entity(handle, layer, EntityKind::AngularDimension { center, first, second, offset, text })
 }
 
 /// Adds a filled hatch bounded by one closed polygon.
@@ -1489,6 +1515,11 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                     rotate(origin);
                     rotate(feature);
                 }
+                EntityKind::AngularDimension { center, first, second, .. } => {
+                    rotate(center);
+                    rotate(first);
+                    rotate(second);
+                }
                 EntityKind::Hatch { points, .. } => points.iter_mut().for_each(rotate),
             }
         }
@@ -1532,6 +1563,12 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                 EntityKind::OrdinateDimension { origin, feature, offset, .. } => {
                     scale(origin);
                     scale(feature);
+                    *offset *= factor;
+                }
+                EntityKind::AngularDimension { center, first, second, offset, .. } => {
+                    scale(center);
+                    scale(first);
+                    scale(second);
                     *offset *= factor;
                 }
                 EntityKind::Hatch { points, .. } => points.iter_mut().for_each(scale),
@@ -1589,6 +1626,11 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                     if flips {
                         *offset = -*offset;
                     }
+                }
+                EntityKind::AngularDimension { center, first, second, .. } => {
+                    mirror(center);
+                    mirror(first);
+                    mirror(second);
                 }
                 EntityKind::Hatch { points, .. } => points.iter_mut().for_each(mirror),
             }
@@ -1760,6 +1802,7 @@ fn kind_name(kind: &EntityKind) -> &'static str {
         EntityKind::Dimension { .. } => "dimension",
         EntityKind::RadialDimension { .. } => "radial dimension",
         EntityKind::OrdinateDimension { .. } => "ordinate dimension",
+        EntityKind::AngularDimension { .. } => "angular dimension",
         EntityKind::Hatch { .. } => "hatch",
     }
 }
@@ -2383,7 +2426,8 @@ fn entity_length_area(kind: &EntityKind) -> (f64, f64) {
         | EntityKind::Text { .. }
         | EntityKind::Dimension { .. }
         | EntityKind::RadialDimension { .. }
-        | EntityKind::OrdinateDimension { .. } => (0.0, 0.0),
+        | EntityKind::OrdinateDimension { .. }
+        | EntityKind::AngularDimension { .. } => (0.0, 0.0),
     }
 }
 
@@ -4104,6 +4148,13 @@ fn entity_outline(kind: &EntityKind) -> (Vec<[f64; 2]>, bool) {
             let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
             (vec![*feature, guide, base, *origin], false)
         }
+        EntityKind::AngularDimension { center, first, second, offset, .. } => {
+            let (start, sweep) = angular_sweep(*center, *first, *second);
+            let mut points = vec![*first];
+            points.extend(sample_arc(*center, offset.abs(), start, start + sweep));
+            points.push(*second);
+            (points, false)
+        }
         EntityKind::Hatch { points, .. } => (points.clone(), true),
     }
 }
@@ -4298,6 +4349,19 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandida
                     let next = (index + 1) % points.len();
                     push_snap(out, "midpoint", &entity.id, edge_midpoint(points[index], points[next]));
                 }
+            }
+        }
+        EntityKind::AngularDimension { center: vertex, first, second, offset, .. } => {
+            if endpoint {
+                push_snap(out, "endpoint", &entity.id, *first);
+                push_snap(out, "endpoint", &entity.id, *second);
+            }
+            if center {
+                push_snap(out, "center", &entity.id, *vertex);
+            }
+            if midpoint {
+                let (start, sweep) = angular_sweep(*vertex, *first, *second);
+                push_snap(out, "midpoint", &entity.id, arc_point(*vertex, offset.abs(), start + sweep / 2.0));
             }
         }
         EntityKind::Text { .. } | EntityKind::Dimension { .. } | EntityKind::RadialDimension { .. } | EntityKind::OrdinateDimension { .. } => {}
@@ -4556,7 +4620,7 @@ mod tests {
         for operation in ["constraints", "kernel3d"] {
             assert_eq!(matrix["operations"][operation], json!("unsupported"), "operation `{operation}`");
         }
-        for entity in ["radial-dimension", "ordinate-dimension", "hatch"] {
+        for entity in ["radial-dimension", "ordinate-dimension", "angular-dimension", "hatch"] {
             assert_eq!(matrix["entities"][entity], json!("supported"), "entity `{entity}`");
         }
         assert_eq!(matrix["renderers"]["svg"], json!("supported"));
@@ -7053,6 +7117,64 @@ mod tests {
             EntityKind::RadialDimension { angle, .. } if (angle - 90.0).abs() < 1e-12
         ));
         close(handle).expect("close");
+    }
+
+    #[test]
+    fn angular_dimensions_render_validate_and_round_trip() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let added = add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 5.0, None).expect("angular dimension");
+        assert_eq!(added["entity"]["kind"]["type"], json!("angular_dimension"));
+        assert_eq!(added["entity"]["kind"]["offset"], json!(5.0));
+        assert_eq!(
+            add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [20.0, 0.0], 5.0, None).expect_err("collinear rays").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 0.0, None).expect_err("zero radius").code,
+            "session/argument-invalid"
+        );
+
+        let drawing = drawing_of(handle);
+        assert_eq!(drawing.entities.len(), 1);
+        assert_eq!(kind_name(&drawing.entities[0].kind), "angular dimension");
+        let measured = measure(handle, None).expect("measure");
+        assert_eq!(measured["length"], json!(0.0));
+        assert_eq!(measured["area"], json!(0.0));
+
+        let svg = exchange::svg(&drawing);
+        assert!(svg.contains("90°"), "the SVG carries the measured angle: {svg}");
+        let (text, losses) = exchange::dxf(&drawing);
+        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+        assert!(text.contains("70\n5\n"), "an angular dimension uses type 5");
+        let (imported, losses) = import::dxf(&text, None).expect("import the exported DXF");
+        assert!(!losses.iter().any(|loss| loss.code == "dxf/unsupported-entity"), "{losses:?}");
+        let Some(EntityKind::AngularDimension { center, first, second, offset, .. }) =
+            imported.entities.iter().map(|entity| &entity.kind).find(|kind| matches!(kind, EntityKind::AngularDimension { .. }))
+        else {
+            panic!("expected an imported angular dimension, got {:?}", imported.entities);
+        };
+        assert_eq!(*center, [0.0, 0.0]);
+        assert_eq!(*first, [10.0, 0.0]);
+        assert_eq!(*second, [0.0, 10.0]);
+        assert!((offset - 5.0).abs() < 1e-9);
+
+        let dir = TempDir::new("angular-dimension");
+        let path = dir.path.join("angle.ocad");
+        save(handle, &path, true).expect("save");
+        close(handle).expect("close");
+        let opened = open(&path).expect("open");
+        let reopened = handle_of(&opened);
+        let drawing = drawing_of(reopened);
+        let EntityKind::AngularDimension { center, first, second, offset, .. } = &drawing.entities[0].kind
+        else {
+            panic!("expected an angular dimension, got {:?}", drawing.entities[0].kind);
+        };
+        assert_eq!(*center, [0.0, 0.0]);
+        assert_eq!(*first, [10.0, 0.0]);
+        assert_eq!(*second, [0.0, 10.0]);
+        assert!((offset - 5.0).abs() < 1e-9);
+        close(reopened).expect("close reopened");
     }
 
     #[test]

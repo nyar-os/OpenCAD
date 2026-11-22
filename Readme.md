@@ -11,7 +11,7 @@ Status
 
 Working document core. A `.ocad` project can be created, opened, edited, saved
 and reopened; lines, circles, arcs, ellipses, polylines, text, linear
-dimensions, radial/diameter dimensions, ordinate dimensions and hatches are real
+dimensions, radial/diameter dimensions, ordinate dimensions, angular dimensions and hatches are real
 entities; transform (translate/rotate/scale/mirror), copy,
 rectangular/polar array, polyline explode, offset, fillet, chamfer and measure are supported;
 a selected entity or set of entities can be measured for its path length and
@@ -67,6 +67,7 @@ open-cad entity add-circle plan.ocad --layer 0 --center 50,50 --radius 20
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 45 --offset 3
 open-cad entity add-radial-dimension plan.ocad --layer dimensions --center 50,50 --radius 20 --angle 0 --diameter
 open-cad entity add-ordinate-dimension plan.ocad --layer dimensions --origin 0,0 --feature 50,20 --axis x --offset 10
+open-cad entity add-angular-dimension plan.ocad --layer dimensions --center 0,0 --first 10,0 --second 0,10 --offset 5
 open-cad entity add-hatch plan.ocad --layer fills --points "0,0 80,0 80,60 0,60" --pattern ANSI31
 open-cad arc add plan.ocad --layer 0 --center 50,50 --radius 20 --start 0 --end 90
 open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotation 15
@@ -159,8 +160,8 @@ What this build does NOT do
   TEXT entity per inline text line) and HATCH (one closed boundary path).
   Rotated or aligned linear DIMENSION references are read.
   ARC and ELLIPSE stay analytic, and only bulge arcs are flattened; rotated or
-  aligned linear, radial, diameter and ordinate dimensions are read, while
-  angular dimensions are skipped. A HATCH boundary made of line,
+  aligned linear, radial, diameter, ordinate and three-point angular dimensions
+  are read; two-line angular dimensions (DXF type 2) are skipped. A HATCH boundary made of line,
   arc or polyline edges becomes a closed polygon; elliptical and spline edges
   skip the entity, and the pattern name is kept as a description without a
   pattern definition. MLEADER inline formatting is removed, its lines are
@@ -227,7 +228,7 @@ What this build does NOT do
   partial because only their export direction is implemented, STL import and DWG
   as unsupported, and the unimplemented routes as `unsupported`. Its `entities`
   matrix lists line, circle, arc, ellipse, point, polyline, text, dimension,
-  radial dimension, ordinate dimension and hatch as supported; its
+  radial dimension, ordinate dimension, angular dimension and hatch as supported; its
   `operations` matrix lists transform, copy, array, explode, offset, fillet,
   chamfer, measure, measure-entity, measure-points, stats, dimension-style,
   text-style, text-search, group, select, properties, snap, linetype and ucs as

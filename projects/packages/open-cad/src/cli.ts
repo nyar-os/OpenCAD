@@ -937,6 +937,49 @@ entity
     });
 
 entity
+    .command('add-angular-dimension', 'cli.cmd.add-angular-dimension')
+    .option('--center <point>', 'cli.opt.center')
+    .option('--first <point>', 'cli.opt.first')
+    .option('--second <point>', 'cli.opt.second')
+    .option('--offset <number>', 'cli.opt.offset')
+    .option('--text <text>', 'cli.opt.text')
+    .option('--layer <layer>', 'cli.opt.dimension-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const center = point(options, 'center');
+        const first = point(options, 'first');
+        const second = point(options, 'second');
+        if (center === undefined || first === undefined || second === undefined) {
+            ctx.fail('open-cad.cli.angular-dimension-required', {
+                message: '`--center x,y`, `--first x,y` and `--second x,y` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addAngularDimension({
+                    layer: text(options, 'layer') ?? 'dimensions',
+                    center,
+                    first,
+                    second,
+                    offset: number(options, 'offset'),
+                    text: text(options, 'text'),
+                }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
     .command('delete', 'cli.cmd.delete')
     .option('--id <entity>', 'cli.opt.id')
     .actionCtx(async (options, _args, ctx) => {

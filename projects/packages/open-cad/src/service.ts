@@ -20,6 +20,7 @@ import type {
     AddLineRequest,
     AddLinetypeRequest,
     AddOrdinateDimensionRequest,
+    AddAngularDimensionRequest,
     AddPointRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
@@ -309,6 +310,23 @@ export function addOrdinateDimension(handle: number, request: AddOrdinateDimensi
                 feature: request.feature,
                 axis: request.axis,
                 offset: request.offset ?? 0,
+                text: request.text,
+            }),
+        ),
+    );
+}
+
+/** Adds an angular dimension between two rays. */
+export function addAngularDimension(handle: number, request: AddAngularDimensionRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addAngularDimension').drawing_add_angular_dimension(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                center: request.center,
+                first: request.first,
+                second: request.second,
+                offset: request.offset ?? 10,
                 text: request.text,
             }),
         ),

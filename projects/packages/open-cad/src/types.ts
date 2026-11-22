@@ -48,6 +48,7 @@ export type EntityKindName =
     | 'dimension'
     | 'radial-dimension'
     | 'ordinate-dimension'
+    | 'angular-dimension'
     | 'hatch';
 
 /** Edit operations in the capability matrix. */
@@ -446,6 +447,18 @@ export type EntityKind =
           readonly text: string | null;
       }
     | {
+          readonly type: 'angular_dimension';
+          /** Shared vertex of the two measured rays. */
+          readonly center: Point;
+          /** A point on the first ray. */
+          readonly first: Point;
+          /** A point on the second ray. */
+          readonly second: Point;
+          /** Positive radius of the dimension arc. */
+          readonly offset: number;
+          readonly text: string | null;
+      }
+    | {
           readonly type: 'hatch';
           /** Boundary vertices in order; the closing edge is implicit. */
           readonly points: readonly Point[];
@@ -731,9 +744,22 @@ export interface AddOrdinateDimensionRequest {
     readonly text?: string;
 }
 
-/** Arguments of `addHatch()`. */
-export interface AddHatchRequest {
+/** Arguments of `addAngularDimension()`; the angle sweeps counter-clockwise from `first` to `second`. */
+export interface AddAngularDimensionRequest {
     readonly layer: LayerId;
+    /** Shared vertex of the two rays. */
+    readonly center: Point;
+    /** A point on the first ray. */
+    readonly first: Point;
+    /** A point on the second ray. */
+    readonly second: Point;
+    /** Radius of the dimension arc; defaults to `10`. */
+    readonly offset?: number;
+    readonly text?: string;
+}
+
+/** Arguments of `addHatch()`. */
+export interface AddHatchRequest {    readonly layer: LayerId;
     /** At least three boundary vertices; the closing edge is implicit. */
     readonly points: readonly Point[];
     /** Pattern name; defaults to `SOLID`. */
