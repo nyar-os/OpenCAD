@@ -84,7 +84,7 @@ exactly one transform.
 | `explode` | `--id <id>` (a block reference; unsupported for other kinds) |
 | `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
 | `trim` | `--id <line\|arc\|circle>`, `--cutter <entity>` (a line, circle or arc) |
-| `extend` | `--id <line>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
+| `extend` | `--id <line\|arc>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
 | `break` | `--id <line\|arc>`, `--at x,y` (strictly inside the segment or arc sweep) |
 | `join` | `--a <line>`, `--b <line>` (collinear and sharing one endpoint) |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
@@ -122,11 +122,14 @@ crossing reports `trim/no-intersection`; tangency, collinearity, a zero-length
 or zero-radius input, a single circle crossing or a cut on an endpoint reports
 `trim/degenerate`.
 
-`extend` lengthens the `--id` line until it meets the `--to` line, circle or
-arc and saves the file. By default the `to` endpoint moves; `--side start` moves
-the `from` endpoint instead. Only crossings ahead of the moving endpoint count
-and the nearest one becomes the new endpoint. A boundary the ray never reaches
-reports `extend/no-intersection`.
+`extend` lengthens the `--id` line or arc until it meets the `--to` line, circle
+or arc and saves the file. By default the `to` endpoint moves and `--side start`
+moves the `from` endpoint instead. An arc target travels along its own circle:
+`--side end` walks counter-clockwise from the end angle and `--side start` walks
+clockwise from the start angle. Only crossings ahead of the moving endpoint
+count and the nearest one becomes the new endpoint, and an arc never wraps past
+a full turn. A boundary the extension never reaches reports
+`extend/no-intersection`.
 
 `break` splits the `--id` line or arc into two pieces at `--at x,y` and saves the
 file. For a line the point must lie strictly inside the segment, away from both

@@ -274,23 +274,33 @@ unknown id reports `object/not-found`, a locked target layer reports
 
 ## Extend
 
-`extend(id, boundary, side)` lengthens one line until it meets a line, circle
-or arc boundary. `side` is `end` by default: the `from` endpoint stays put and
-`to` moves along the `from`-to-`to` direction. `side = start` keeps `to` and
-moves `from` along the `to`-to-`from` direction. Only crossings ahead of the
-moving endpoint count, and the nearest one becomes the new endpoint, so the
-line grows and never folds back. A line boundary is its bounded drawn segment;
-a circle or arc crossing must lie on the arc's counter-clockwise sweep.
+`extend(id, boundary, side)` lengthens one line or arc until it meets a line,
+circle or arc boundary. `side` is `end` by default: for a line the `from`
+endpoint stays put and `to` moves along the `from`-to-`to` direction, while
+`side = start` keeps `to` and moves `from` along the `to`-to-`from` direction.
+Only crossings ahead of the moving endpoint count, and the nearest one becomes
+the new endpoint, so the line grows and never folds back. A line boundary is its
+bounded drawn segment; a circle or arc crossing must lie on the arc's
+counter-clockwise sweep.
+
+An arc target travels along its own circle instead of a tangent ray: `end` walks
+counter-clockwise from the end angle and `start` walks clockwise from the start
+angle, and the first crossing with the boundary becomes the new endpoint. The
+centre, radius and other endpoint stay put. A crossing at the moving endpoint is
+ignored, and a candidate that would push the sweep to a full turn is refused
+rather than wrapping the arc.
 
 The response carries `{ revision, drawing, entity, boundary, side }`, where
-`entity` is the extended line. The boundary never moves, only the target's
+`entity` is the extended line or arc. The boundary never moves, only the target's
 layer is checked for locks, and the edit is one history step.
 
-A boundary the extension ray never reaches reports `extend/no-intersection`. A
-target that is not a line, or a boundary that is not a line, circle or arc,
+A boundary the extension never reaches (including one that only crosses behind
+the endpoint or past a full turn) reports `extend/no-intersection`. A target
+that is not a line or arc, or a boundary that is not a line, circle or arc,
 reports `object/unsupported`; an unknown id reports `object/not-found`, a
-locked target layer reports `drawing/layer-locked`, and a zero-length target or
-the same id for target and boundary reports `session/argument-invalid`.
+locked target layer reports `drawing/layer-locked`, and a zero-length line, a
+zero-radius arc or the same id for target and boundary reports
+`session/argument-invalid`.
 
 ## Break
 
@@ -406,9 +416,10 @@ layers (`join_refuses_a_locked_layer`) and repeatability (`join_is_deterministic
 - Trim cuts line, arc and circle targets with a line, circle or arc cutter, and
   a circle target becomes an arc. It does not trim polylines, splines, ellipses,
   block references or other entity types.
-- Extend lengthens a line only, and its boundary must be a line, circle or arc.
-  It does not extend polylines, arcs, circles, ellipses or splines, and it does
-  not follow a boundary past its drawn extent.
+- Extend lengthens a line or an arc only, and its boundary must be a line,
+  circle or arc. An arc target grows along its own circle and never wraps past
+  a full turn. It does not extend polylines, circles, ellipses or splines, and
+  it does not follow a boundary past its drawn extent.
 - Break splits a line or an arc only; it does not break polylines, circles,
   ellipses, splines, text, hatches or dimensions, and it never turns a circle
   into an arc.

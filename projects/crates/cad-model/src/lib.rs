@@ -2905,12 +2905,14 @@ pub fn trim(handle: u64, target_id: &str, cutter_id: &str) -> Result<Value, Serv
     })
 }
 
-/// Which endpoint of a line [`extend`] moves.
+/// Which endpoint of a line or arc [`extend`] moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtendSide {
-    /// Extend past the `to` endpoint, along the `from`-to-`to` direction.
+    /// Extend past the `to` endpoint, in the `from`-to-`to` direction, or past
+    /// the end angle counter-clockwise.
     End,
-    /// Extend past the `from` endpoint, along the `to`-to-`from` direction.
+    /// Extend past the `from` endpoint, in the `to`-to-`from` direction, or past
+    /// the start angle clockwise.
     Start,
 }
 
@@ -3007,22 +3009,121 @@ fn extend_boundary_parameters(ray: &ExtendRay, boundary: &EntityKind, boundary_i
     }
 }
 
-/// Extends one line until it meets a line, circle or arc boundary.
+/// Angles, in `[0, 360)` degrees around the target arc's centre, where the
+/// target's full circle meets one line, circle or arc boundary. A line boundary
+/// is its bounded segment, and an arc boundary contributes only the crossings
+/// on its own counter-clockwise sweep.
+fn extend_arc_angles(center: [f64; 2], radius: f64, boundary: &EntityKind, boundary_id: &str) -> Result<Vec<f64>, ServiceError> {
+    let points = match boundary {
+        EntityKind::Line { from, to } => match line_circle_hits(*from, *to, center, radius) {
+            CutterHits::Tangent(point) => vec![point],
+            CutterHits::Points(points) => points,
+            CutterHits::None => Vec::new(),
+        },
+        EntityKind::Circle { center: boundary_center, radius: boundary_radius } => {
+            match circle_circle_hits((center, radius), (*boundary_center, boundary_radius.abs())) {
+                CutterHits::Tangent(point) => vec![point],
+                CutterHits::Points(points) => points,
+                CutterHits::None => Vec::new(),
+            }
+        }
+        EntityKind::Arc { center: boundary_center, radius: boundary_radius, start_angle, end_angle } => {
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            match circle_circle_hits((center, radius), (*boundary_center, boundary_radius.abs())) {
+                CutterHits::Tangent(point) => retain_on_arc(vec![point], *boundary_center, *start_angle, sweep),
+                CutterHits::Points(points) => retain_on_arc(points, *boundary_center, *start_angle, sweep),
+                CutterHits::None => Vec::new(),
+            }
+        }
+        other => {
+            return Err(ServiceError::new(
+                "object/unsupported",
+                format!("entity `{boundary_id}` is a {} and cannot bound an extension", kind_name(other)),
+            ));
+        }
+    };
+    Ok(points.into_iter().map(|point| normalize_angle((point[1] - center[1]).atan2(point[0] - center[0]).to_degrees())).collect())
+}
+
+/// Extends one arc endpoint along its own circle until it meets the nearest
+/// boundary crossing in the direction that grows the sweep.
 ///
-/// The target must be a line; the boundary may be a line, circle or arc.
-/// `side` chooses which endpoint moves: `end` keeps `from` and moves `to`,
-/// while `start` keeps `to` and moves `from`. Only crossings ahead of the moving
-/// endpoint count, and the nearest one becomes the new endpoint, so the line
-/// grows and never folds back. A line boundary is its bounded drawn segment; a
-/// circle or arc crossing must lie on the arc's counter-clockwise sweep.
+/// `start` walks clockwise from the start angle and `end` walks counter-clockwise
+/// from the end angle. Crossings at the moving endpoint are ignored, and a
+/// crossing that would make the sweep reach a full turn is refused instead of
+/// wrapping the arc.
+fn extend_arc_target(
+    drawing: &mut Drawing,
+    target_index: usize,
+    boundary_index: usize,
+    boundary_id: &str,
+    side: ExtendSide,
+) -> Result<Entity, ServiceError> {
+    let target = drawing.entities[target_index].clone();
+    let EntityKind::Arc { center, radius, start_angle, end_angle } = target.kind
+    else {
+        return Err(ServiceError::new("object/unsupported", format!("entity `{}` is not a line or arc", target.id)));
+    };
+    if let Some(error) = locked_layer(drawing, &target.layer) {
+        return Err(error);
+    }
+    let radius_abs = radius.abs();
+    if radius_abs <= 1e-12 {
+        return Err(argument(format!("arc `{}` has zero radius and cannot be extended", target.id)));
+    }
+    let sweep = arc_sweep(start_angle, end_angle);
+    let tolerance = 1e-9 * sweep.max(1.0);
+    let nearest = extend_arc_angles(center, radius_abs, &drawing.entities[boundary_index].kind, boundary_id)?
+        .into_iter()
+        .map(|angle| match side {
+            ExtendSide::Start => normalize_angle(start_angle - angle),
+            ExtendSide::End => normalize_angle(angle - end_angle),
+        })
+        .filter(|travel| *travel > tolerance)
+        .min_by(f64::total_cmp);
+    let Some(travel) = nearest
+    else {
+        return Err(ServiceError::new(
+            "extend/no-intersection",
+            format!("boundary `{boundary_id}` does not meet the extension of arc `{}`", target.id),
+        ));
+    };
+    if sweep + travel >= 360.0 - tolerance {
+        return Err(ServiceError::new(
+            "extend/no-intersection",
+            format!("extending arc `{}` to boundary `{boundary_id}` would wrap past a full circle", target.id),
+        ));
+    }
+    drawing.entities[target_index].kind = match side {
+        ExtendSide::Start => EntityKind::Arc { center, radius, start_angle: normalize_angle(start_angle - travel), end_angle },
+        ExtendSide::End => EntityKind::Arc { center, radius, start_angle, end_angle: normalize_angle(end_angle + travel) },
+    };
+    drawing.revision += 1;
+    Ok(drawing.entities[target_index].clone())
+}
+
+/// Extends one line or arc until it meets a line, circle or arc boundary.
+///
+/// The target must be a line or arc; the boundary may be a line, circle or arc.
+/// `side` chooses which endpoint moves: for a line `end` keeps `from` and moves
+/// `to`, while `start` keeps `to` and moves `from`. Only crossings ahead of the
+/// moving endpoint count, and the nearest one becomes the new endpoint, so the
+/// line grows and never folds back. A line boundary is its bounded drawn segment;
+/// a circle or arc crossing must lie on the arc's counter-clockwise sweep.
+///
+/// An arc target travels along its own circle rather than a tangent ray: `end`
+/// walks counter-clockwise from the end angle, `start` walks clockwise from the
+/// start angle, and the first crossing with the boundary becomes the new
+/// endpoint. The centre, radius and other endpoint stay put, and a candidate
+/// that would push the sweep past a full turn is refused.
 ///
 /// The response carries `{ revision, drawing, entity, boundary, side }`, where
-/// `entity` is the extended line. An extension that never meets the boundary
-/// reports `extend/no-intersection`; a non-line target or an unsupported
-/// boundary reports `object/unsupported`; an unknown id reports
+/// `entity` is the extended line or arc. An extension that never meets the
+/// boundary reports `extend/no-intersection`; a non-line, non-arc target or an
+/// unsupported boundary reports `object/unsupported`; an unknown id reports
 /// `object/not-found`; a locked target layer reports `drawing/layer-locked`; a
-/// zero-length line or the same id for target and boundary reports
-/// `session/argument-invalid`.
+/// zero-length line, a zero-radius arc or the same id for target and boundary
+/// reports `session/argument-invalid`.
 pub fn extend(handle: u64, target_id: &str, boundary_id: &str, side: ExtendSide) -> Result<Value, ServiceError> {
     if target_id == boundary_id {
         return Err(argument("an extend needs two different entities"));
@@ -3030,6 +3131,9 @@ pub fn extend(handle: u64, target_id: &str, boundary_id: &str, side: ExtendSide)
     let updated = store::edit(handle, |drawing| {
         let target_index = entity_index(drawing, target_id)?;
         let boundary_index = entity_index(drawing, boundary_id)?;
+        if matches!(drawing.entities[target_index].kind, EntityKind::Arc { .. }) {
+            return extend_arc_target(drawing, target_index, boundary_index, boundary_id, side);
+        }
         let (from, to) = line_endpoints(&drawing.entities[target_index].kind).ok_or_else(|| {
             ServiceError::new(
                 "object/unsupported",

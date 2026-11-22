@@ -4145,6 +4145,141 @@ fn extend_refuses_a_locked_target_layer() {
 }
 
 #[test]
+fn extend_arc_start_to_line_walks_clockwise_from_the_start_angle() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("target arc");
+    add_line(handle, DEFAULT_LAYER, [-20.0, -5.0], [20.0, -5.0]).expect("boundary line");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::Start).expect("extend the arc start");
+    assert_eq!(result["entity"]["id"], json!("entity-1"));
+    assert_eq!(result["boundary"], json!("entity-2"));
+    assert_eq!(result["side"], json!("start"));
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [0.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(10.0));
+    let start_angle = result["entity"]["kind"]["start_angle"].as_f64().expect("start angle");
+    assert!((start_angle - 330.0).abs() < 1e-9, "start {start_angle}");
+    assert_eq!(result["entity"]["kind"]["end_angle"], json!(90.0));
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_arc_end_to_line_walks_counter_clockwise_from_the_end_angle() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("target arc");
+    add_line(handle, DEFAULT_LAYER, [-20.0, -5.0], [20.0, -5.0]).expect("boundary line");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend the arc end");
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [0.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(10.0));
+    assert_eq!(result["entity"]["kind"]["start_angle"], json!(0.0));
+    let end_angle = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((end_angle - 210.0).abs() < 1e-9, "end {end_angle}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_arc_to_circle_stops_at_the_near_crossing() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let boundary_center = [8.0 * 50f64.to_radians().cos(), 8.0 * 50f64.to_radians().sin()];
+    let boundary_radius = (100.0 + 64.0 - 160.0 * 10f64.to_radians().cos()).sqrt();
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 10.0).expect("target arc");
+    add_circle(handle, DEFAULT_LAYER, boundary_center, boundary_radius).expect("boundary circle");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend to the circle");
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [0.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(10.0));
+    assert_eq!(result["entity"]["kind"]["start_angle"], json!(0.0));
+    let end_angle = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((end_angle - 40.0).abs() < 1e-6, "end {end_angle}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_arc_to_arc_filters_the_boundary_sweep() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let boundary_center = [8.0 * 50f64.to_radians().cos(), 8.0 * 50f64.to_radians().sin()];
+    let boundary_radius = (100.0 + 64.0 - 160.0 * 10f64.to_radians().cos()).sqrt();
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 10.0).expect("target arc");
+    add_arc(handle, DEFAULT_LAYER, boundary_center, boundary_radius, 80.0, 110.0).expect("boundary arc covers only the far crossing");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend to the arc boundary");
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [0.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(10.0));
+    assert_eq!(result["entity"]["kind"]["start_angle"], json!(0.0));
+    let end_angle = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((end_angle - 60.0).abs() < 1e-6, "end {end_angle}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_arc_ignores_a_crossing_behind_the_endpoint() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 90.0).expect("target arc");
+    add_line(handle, DEFAULT_LAYER, [-20.0, 5.0], [20.0, 5.0]).expect("boundary line crossing inside the sweep");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend past the inner crossing");
+    assert_eq!(result["entity"]["kind"]["start_angle"], json!(0.0));
+    let end_angle = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((end_angle - 150.0).abs() < 1e-9, "the inner crossing at 30 degrees must not shorten the arc, got {end_angle}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_arc_across_zero_degrees_keeps_the_sweep_continuous() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 350.0, 10.0).expect("target arc across zero");
+    add_line(handle, DEFAULT_LAYER, [10.0 * 30f64.to_radians().cos(), -20.0], [10.0 * 30f64.to_radians().cos(), 20.0]).expect("boundary line");
+
+    let result = extend(handle, "entity-1", "entity-2", ExtendSide::End).expect("extend across zero");
+    assert_eq!(result["entity"]["kind"]["start_angle"], json!(350.0));
+    let end_angle = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((end_angle - 30.0).abs() < 1e-9, "end {end_angle}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_arc_refuses_a_full_sweep_and_reports_missing_boundaries() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let tangent_x = 10.0 * 349f64.to_radians().cos();
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0, 0.0, 350.0).expect("almost full arc");
+    add_line(handle, DEFAULT_LAYER, [tangent_x, -20.0], [tangent_x, 20.0]).expect("boundary line");
+    add_circle(handle, DEFAULT_LAYER, [100.0, 0.0], 1.0).expect("far circle");
+    add_text(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+
+    assert_eq!(
+        extend(handle, "entity-1", "entity-2", ExtendSide::End).expect_err("the nearest crossing wraps a full turn").code,
+        "extend/no-intersection"
+    );
+    assert_eq!(extend(handle, "entity-1", "entity-3", ExtendSide::End).expect_err("no crossing").code, "extend/no-intersection");
+    assert_eq!(extend(handle, "entity-1", "entity-4", ExtendSide::End).expect_err("text boundary").code, "object/unsupported");
+    assert_eq!(extend(handle, "entity-1", "entity-404", ExtendSide::Start).expect_err("missing boundary").code, "object/not-found");
+    close(handle).expect("close");
+}
+
+#[test]
+fn extend_refuses_a_locked_arc_target_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_arc(handle, "Structure", [0.0, 0.0], 10.0, 0.0, 90.0).expect("target arc");
+    add_line(handle, DEFAULT_LAYER, [16.0, -5.0], [16.0, 5.0]).expect("boundary line");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(extend(handle, "entity-1", "entity-2", ExtendSide::End).expect_err("locked arc extend").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
 fn break_line_at_midpoint_creates_two_collinear_lines() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);
