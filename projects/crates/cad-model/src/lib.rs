@@ -614,6 +614,12 @@ pub fn add_line(handle: u64, layer: &str, from: [f64; 2], to: [f64; 2]) -> Resul
     push_entity(handle, layer, EntityKind::Line { from, to })
 }
 
+/// Adds a point entity to one layer.
+pub fn add_point(handle: u64, layer: &str, at: [f64; 2]) -> Result<Value, ServiceError> {
+    require_finite(&[at], "at")?;
+    push_entity(handle, layer, EntityKind::Point { at })
+}
+
 /// Adds a circle to one layer.
 pub fn add_circle(handle: u64, layer: &str, center: [f64; 2], radius: f64) -> Result<Value, ServiceError> {
     require_finite(&[center], "center")?;
@@ -6703,6 +6709,25 @@ mod tests {
             assert!(codes.contains(&expected), "expected `{expected}` in {codes:?}");
         }
         assert_eq!(report["passed"], json!(false));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn add_point_stores_the_anchor_and_respects_layer_flags() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let point = add_point(handle, DEFAULT_LAYER, [5.0, 7.0]).expect("point");
+        assert_eq!(point["entity"]["id"], json!("entity-1"));
+        assert_eq!(point["revision"], json!(2));
+        assert_eq!(point["entity"]["kind"]["type"], json!("point"));
+        assert_eq!(point["entity"]["kind"]["at"], json!([5.0, 7.0]));
+        assert_eq!(add_point(handle, DEFAULT_LAYER, [f64::NAN, 0.0]).expect_err("non-finite").code, "session/argument-invalid");
+
+        add_layer(handle, "Structure", None).expect("layer");
+        update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(add_point(handle, "Structure", [0.0, 0.0]).expect_err("locked").code, "drawing/layer-locked");
+        update_layer(handle, "Structure", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+        assert_eq!(add_point(handle, "Structure", [0.0, 0.0]).expect_err("frozen").code, "drawing/layer-frozen");
         close(handle).expect("close");
     }
 

@@ -152,6 +152,15 @@ fn drawing_add_line(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Adds a point entity to one layer of an open drawing.
+#[function]
+fn drawing_add_point(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_point(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Adds a circle to one layer of an open drawing.
 #[function]
 fn drawing_add_circle(ctx: CallContext) -> Result<JsValue> {
@@ -888,6 +897,12 @@ fn call_add_line(handle: u64, request: &Value) -> std::result::Result<Value, Str
     let from = request_point(request, "from")?;
     let to = request_point(request, "to")?;
     open_cad_drawing::add_line(handle, &layer, from, to).map_err(service_failure)
+}
+
+fn call_add_point(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let at = request_point(request, "at")?;
+    open_cad_drawing::add_point(handle, &layer, at).map_err(service_failure)
 }
 
 fn call_add_circle(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -2089,6 +2104,7 @@ register_module![
     drawing_export,
     drawing_close,
     drawing_add_line,
+    drawing_add_point,
     drawing_add_circle,
     drawing_add_arc,
     drawing_add_ellipse,

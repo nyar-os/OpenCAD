@@ -643,6 +643,12 @@ export interface AddLineRequest {
     readonly to: Point;
 }
 
+/** Arguments of `addPoint()`. */
+export interface AddPointRequest {
+    readonly layer: LayerId;
+    readonly at: Point;
+}
+
 /** Arguments of `addCircle()`. */
 export interface AddCircleRequest {
     readonly layer: LayerId;

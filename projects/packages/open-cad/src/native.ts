@@ -23,6 +23,7 @@ export interface NativeBinding {
     drawing_export(handle: number, format: string, path: string): string;
     drawing_close(handle: number): boolean;
     drawing_add_line(handle: number, requestJson: string): string;
+    drawing_add_point(handle: number, requestJson: string): string;
     drawing_add_circle(handle: number, requestJson: string): string;
     drawing_add_arc(handle: number, requestJson: string): string;
     drawing_add_ellipse(handle: number, requestJson: string): string;

@@ -8,7 +8,7 @@ description: Create, revise, inspect and deliver technical drawings with OpenCAD
 ## Status
 
 Working document core. The installed CLI and SDK can create and open `.ocad`
-drawings, add lines, circles, arcs, ellipses, polylines, text, hatches, linear,
+drawings, add lines, points, circles, arcs, ellipses, polylines, text, hatches, linear,
 radial or diameter and ordinate dimensions,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
 explode a polyline, offset a circle/arc/polyline, fillet or chamfer two lines and
@@ -50,6 +50,7 @@ open-cad create --out plan.ocad --title "Site plan" --units mm
 open-cad open plan.ocad
 
 open-cad entity add-line plan.ocad --layer 0 --from 0,0 --to 100,40
+open-cad entity add-point plan.ocad --layer 0 --at 10,10
 open-cad entity add-circle plan.ocad --layer 0 --center 50,50 --radius 20
 open-cad arc add plan.ocad --layer 0 --center 50,50 --radius 20 --start 0 --end 90
 open-cad ellipse add plan.ocad --layer 0 --center 80,20 --rx 30 --ry 10 --rotation 15

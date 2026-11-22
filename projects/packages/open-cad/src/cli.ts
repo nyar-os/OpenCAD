@@ -647,6 +647,34 @@ entity
     });
 
 entity
+    .command('add-point', 'cli.cmd.add-point')
+    .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
+    .option('--at <x,y>', 'cli.opt.point-at')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const at = point(options, 'at');
+        if (at === undefined) {
+            ctx.fail('open-cad.cli.point-required', { message: '`--at x,y` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addPoint({ layer: text(options, 'layer') ?? '0', at }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
     .command('add-circle', 'cli.cmd.add-circle')
     .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
     .option('--center <x,y>', 'cli.opt.center')

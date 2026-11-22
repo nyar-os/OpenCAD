@@ -24,6 +24,7 @@ import type {
     AddLineRequest,
     AddLinetypeRequest,
     AddOrdinateDimensionRequest,
+    AddPointRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
     AddTextRequest,
@@ -346,6 +347,11 @@ export class DrawingDocument {
     /** Adds a line and returns the created entity. */
     addLine(request: AddLineRequest): Entity {
         return this.adopt(this.edit((handle) => service.addLine(handle, request)));
+    }
+
+    /** Adds a point entity and returns the created entity. */
+    addPoint(request: AddPointRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addPoint(handle, request)));
     }
 
     /** Adds a circle and returns the created entity. */

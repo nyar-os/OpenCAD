@@ -20,6 +20,7 @@ import type {
     AddLineRequest,
     AddLinetypeRequest,
     AddOrdinateDimensionRequest,
+    AddPointRequest,
     AddPolylineRequest,
     AddRadialDimensionRequest,
     AddTextRequest,
@@ -184,6 +185,13 @@ export function exportDrawing(handle: number, format: ExportFormat, target: stri
 export function addLine(handle: number, request: AddLineRequest): EntityChange {
     return decode<EntityChange>(() =>
         binding('drawing.addLine').drawing_add_line(handle, JSON.stringify({ layer: request.layer, from: request.from, to: request.to })),
+    );
+}
+
+/** Adds a point entity to one layer. */
+export function addPoint(handle: number, request: AddPointRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addPoint').drawing_add_point(handle, JSON.stringify({ layer: request.layer, at: request.at })),
     );
 }
 
