@@ -1,6 +1,6 @@
 {
     "name": "@wae/open-cad-skills",
-    "version": "0.0.2",
+    "version": "0.0.3",
     "description": "Agent skills for OpenCAD: drawing, layer, constraint and exchange tasks",
     "license": "Apache-2.0",
     "type": "module",
