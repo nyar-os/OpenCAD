@@ -1220,15 +1220,18 @@ pub fn sample_spline(points: &[[f64; 2]], closed: bool) -> Vec<[f64; 2]> {
     let mut sampled = Vec::with_capacity(spans * SPLINE_STEPS_PER_SPAN + 1);
     sampled.push(points[0]);
     for span in 0..spans {
-        let previous = if span == 0 {
-            if closed { count - 1 } else { 0 }
-        }
-        else {
-            span - 1
-        };
+        let previous = if span == 0 { if closed { count - 1 } else { 0 } } else { span - 1 };
         let first = points[span];
         let second = points[(span + 1) % count];
-        let next = if span + 2 < count { span + 2 } else if closed { (span + 2) % count } else { count - 1 };
+        let next = if span + 2 < count {
+            span + 2
+        }
+        else if closed {
+            (span + 2) % count
+        }
+        else {
+            count - 1
+        };
         let (before, after) = (points[previous], points[next]);
         for step in 1..=SPLINE_STEPS_PER_SPAN {
             let t = step as f64 / SPLINE_STEPS_PER_SPAN as f64;

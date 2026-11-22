@@ -4456,15 +4456,11 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandida
             let sampled = sample_spline(points, *closed);
             if endpoint {
                 push_snap(out, "endpoint", &entity.id, *points.first().expect("a spline keeps at least two fit points"));
-                if !*closed
-                    && let Some(last) = points.last()
-                {
+                if !*closed && let Some(last) = points.last() {
                     push_snap(out, "endpoint", &entity.id, *last);
                 }
             }
-            if midpoint
-                && let Some(middle) = sampled.get(sampled.len() / 2)
-            {
+            if midpoint && let Some(middle) = sampled.get(sampled.len() / 2) {
                 push_snap(out, "midpoint", &entity.id, *middle);
             }
         }
