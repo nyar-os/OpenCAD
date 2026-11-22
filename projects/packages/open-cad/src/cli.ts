@@ -1121,6 +1121,99 @@ ellipse
         }
     });
 
+const polyline = cli.command('polyline', 'cli.cmd.polyline');
+
+polyline
+    .command('update', 'cli.cmd.polyline-update')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--points <list>', 'cli.opt.points')
+    .option('--closed <on|off>', 'cli.opt.closed-state', { enum: ['on', 'off'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const parsed = points(options, 'points');
+        const closed = toggle(options, 'closed');
+        if (id === undefined || (parsed === undefined && closed === undefined)) {
+            ctx.fail('open-cad.cli.polyline-update-required', {
+                message: '`--id <entity>` and `--points "x,y ..."` or `--closed on|off` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updatePolyline({ entityId: id, points: parsed, closed }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+polyline
+    .command('insert', 'cli.cmd.polyline-insert')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--index <number>', 'cli.opt.vertex-index')
+    .option('--at <x,y>', 'cli.opt.vertex-at')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const index = number(options, 'index');
+        const at = point(options, 'at');
+        if (id === undefined || index === undefined || !Number.isInteger(index) || index < 0 || at === undefined) {
+            ctx.fail('open-cad.cli.polyline-insert-required', {
+                message: '`--id <entity>`, `--index <number>` and `--at x,y` are required, with a non-negative integer index',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updatePolyline({ entityId: id, insertAt: index, insertPoint: at }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+polyline
+    .command('remove-vertex', 'cli.cmd.polyline-remove')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--index <number>', 'cli.opt.vertex-index')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const index = number(options, 'index');
+        if (id === undefined || index === undefined || !Number.isInteger(index) || index < 0) {
+            ctx.fail('open-cad.cli.polyline-remove-required', {
+                message: '`--id <entity>` and a non-negative integer `--index <number>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updatePolyline({ entityId: id, removeAt: index }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 cli
     .command('transform', 'cli.cmd.transform')
     .option('--ids <list>', 'cli.opt.ids')

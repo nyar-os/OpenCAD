@@ -966,6 +966,106 @@ pub fn update_entity(
     })
 }
 
+/// One edit applied by [`update_polyline`].
+///
+/// A caller either replaces the vertex list or edits one vertex; the closed flag
+/// can accompany any edit. `insert_at` accepts the current vertex count to
+/// append.
+#[derive(Debug, Clone, Default)]
+pub struct PolylineUpdate {
+    /// Replacement vertices; omit to keep the current list.
+    pub points: Option<Vec<[f64; 2]>>,
+    /// New closed flag; omit to keep the current flag.
+    pub closed: Option<bool>,
+    /// Zero-based index the inserted vertex takes.
+    pub insert_at: Option<usize>,
+    /// New vertex, required together with `insert_at`.
+    pub insert_point: Option<[f64; 2]>,
+    /// Zero-based index of the vertex to remove.
+    pub remove_at: Option<usize>,
+}
+
+/// Edits the vertices or the closed flag of one polyline.
+///
+/// The caller passes a replacement `points` list, an `insert_at`/`insert_point`
+/// pair, a `remove_at` index or a new `closed` flag. Replacing the list cannot
+/// be combined with a single-vertex edit. A polyline always keeps at least two
+/// vertices, and an index outside the current list reports
+/// `session/argument-invalid`. A non-polyline reports `object/unsupported` and
+/// a locked or frozen layer reports `drawing/layer-locked` or
+/// `drawing/layer-frozen`. The response carries `{ revision, drawing, entity }`.
+pub fn update_polyline(handle: u64, entity: &str, update: PolylineUpdate) -> Result<Value, ServiceError> {
+    let replacing = update.points.is_some();
+    let inserting = update.insert_at.is_some();
+    let removing = update.remove_at.is_some();
+    if !replacing && update.closed.is_none() && !inserting && !removing {
+        return Err(argument("pass at least one of `points`, `closed`, `insertAt` or `removeAt`"));
+    }
+    if replacing && (inserting || removing) {
+        return Err(argument("replace the vertex list or edit one vertex, not both"));
+    }
+    if inserting != update.insert_point.is_some() {
+        return Err(argument("`insertAt` and `insertPoint` must be passed together"));
+    }
+    if let Some(points) = &update.points {
+        require_finite(points, "points")?;
+        if points.len() < 2 {
+            return Err(argument("a polyline needs at least 2 vertices"));
+        }
+    }
+    if let Some(point) = update.insert_point {
+        require_finite(&[point], "insertPoint")?;
+    }
+    store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        let layer = drawing.entities[index].layer.clone();
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if !matches!(&drawing.entities[index].kind, EntityKind::Polyline { .. }) {
+            return Err(ServiceError::new(
+                "object/unsupported",
+                format!("entity `{entity}` is a {}, not a polyline", kind_name(&drawing.entities[index].kind)),
+            ));
+        }
+        let EntityKind::Polyline { points, closed } = &mut drawing.entities[index].kind
+        else {
+            unreachable!("the entity kind was checked above");
+        };
+        if let Some(replacement) = update.points.clone() {
+            *points = replacement;
+        }
+        if let Some(value) = update.closed {
+            *closed = value;
+        }
+        if let Some(at) = update.insert_at {
+            if at > points.len() {
+                return Err(argument(format!("`insertAt` {at} is beyond the polyline's {} vertices", points.len())));
+            }
+            points.insert(at, update.insert_point.expect("the insert point is validated above"));
+        }
+        if let Some(at) = update.remove_at {
+            if at >= points.len() {
+                return Err(argument(format!("`removeAt` {at} is outside the polyline's {} vertices", points.len())));
+            }
+            if points.len() <= 2 {
+                return Err(argument("a polyline needs at least 2 vertices"));
+            }
+            points.remove(at);
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity).cloned();
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
 /// Options of [`find_text`] and [`replace_text`].
 #[derive(Debug, Clone, Default)]
 pub struct TextSearchOptions {
@@ -5134,6 +5234,103 @@ mod tests {
         update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock default layer");
         assert_eq!(update_entity(handle, "entity-3", Some("X".to_string()), None, None).expect_err("locked").code, "drawing/layer-locked");
 
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn polyline_vertices_and_closure_are_editable() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+
+        let closed = update_polyline(handle, "entity-1", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
+            .expect("close the polyline");
+        assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
+        assert_eq!(closed["revision"], json!(3));
+
+        let inserted = update_polyline(
+            handle,
+            "entity-1",
+            PolylineUpdate { insert_at: Some(1), insert_point: Some([5.0, 0.0]), ..PolylineUpdate::default() },
+        )
+        .expect("insert a vertex");
+        assert_eq!(inserted["entity"]["kind"]["points"], json!([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [10.0, 10.0]]));
+
+        let appended = update_polyline(
+            handle,
+            "entity-1",
+            PolylineUpdate { insert_at: Some(4), insert_point: Some([0.0, 10.0]), ..PolylineUpdate::default() },
+        )
+        .expect("append a vertex");
+        assert_eq!(appended["entity"]["kind"]["points"].as_array().map(Vec::len), Some(5));
+
+        let removed =
+            update_polyline(handle, "entity-1", PolylineUpdate { remove_at: Some(1), ..PolylineUpdate::default() }).expect("remove a vertex");
+        assert_eq!(removed["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
+
+        let replaced = update_polyline(
+            handle,
+            "entity-1",
+            PolylineUpdate {
+                points: Some(vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]),
+                closed: Some(true),
+                ..PolylineUpdate::default()
+            },
+        )
+        .expect("replace the vertices");
+        assert_eq!(replaced["entity"]["kind"]["points"], json!([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]));
+        assert_eq!(replaced["entity"]["kind"]["closed"], json!(true));
+
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+        add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 0.0]], false).expect("two-point polyline");
+        assert_eq!(
+            update_polyline(handle, "entity-2", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
+                .expect_err("a line is not a polyline")
+                .code,
+            "object/unsupported"
+        );
+        assert_eq!(update_polyline(handle, "entity-1", PolylineUpdate::default()).expect_err("no edit").code, "session/argument-invalid");
+        assert_eq!(
+            update_polyline(handle, "entity-1", PolylineUpdate { insert_at: Some(0), ..PolylineUpdate::default() })
+                .expect_err("insert without a point")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(
+                handle,
+                "entity-1",
+                PolylineUpdate { insert_at: Some(99), insert_point: Some([0.0, 0.0]), ..PolylineUpdate::default() }
+            )
+            .expect_err("index beyond the list")
+            .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(handle, "entity-1", PolylineUpdate { points: Some(vec![[0.0, 0.0]]), ..PolylineUpdate::default() })
+                .expect_err("too few vertices")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(handle, "entity-3", PolylineUpdate { remove_at: Some(0), ..PolylineUpdate::default() })
+                .expect_err("removing leaves one vertex")
+                .code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            update_polyline(handle, "entity-404", PolylineUpdate { closed: Some(true), ..PolylineUpdate::default() })
+                .expect_err("missing entity")
+                .code,
+            "object/not-found"
+        );
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(
+            update_polyline(handle, "entity-1", PolylineUpdate { closed: Some(false), ..PolylineUpdate::default() })
+                .expect_err("locked layer")
+                .code,
+            "drawing/layer-locked"
+        );
         close(handle).expect("close");
     }
 

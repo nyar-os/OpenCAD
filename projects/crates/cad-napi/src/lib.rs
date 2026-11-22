@@ -650,6 +650,15 @@ fn drawing_update_entity(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Edits the vertices or closed flag of one polyline.
+#[function]
+fn drawing_update_polyline(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_update_polyline(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Finds text entities whose content contains a pattern.
 #[function]
 fn drawing_find_text(ctx: CallContext) -> Result<JsValue> {
@@ -1142,6 +1151,27 @@ fn call_update_entity(handle: u64, request: &Value) -> std::result::Result<Value
     let height = request.get("height").and_then(Value::as_f64);
     let radius = request.get("radius").and_then(Value::as_f64);
     open_cad_drawing::update_entity(handle, &entity, content, height, radius).map_err(service_failure)
+}
+
+fn request_index(request: &Value, key: &str) -> std::result::Result<Option<usize>, String> {
+    request
+        .get(key)
+        .map(|value| {
+            let raw = value.as_u64().ok_or_else(|| format!("session/argument-invalid: `{key}` must be a non-negative integer"))?;
+            usize::try_from(raw).map_err(|_| format!("session/argument-invalid: `{key}` is too large"))
+        })
+        .transpose()
+}
+
+fn call_update_polyline(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let entity = request_string(request, "entityId")?;
+    let points = if request.get("points").is_some() { Some(request_points(request)?) } else { None };
+    let closed = request.get("closed").and_then(Value::as_bool);
+    let insert_at = request_index(request, "insertAt")?;
+    let insert_point = if request.get("insertPoint").is_some() { Some(request_point(request, "insertPoint")?) } else { None };
+    let remove_at = request_index(request, "removeAt")?;
+    open_cad_drawing::update_polyline(handle, &entity, open_cad_drawing::PolylineUpdate { points, closed, insert_at, insert_point, remove_at })
+        .map_err(service_failure)
 }
 
 fn text_search_options(request: &Value) -> open_cad_drawing::TextSearchOptions {
@@ -2160,6 +2190,7 @@ register_module![
     drawing_convert_units,
     drawing_move_entity,
     drawing_update_entity,
+    drawing_update_polyline,
     drawing_find_text,
     drawing_replace_text,
     drawing_transform,

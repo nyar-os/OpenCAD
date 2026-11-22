@@ -98,6 +98,7 @@ import type {
     UpdateLayerRequest,
     UpdateLayoutRequest,
     UpdateLinetypeRequest,
+    UpdatePolylineRequest,
     UpdatePropertiesRequest,
     UpdateTextStyleRequest,
 } from './types.js';
@@ -689,6 +690,23 @@ export function updateEntity(handle: number, request: UpdateEntityRequest): Enti
                 content: request.content,
                 height: request.height,
                 radius: request.radius,
+            }),
+        ),
+    );
+}
+
+/** Edits the vertices or closed flag of one polyline. */
+export function updatePolyline(handle: number, request: UpdatePolylineRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.updatePolyline').drawing_update_polyline(
+            handle,
+            JSON.stringify({
+                entityId: request.entityId,
+                points: request.points,
+                closed: request.closed,
+                insertAt: request.insertAt,
+                insertPoint: request.insertPoint,
+                removeAt: request.removeAt,
             }),
         ),
     );

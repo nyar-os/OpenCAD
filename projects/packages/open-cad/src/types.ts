@@ -1036,6 +1036,28 @@ export interface UpdateEntityRequest {
     readonly radius?: number;
 }
 
+/**
+ * Arguments of `updatePolyline()`.
+ *
+ * Pass a replacement `points` list, one `insertAt`/`insertPoint` pair, one
+ * `removeAt` index or a new `closed` flag. Replacing the list cannot be
+ * combined with a single-vertex edit; a polyline always keeps at least two
+ * vertices.
+ */
+export interface UpdatePolylineRequest {
+    readonly entityId: EntityId;
+    /** Replacement vertices; omit to keep the current list. */
+    readonly points?: readonly Point[];
+    /** Closed flag; omit to keep the current flag. */
+    readonly closed?: boolean;
+    /** Zero-based index the inserted vertex takes; the vertex count appends. */
+    readonly insertAt?: number;
+    /** Vertex to insert; required together with `insertAt`. */
+    readonly insertPoint?: Point;
+    /** Zero-based index of the vertex to remove. */
+    readonly removeAt?: number;
+}
+
 /** Arguments of `findText()`. */
 export interface FindTextRequest {
     /** Non-empty substring to look for. */

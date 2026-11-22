@@ -70,6 +70,7 @@ export interface NativeBinding {
     drawing_convert_units(handle: number, unit: string): string;
     drawing_move_entity(handle: number, requestJson: string): string;
     drawing_update_entity(handle: number, requestJson: string): string;
+    drawing_update_polyline(handle: number, requestJson: string): string;
     drawing_find_text(handle: number, requestJson: string): string;
     drawing_replace_text(handle: number, requestJson: string): string;
     drawing_transform(handle: number, requestJson: string): string;

@@ -95,6 +95,7 @@ import type {
     UpdateLayerRequest,
     UpdateLayoutRequest,
     UpdateLinetypeRequest,
+    UpdatePolylineRequest,
     UpdatePropertiesRequest,
     UpdateTextStyleRequest,
 } from './types.js';
@@ -646,6 +647,11 @@ export class DrawingDocument {
     /** Updates the content/height of text or the radius of a circle or arc. */
     updateEntity(request: UpdateEntityRequest): Entity {
         return this.adopt(this.edit((handle) => service.updateEntity(handle, request)));
+    }
+
+    /** Edits the vertices or closed flag of one polyline. */
+    updatePolyline(request: UpdatePolylineRequest): Entity {
+        return this.adopt(this.edit((handle) => service.updatePolyline(handle, request)));
     }
 
     /** Finds text entities whose content contains a pattern. */

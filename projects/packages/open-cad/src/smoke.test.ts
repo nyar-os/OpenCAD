@@ -768,6 +768,48 @@ test('stats and the empty-layer check summarise layers', { skip: withAddon }, as
     }
 });
 
+test('polyline vertices and the closed flag are editable', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Polyline edits' });
+        const polyline = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10]] });
+
+        const closed = document.updatePolyline({ entityId: polyline.id, closed: true });
+        assert.equal(closed.kind.type, 'polyline');
+        if (closed.kind.type === 'polyline') {
+            assert.equal(closed.kind.closed, true);
+        }
+
+        const inserted = document.updatePolyline({ entityId: polyline.id, insertAt: 1, insertPoint: [5, 0] });
+        if (inserted.kind.type === 'polyline') {
+            assert.deepEqual(inserted.kind.points, [[0, 0], [5, 0], [10, 0], [10, 10]]);
+        }
+        const removed = document.updatePolyline({ entityId: polyline.id, removeAt: 1 });
+        if (removed.kind.type === 'polyline') {
+            assert.deepEqual(removed.kind.points, [[0, 0], [10, 0], [10, 10]]);
+        }
+
+        const replaced = document.updatePolyline({
+            entityId: polyline.id,
+            points: [[0, 0], [4, 0], [4, 4], [0, 4]],
+            closed: true,
+        });
+        if (replaced.kind.type === 'polyline') {
+            assert.deepEqual(replaced.kind.points, [[0, 0], [4, 0], [4, 4], [0, 4]]);
+            assert.equal(replaced.kind.closed, true);
+        }
+        assert.equal(document.measureEntities([polyline.id]).entities[0]?.area, 16);
+
+        assert.throws(
+            () => document.updatePolyline({ entityId: polyline.id, removeAt: 9 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',
