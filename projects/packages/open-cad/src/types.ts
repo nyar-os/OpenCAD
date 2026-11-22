@@ -1058,6 +1058,22 @@ export interface UpdatePolylineRequest {
     readonly removeAt?: number;
 }
 
+/**
+ * Arguments of `updateArc()`.
+ *
+ * At least one field is required. Angles are degrees and the arc sweeps
+ * counter-clockwise from `startAngle` to `endAngle`.
+ */
+export interface UpdateArcRequest {
+    readonly entityId: EntityId;
+    /** Positive radius in drawing units. */
+    readonly radius?: number;
+    /** Start angle in degrees. */
+    readonly startAngle?: number;
+    /** End angle in degrees; equal to the start angle denotes a full turn. */
+    readonly endAngle?: number;
+}
+
 /** Arguments of `findText()`. */
 export interface FindTextRequest {
     /** Non-empty substring to look for. */

@@ -13,6 +13,7 @@
             "entity": "Edit the entities of an existing drawing file",
             "arc": "Add a circular arc to an existing drawing file",
             "arc-add": "Add a counter-clockwise arc and save the file in place",
+            "arc-update": "Update an arc's radius or sweep angles and save the file",
             "ellipse": "Add a full or partial ellipse to an existing drawing file",
             "ellipse-add": "Add an ellipse and save the file in place",
             "polyline": "Edit the vertices of a polyline in an existing drawing file",

@@ -1066,6 +1066,76 @@ pub fn update_polyline(handle: u64, entity: &str, update: PolylineUpdate) -> Res
     })
 }
 
+/// Updates the radius or sweep angles of one arc.
+///
+/// At least one of `radius`, `start_angle` or `end_angle` is required. Angles
+/// are degrees and the arc keeps sweeping counter-clockwise from the start to
+/// the end angle; a start equal to the end still denotes a full turn. A
+/// non-positive radius or a non-finite value reports
+/// `session/argument-invalid`, a non-arc reports `object/unsupported` and a
+/// locked or frozen layer reports `drawing/layer-locked` or
+/// `drawing/layer-frozen`. The response carries `{ revision, drawing, entity }`.
+pub fn update_arc(
+    handle: u64,
+    entity: &str,
+    radius: Option<f64>,
+    start_angle: Option<f64>,
+    end_angle: Option<f64>,
+) -> Result<Value, ServiceError> {
+    if radius.is_none() && start_angle.is_none() && end_angle.is_none() {
+        return Err(argument("pass at least one of `radius`, `startAngle` or `endAngle`"));
+    }
+    if let Some(radius) = radius
+        && (!radius.is_finite() || radius <= 0.0)
+    {
+        return Err(argument("`radius` must be a positive finite number"));
+    }
+    for (name, value) in [("startAngle", start_angle), ("endAngle", end_angle)] {
+        if let Some(angle) = value
+            && !angle.is_finite()
+        {
+            return Err(argument(format!("`{name}` must be finite")));
+        }
+    }
+    store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        let layer = drawing.entities[index].layer.clone();
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if !matches!(&drawing.entities[index].kind, EntityKind::Arc { .. }) {
+            return Err(ServiceError::new(
+                "object/unsupported",
+                format!("entity `{entity}` is a {}, not an arc", kind_name(&drawing.entities[index].kind)),
+            ));
+        }
+        let EntityKind::Arc { radius: current_radius, start_angle: current_start, end_angle: current_end, .. } =
+            &mut drawing.entities[index].kind
+        else {
+            unreachable!("the entity kind was checked above");
+        };
+        if let Some(value) = radius {
+            *current_radius = value;
+        }
+        if let Some(value) = start_angle {
+            *current_start = value;
+        }
+        if let Some(value) = end_angle {
+            *current_end = value;
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity).cloned();
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
 /// Options of [`find_text`] and [`replace_text`].
 #[derive(Debug, Clone, Default)]
 pub struct TextSearchOptions {
@@ -5331,6 +5401,40 @@ mod tests {
                 .code,
             "drawing/layer-locked"
         );
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn arc_radius_and_sweep_angles_are_editable() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 90.0).expect("arc");
+
+        let radius = update_arc(handle, "entity-1", Some(8.0), None, None).expect("update the radius");
+        assert_eq!(radius["entity"]["kind"]["radius"], json!(8.0));
+        assert_eq!(radius["entity"]["kind"]["start_angle"], json!(0.0));
+
+        let angles = update_arc(handle, "entity-1", None, Some(45.0), Some(180.0)).expect("update the sweep");
+        assert_eq!(angles["entity"]["kind"]["start_angle"], json!(45.0));
+        assert_eq!(angles["entity"]["kind"]["end_angle"], json!(180.0));
+        assert_eq!(angles["entity"]["kind"]["radius"], json!(8.0));
+
+        let full = update_arc(handle, "entity-1", None, Some(90.0), Some(90.0)).expect("full turn");
+        assert_eq!(full["entity"]["kind"]["start_angle"], json!(90.0));
+        assert_eq!(full["entity"]["kind"]["end_angle"], json!(90.0));
+
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+        assert_eq!(update_arc(handle, "entity-2", Some(2.0), None, None).expect_err("a line is not an arc").code, "object/unsupported");
+        assert_eq!(update_arc(handle, "entity-1", None, None, None).expect_err("no edit").code, "session/argument-invalid");
+        assert_eq!(update_arc(handle, "entity-1", Some(0.0), None, None).expect_err("zero radius").code, "session/argument-invalid");
+        assert_eq!(update_arc(handle, "entity-1", Some(f64::NAN), None, None).expect_err("non-finite radius").code, "session/argument-invalid");
+        assert_eq!(
+            update_arc(handle, "entity-1", None, Some(f64::INFINITY), None).expect_err("non-finite angle").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(update_arc(handle, "entity-404", Some(2.0), None, None).expect_err("missing entity").code, "object/not-found");
+        update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+        assert_eq!(update_arc(handle, "entity-1", Some(2.0), None, None).expect_err("locked layer").code, "drawing/layer-locked");
         close(handle).expect("close");
     }
 

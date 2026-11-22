@@ -810,6 +810,38 @@ test('polyline vertices and the closed flag are editable', { skip: withAddon }, 
     }
 });
 
+test('arc radius and sweep angles are editable', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Arc edits' });
+        const arc = document.addArc({ layer: '0', center: [0, 0], radius: 5, startAngle: 0, endAngle: 90 });
+        const updated = document.updateArc({ entityId: arc.id, radius: 8, startAngle: 45, endAngle: 180 });
+        if (updated.kind.type === 'arc') {
+            assert.equal(updated.kind.radius, 8);
+            assert.equal(updated.kind.start_angle, 45);
+            assert.equal(updated.kind.end_angle, 180);
+        }
+        const full = document.updateArc({ entityId: arc.id, endAngle: 45 });
+        if (full.kind.type === 'arc') {
+            assert.equal(full.kind.start_angle, 45);
+            assert.equal(full.kind.end_angle, 45);
+        }
+
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [1, 0] });
+        assert.throws(
+            () => document.updateArc({ entityId: line.id, radius: 2 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/unsupported',
+        );
+        assert.throws(
+            () => document.updateArc({ entityId: arc.id }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 const sampleDxf = [
     '0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC',
     '0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '1',

@@ -93,6 +93,7 @@ import type {
     UcsRequest,
     UcsResult,
     UnitsConversion,
+    UpdateArcRequest,
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
@@ -707,6 +708,21 @@ export function updatePolyline(handle: number, request: UpdatePolylineRequest): 
                 insertAt: request.insertAt,
                 insertPoint: request.insertPoint,
                 removeAt: request.removeAt,
+            }),
+        ),
+    );
+}
+
+/** Updates the radius or sweep angles of one arc. */
+export function updateArc(handle: number, request: UpdateArcRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.updateArc').drawing_update_arc(
+            handle,
+            JSON.stringify({
+                entityId: request.entityId,
+                radius: request.radius,
+                startAngle: request.startAngle,
+                endAngle: request.endAngle,
             }),
         ),
     );

@@ -90,6 +90,7 @@ import type {
     UcsRequest,
     UcsResult,
     UnitsConversion,
+    UpdateArcRequest,
     UpdateDimensionStyleRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
@@ -652,6 +653,11 @@ export class DrawingDocument {
     /** Edits the vertices or closed flag of one polyline. */
     updatePolyline(request: UpdatePolylineRequest): Entity {
         return this.adopt(this.edit((handle) => service.updatePolyline(handle, request)));
+    }
+
+    /** Updates the radius or sweep angles of one arc. */
+    updateArc(request: UpdateArcRequest): Entity {
+        return this.adopt(this.edit((handle) => service.updateArc(handle, request)));
     }
 
     /** Finds text entities whose content contains a pattern. */

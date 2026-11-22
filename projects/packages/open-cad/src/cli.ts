@@ -1074,6 +1074,39 @@ arc
         }
     });
 
+arc
+    .command('update', 'cli.cmd.arc-update')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--radius <number>', 'cli.opt.radius')
+    .option('--start <degrees>', 'cli.opt.start-angle')
+    .option('--end <degrees>', 'cli.opt.end-angle')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const radius = number(options, 'radius');
+        const startAngle = number(options, 'start');
+        const endAngle = number(options, 'end');
+        if (id === undefined || (radius === undefined && startAngle === undefined && endAngle === undefined)) {
+            ctx.fail('open-cad.cli.arc-update-required', {
+                message: '`--id <entity>` and at least one of `--radius`, `--start` or `--end` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updateArc({ entityId: id, radius, startAngle, endAngle }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 const ellipse = cli.command('ellipse', 'cli.cmd.ellipse');
 
 ellipse
