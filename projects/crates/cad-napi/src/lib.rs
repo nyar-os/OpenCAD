@@ -27,8 +27,8 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, CopyRequest, CreateRequest, DrawOrderAction, ExtendSide, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide,
-    OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DrawOrderAction, ExtendSide, LayoutRequest, LayoutUpdate, MirrorAxis,
+    OffsetSide, OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -857,6 +857,20 @@ fn drawing_extend(ctx: CallContext) -> Result<JsValue> {
         Some(raw) => ExtendSide::parse(raw).ok_or_else(|| Error::new("session/argument-invalid: `side` must be end or start"))?,
     };
     let result = open_cad_drawing::extend(handle, target, boundary, side).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Splits one line into two lines at an interior point.
+#[function]
+fn drawing_break(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let id = request.get("id").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    if id.is_empty() {
+        return Err(Error::new("session/argument-invalid: `id` is required"));
+    }
+    let at = request_point(&request, "at").map_err(Error::new)?;
+    let result = open_cad_drawing::break_entity(handle, BreakRequest { id, at }).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2409,6 +2423,7 @@ register_module![
     drawing_offset_by_side,
     drawing_trim,
     drawing_extend,
+    drawing_break,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

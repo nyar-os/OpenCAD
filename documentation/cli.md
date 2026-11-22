@@ -85,6 +85,7 @@ exactly one transform.
 | `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
 | `trim` | `--id <line>`, `--cutter <entity>` (a line, circle or arc) |
 | `extend` | `--id <line>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
+| `break` | `--id <line>`, `--at x,y` (strictly inside the segment) |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -97,6 +98,7 @@ open-cad offset plan.ocad --id entity-3 --distance 5 --side left
 open-cad trim plan.ocad --id entity-3 --cutter entity-4
 open-cad extend plan.ocad --id entity-3 --to entity-4
 open-cad extend plan.ocad --id entity-3 --to entity-4 --side start
+open-cad break plan.ocad --id entity-3 --at 50,0
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
 
@@ -121,6 +123,13 @@ arc and saves the file. By default the `to` endpoint moves; `--side start` moves
 the `from` endpoint instead. Only crossings ahead of the moving endpoint count
 and the nearest one becomes the new endpoint. A boundary the ray never reaches
 reports `extend/no-intersection`.
+
+`break` splits the `--id` line into two lines at `--at x,y` and saves the file.
+The point must lie strictly inside the segment, away from both endpoints; a point
+close to the line is projected onto it so both pieces stay collinear. The source
+is removed and replaced by two lines with fresh ids on the same layer. A point on
+an endpoint or outside the segment reports `break/not-on-entity`; a non-line
+reports `object/unsupported`.
 
 ## Measure and select
 

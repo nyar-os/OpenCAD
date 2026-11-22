@@ -87,6 +87,7 @@ export interface NativeBinding {
     drawing_offset_by_side(handle: number, requestJson: string): string;
     drawing_trim(handle: number, requestJson: string): string;
     drawing_extend(handle: number, requestJson: string): string;
+    drawing_break(handle: number, requestJson: string): string;
     drawing_fillet(handle: number, requestJson: string): string;
     drawing_chamfer(handle: number, requestJson: string): string;
     drawing_measure(handle: number, sheet?: string): string;

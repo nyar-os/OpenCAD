@@ -32,6 +32,7 @@ import type {
     ArrayRequest,
     ArrayResult,
     AssignEntityLayerRequest,
+    BreakResult,
     ConvertUnitsRequest,
     CopyRequest,
     CopyResult,
@@ -905,6 +906,11 @@ export function extend(handle: number, id: string, boundary: string, side: Exten
     return decode<ExtendResult>(() =>
         binding('drawing.extend').drawing_extend(handle, JSON.stringify({ id, boundary, side })),
     );
+}
+
+/** Splits one line into two lines at an interior point. */
+export function breakEntity(handle: number, id: string, at: Point): BreakResult {
+    return decode<BreakResult>(() => binding('drawing.break').drawing_break(handle, JSON.stringify({ id, at })));
 }
 
 /** Measures bounds, path length and enclosed area. */

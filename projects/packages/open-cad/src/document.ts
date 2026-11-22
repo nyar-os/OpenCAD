@@ -36,6 +36,7 @@ import type {
     ArrayRequest,
     ArrayResult,
     AssignEntityLayerRequest,
+    BreakResult,
     CopyRequest,
     CopyResult,
     ConvertUnitsRequest,
@@ -777,6 +778,19 @@ export class DrawingDocument {
      */
     extend(id: EntityId, boundary: EntityId, side: ExtendSide = 'end'): ExtendResult {
         return this.edit((handle) => service.extend(handle, id, boundary, side), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Splits a line into two lines at a point strictly inside the segment. The
+     * point is projected onto the line, so both pieces stay collinear and their
+     * lengths add up to the original. Both pieces keep the source layer and
+     * receive fresh ids; a point on an endpoint or outside reports
+     * `break/not-on-entity`, and a non-line reports `object/unsupported`.
+     */
+    breakEntity(id: EntityId, at: Point): BreakResult {
+        return this.edit((handle) => service.breakEntity(handle, id, at), (result) => {
             this.state = result.drawing;
         });
     }

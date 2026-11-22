@@ -12,7 +12,8 @@ drawings, add lines, points, circles, arcs, ellipses, polylines, text, hatches, 
 radial or diameter and ordinate dimensions, add rectangles and regular polygons as
 closed polylines,
 transform (translate/rotate/scale/mirror), copy, array (rectangular or polar),
-explode a polyline, offset a circle/arc/polyline/line, fillet or chamfer two lines and
+explode a polyline, offset a circle/arc/polyline/line, break a line at an interior
+point, fillet or chamfer two lines and
 measure a drawing, selected entities, the distance between two points or the
 angle at three points, move, update and
 delete entities, undo and redo,
@@ -80,6 +81,7 @@ open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
 open-cad offset plan.ocad --id entity-2 --distance 2
 open-cad offset plan.ocad --id entity-2 --distance 2 --side left
+open-cad break plan.ocad --id entity-1 --at 5,0
 open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
@@ -200,7 +202,12 @@ entities with `offset/unsupported-entity`, an unknown id with
 `offset/not-found`, a non-positive resulting radius with
 `offset/invalid-distance`, and a mismatched side with `offset/invalid-side`.
 The signed form keeps its original `session/argument-invalid` and
-`object/unsupported` codes. `fillet` takes `--first`,
+`object/unsupported` codes. `break` takes `--id` of one line and `--at x,y`;
+the point must lie strictly inside the segment, away from both endpoints, and is
+projected onto the line so the two pieces stay collinear. The source is replaced
+by two lines with fresh ids on the same layer; a point on an endpoint or outside
+the segment reports `break/not-on-entity`, and another entity type reports
+`object/unsupported`. `fillet` takes `--first`,
 `--second` and `--radius`; `chamfer` takes `--first`, `--second`,
 `--distance-a` and optional `--distance-b` (which defaults to the first
 distance). Both require two different line entities, use the closest endpoint

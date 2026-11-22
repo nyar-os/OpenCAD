@@ -34,10 +34,10 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 `ordinate-dimension`, `angular-dimension`, `hatch`.
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
-`offset`, `trim`, `extend`, `fillet`, `chamfer`, `measure`, `measure-entity`,
-`measure-points`, `stats`, `dimension-style`, `text-style`, `text-search`,
-`group`, `select`, `properties`, `snap`, `linetype`, `ucs`. `constraints` and
-`kernel3d` are reported as unsupported.
+`offset`, `trim`, `extend`, `break`, `fillet`, `chamfer`, `measure`,
+`measure-entity`, `measure-points`, `stats`, `dimension-style`, `text-style`,
+`text-search`, `group`, `select`, `properties`, `snap`, `linetype`, `ucs`.
+`constraints` and `kernel3d` are reported as unsupported.
 
 ## DXF import subset
 
@@ -284,6 +284,41 @@ reports `object/unsupported`; an unknown id reports `object/not-found`, a
 locked target layer reports `drawing/layer-locked`, and a zero-length target or
 the same id for target and boundary reports `session/argument-invalid`.
 
+## Break
+
+`breakEntity(id, at)` splits one line into two lines at `at` and replaces the
+source in place. The point must lie on the segment and strictly between its
+endpoints: the tolerance is `1e-9` scaled by the segment length, and a point
+inside that band but off the line is projected onto it. The two pieces therefore
+stay collinear and their lengths add up to the original.
+
+The response carries `{ revision, drawing, removed, created }`, where `removed`
+is the source id and `created` holds the two new lines, from the original `from`
+endpoint to the break point and from the break point to the original `to`
+endpoint. Both keep the source layer and receive fresh deterministic ids
+(`entity-N`). The edit is one history step and one revision, and the source is
+removed from draw order and entity groups.
+
+A point on an endpoint or outside the segment, and a zero-length line, report
+`break/not-on-entity`. A target that is not a line reports `object/unsupported`;
+an unknown id reports `object/not-found`; a locked or frozen layer reports
+`drawing/layer-locked` or `drawing/layer-frozen`; non-finite coordinates report
+`session/argument-invalid`.
+
+| Code | Cause |
+| :--- | :--- |
+| `break/not-on-entity` | The point is on an endpoint, outside the segment, or the line has zero length. |
+| `object/unsupported` | The target is not a line. |
+| `object/not-found` | The id does not name an entity. |
+| `drawing/layer-locked` | The line's layer is locked. |
+| `drawing/layer-frozen` | The line's layer is frozen. |
+| `session/argument-invalid` | The coordinates are not finite. |
+
+The model tests cover the midpoint split (`break_line_at_midpoint_creates_two_collinear_lines`),
+rejected points (`break_rejects_endpoints_outside_points_and_off_line_points`),
+non-line and locked-layer refusals (`break_rejects_non_line_entities_and_locked_layers`),
+and repeatability (`break_is_deterministic`).
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -310,6 +345,8 @@ the same id for target and boundary reports `session/argument-invalid`.
 - Extend lengthens a line only, and its boundary must be a line, circle or arc.
   It does not extend polylines, arcs, circles, ellipses or splines, and it does
   not follow a boundary past its drawn extent.
+- Break splits a line only; it does not break polylines, arcs, circles,
+  ellipses, splines, text, hatches or dimensions.
 - Offset covers lines, straight-segment polylines, circles and arcs only. It
   does not clip self-intersections, miter arc or bulge segments (polylines have
   none) or offset ellipses, splines, points, text, hatches and dimensions.

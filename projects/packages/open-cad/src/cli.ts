@@ -23,6 +23,7 @@ import type { DrawingDocument } from './document.js';
 import type {
     ArrayPlacement,
     ArrayResult,
+    BreakResult,
     CopyResult,
     DimensionStyle,
     DimensionStyleChange,
@@ -317,6 +318,10 @@ function describeExtend(result: ExtendResult): string {
     const kind = result.entity.kind;
     const span = kind.type === 'line' ? ` from=${kind.from[0]},${kind.from[1]} to=${kind.to[0]},${kind.to[1]}` : '';
     return `extended ${result.entity.id} ${result.side} to ${result.boundary}${span} revision=${result.revision}`;
+}
+
+function describeBreak(result: BreakResult): string {
+    return `broke ${result.removed} into ${result.created.map((entity) => entity.id).join(',')} revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1764,6 +1769,32 @@ cli
         try {
             const result = await guard(ctx, () => opened.extend(id, boundary, side));
             ctx.emitResult(result, describeExtend(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('break', 'cli.cmd.break')
+    .option('--id <line>', 'cli.opt.id')
+    .option('--at <x,y>', 'cli.opt.break-at')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const at = point(options, 'at');
+        if (id === undefined || at === undefined) {
+            ctx.fail('open-cad.cli.break-required', { message: '`--id <line>` and `--at x,y` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.breakEntity(id, at));
+            ctx.emitResult(result, describeBreak(result));
             return 0;
         } finally {
             opened.close();

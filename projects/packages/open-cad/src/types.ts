@@ -60,6 +60,7 @@ export type OperationName =
     | 'offset'
     | 'trim'
     | 'extend'
+    | 'break'
     | 'measure'
     | 'measure-entity'
     | 'stats'
@@ -1032,6 +1033,21 @@ export interface ExtendResult {
     readonly entity: Entity;
     readonly boundary: EntityId;
     readonly side: ExtendSide;
+}
+
+/**
+ * Result of `breakEntity()`.
+ *
+ * `removed` is the source line id and `created` holds the two lines that replace
+ * it: the piece from the original `from` endpoint to the break point, then the
+ * piece from the break point to the original `to` endpoint. Both keep the
+ * source layer and receive fresh deterministic ids.
+ */
+export interface BreakResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly removed: EntityId;
+    readonly created: readonly Entity[];
 }
 
 /**

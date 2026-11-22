@@ -65,6 +65,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "offset",
         "trim",
         "extend",
+        "break",
         "fillet",
         "chamfer",
         "measure",
@@ -4007,6 +4008,104 @@ fn extend_refuses_a_locked_target_layer() {
     update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
     assert_eq!(extend(handle, "entity-1", "entity-2", ExtendSide::End).expect_err("locked extend").code, "drawing/layer-locked");
     close(handle).expect("close");
+}
+
+#[test]
+fn break_line_at_midpoint_creates_two_collinear_lines() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+    let result = break_entity(handle, BreakRequest { id: "entity-1".to_string(), at: [4.0, 0.0] }).expect("break");
+    assert_eq!(result["removed"], json!("entity-1"));
+    assert_eq!(result["revision"], json!(3));
+    let lines = result["created"].as_array().expect("created lines");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["id"], json!("entity-2"));
+    assert_eq!(lines[1]["id"], json!("entity-3"));
+    assert_eq!(lines[0]["layer"], json!(DEFAULT_LAYER));
+    assert_eq!(lines[1]["layer"], json!(DEFAULT_LAYER));
+    assert_point(&lines[0]["kind"]["from"], [0.0, 0.0]);
+    assert_point(&lines[0]["kind"]["to"], [4.0, 0.0]);
+    assert_point(&lines[1]["kind"]["from"], [4.0, 0.0]);
+    assert_point(&lines[1]["kind"]["to"], [10.0, 0.0]);
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.iter().map(|entity| entity.id.as_str()).collect::<Vec<_>>(), ["entity-2", "entity-3"]);
+    let total = drawing
+        .entities
+        .iter()
+        .map(|entity| match entity.kind {
+            EntityKind::Line { from, to } => distance(from, to),
+            _ => panic!("break must only create lines"),
+        })
+        .sum::<f64>();
+    assert!((total - 10.0).abs() < 1e-9, "the two pieces must add up to the original length, got {total}");
+
+    let appended = add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [30.0, 0.0]).expect("append");
+    assert_eq!(appended["entity"]["id"], json!("entity-4"), "ids continue after the two new lines");
+    assert_eq!(appended["revision"], json!(4));
+    close(handle).expect("close");
+}
+
+#[test]
+fn break_rejects_endpoints_outside_points_and_off_line_points() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+    for at in [[0.0, 0.0], [10.0, 0.0], [-1.0, 0.0], [11.0, 0.0], [5.0, 0.01]] {
+        assert_eq!(
+            break_entity(handle, BreakRequest { id: "entity-1".to_string(), at }).expect_err("point off the interior").code,
+            "break/not-on-entity",
+            "point {at:?}"
+        );
+    }
+    assert_eq!(
+        break_entity(handle, BreakRequest { id: "entity-404".to_string(), at: [5.0, 0.0] }).expect_err("missing line").code,
+        "object/not-found"
+    );
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 1, "a rejected break leaves the line untouched");
+    assert_eq!(drawing.revision, 2);
+    close(handle).expect("close");
+}
+
+#[test]
+fn break_rejects_non_line_entities_and_locked_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 2.0).expect("circle");
+    assert_eq!(
+        break_entity(handle, BreakRequest { id: "entity-1".to_string(), at: [5.0, 0.0] }).expect_err("circle").code,
+        "object/unsupported"
+    );
+
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("line");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        break_entity(handle, BreakRequest { id: "entity-2".to_string(), at: [5.0, 0.0] }).expect_err("locked break").code,
+        "drawing/layer-locked"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn break_is_deterministic() {
+    let run = || {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+        let result = break_entity(handle, BreakRequest { id: "entity-1".to_string(), at: [2.5, 0.0] }).expect("break");
+        close(handle).expect("close");
+        result
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(first["created"], second["created"]);
+    assert_eq!(first["revision"], second["revision"]);
 }
 
 #[test]

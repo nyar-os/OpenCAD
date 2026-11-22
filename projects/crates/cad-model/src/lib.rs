@@ -116,8 +116,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
-/// offset, trim, extend, fillet, chamfer and measure); constraint solving and a
-/// 3D kernel stay unsupported.
+/// offset, trim, extend, break, fillet, chamfer and measure); constraint solving
+/// and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -185,6 +185,7 @@ pub fn capabilities() -> Value {
                 "offset",
                 "trim",
                 "extend",
+                "break",
                 "fillet",
                 "chamfer",
                 "measure",
@@ -204,9 +205,9 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "fillet" | "chamfer" | "measure" | "measure-entity"
-                | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select" | "properties" | "snap"
-                | "linetype" | "ucs" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "fillet" | "chamfer" | "measure"
+                | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group" | "select"
+                | "properties" | "snap" | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -2867,6 +2868,81 @@ pub fn extend(handle: u64, target_id: &str, boundary_id: &str, side: ExtendSide)
             "entity": updated,
             "boundary": boundary_id,
             "side": side.as_str(),
+        })
+    })
+}
+
+/// Arguments of [`break_entity`].
+#[derive(Debug, Clone)]
+pub struct BreakRequest {
+    /// Identifier of the line to split.
+    pub id: String,
+    /// Point where the line is split; it must lie strictly inside the segment.
+    pub at: [f64; 2],
+}
+
+/// Splits one line into two lines at an interior point.
+///
+/// The point must lie on the segment, away from both endpoints: the tolerance is
+/// `1e-9` scaled by the segment length. A point that is close but not exactly on
+/// the segment is projected onto it, so the two pieces stay collinear and their
+/// lengths add up to the original. The source line is removed and replaced, at
+/// the same list position, by two lines that keep its layer and receive fresh
+/// deterministic ids. The edit is one history step and one revision.
+///
+/// The response carries `{ revision, drawing, removed, created }`, where
+/// `removed` is the source id and `created` holds the two new lines from `from`
+/// to `at` and from `at` to `to`. A point on an endpoint or outside the segment
+/// reports `break/not-on-entity`; a non-line reports `object/unsupported`; an
+/// unknown id reports `object/not-found`; a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`; non-finite coordinates
+/// report `session/argument-invalid`.
+pub fn break_entity(handle: u64, request: BreakRequest) -> Result<Value, ServiceError> {
+    require_finite(&[request.at], "at")?;
+    let BreakRequest { id, at } = request;
+    let created = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, &id)?;
+        let source = drawing.entities[index].clone();
+        if let Some(error) = locked_layer(drawing, &source.layer) {
+            return Err(error);
+        }
+        let EntityKind::Line { from, to } = source.kind
+        else {
+            return Err(ServiceError::new("object/unsupported", format!("entity `{id}` is a {}, not a line", kind_name(&source.kind))));
+        };
+        let length = distance(from, to);
+        if length <= 1e-12 {
+            return Err(ServiceError::new("break/not-on-entity", format!("line `{id}` has zero length and cannot be broken")));
+        }
+        let delta = [to[0] - from[0], to[1] - from[1]];
+        let along = ((at[0] - from[0]) * delta[0] + (at[1] - from[1]) * delta[1]) / length;
+        let perpendicular = cross(delta, [at[0] - from[0], at[1] - from[1]]).abs() / length;
+        let tolerance = 1e-9 * length.max(1.0);
+        if perpendicular > tolerance || along <= tolerance || along >= length - tolerance {
+            return Err(ServiceError::new(
+                "break/not-on-entity",
+                format!("the break point must lie strictly inside line `{id}`, away from its endpoints"),
+            ));
+        }
+        let direction = [delta[0] / length, delta[1] / length];
+        let split = [from[0] + direction[0] * along, from[1] + direction[1] * along];
+        let first = Entity { id: drawing.take_entity_id(), layer: source.layer.clone(), kind: EntityKind::Line { from, to: split } };
+        let second = Entity { id: drawing.take_entity_id(), layer: source.layer.clone(), kind: EntityKind::Line { from: split, to } };
+        let ids = [first.id.clone(), second.id.clone()];
+        drawing.entities.splice(index..=index, [first.clone(), second.clone()]);
+        if let Some(position) = drawing.draw_order.iter().position(|candidate| candidate == &id) {
+            drawing.draw_order.splice(position..=position, ids);
+        }
+        detach_entity_from_groups(drawing, &id);
+        drawing.revision += 1;
+        Ok(vec![first, second])
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "removed": id,
+            "created": created,
         })
     })
 }
