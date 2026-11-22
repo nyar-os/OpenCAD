@@ -30,6 +30,7 @@ import type {
     AddPolylineRequest,
     AddRadialDimensionRequest,
     AddRectangleRequest,
+    AddSplineRequest,
     AddTextRequest,
     AddTextStyleRequest,
     ArrayRequest,
@@ -380,6 +381,11 @@ export class DrawingDocument {
     /** Adds a polyline and returns the created entity. */
     addPolyline(request: AddPolylineRequest): Entity {
         return this.adopt(this.edit((handle) => service.addPolyline(handle, request)));
+    }
+
+    /** Adds a cubic spline through its fit points and returns the created entity. */
+    addSpline(request: AddSplineRequest): Entity {
+        return this.adopt(this.edit((handle) => service.addSpline(handle, request)));
     }
 
     /** Adds an axis-aligned rectangle as one closed polyline. */

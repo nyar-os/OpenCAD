@@ -422,6 +422,7 @@ export type EntityKind =
       }
     | { readonly type: 'point'; readonly at: Point }
     | { readonly type: 'polyline'; readonly points: readonly Point[]; readonly closed: boolean }
+    | { readonly type: 'spline'; readonly points: readonly Point[]; readonly closed: boolean }
     | { readonly type: 'text'; readonly at: Point; readonly height: number; readonly content: string }
     | { readonly type: 'dimension'; readonly from: Point; readonly to: Point; readonly offset: number; readonly text: string | null }
     | {
@@ -698,6 +699,15 @@ export interface AddEllipseRequest {
 export interface AddPolylineRequest {
     readonly layer: LayerId;
     readonly points: readonly Point[];
+    readonly closed?: boolean;
+}
+
+/** Arguments of `addSpline()`. */
+export interface AddSplineRequest {
+    readonly layer: LayerId;
+    /** Fit points the cubic spline passes through; at least two. */
+    readonly points: readonly Point[];
+    /** Whether the curve closes back to the first fit point. */
     readonly closed?: boolean;
 }
 

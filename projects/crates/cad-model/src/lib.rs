@@ -33,7 +33,7 @@ pub use schema::{
     Drawing, DrawingProperties, Entity, EntityGroup, EntityKind, LINETYPE_PATTERN_LIMIT, Layer, Layout, Linetype, MAX_LINEWEIGHT, OrdinateAxis,
     PROPERTY_VALUE_LIMIT, TextStyle, Units, angular_points, angular_sweep, angular_value, arc_point, arc_sweep, default_dimension_styles,
     default_hatch_pattern, default_linetypes, default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points,
-    ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
+    ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse, sample_spline,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -161,6 +161,7 @@ pub fn capabilities() -> Value {
                 "ellipse",
                 "point",
                 "polyline",
+                "spline",
                 "text",
                 "dimension",
                 "radial-dimension",
@@ -169,7 +170,7 @@ pub fn capabilities() -> Value {
                 "hatch",
             ],
             |name| match name {
-                "line" | "circle" | "arc" | "ellipse" | "point" | "polyline" | "text" | "dimension" | "radial-dimension"
+                "line" | "circle" | "arc" | "ellipse" | "point" | "polyline" | "spline" | "text" | "dimension" | "radial-dimension"
                 | "ordinate-dimension" | "angular-dimension" | "hatch" => "supported",
                 _ => "unsupported",
             },
@@ -677,6 +678,21 @@ pub fn add_ellipse(
 pub fn add_polyline(handle: u64, layer: &str, points: Vec<[f64; 2]>, closed: bool) -> Result<Value, ServiceError> {
     require_finite(&points, "points")?;
     push_entity(handle, layer, EntityKind::Polyline { points, closed })
+}
+
+/// Adds a cubic spline to one layer.
+///
+/// The fit points are the points the curve passes through; at least two are
+/// required. The curve is a uniform Catmull-Rom spline, so every fit point lies
+/// on it, and `closed` joins the last span back to the first. A list with fewer
+/// than two points or a non-finite coordinate reports
+/// `session/argument-invalid`.
+pub fn add_spline(handle: u64, layer: &str, points: Vec<[f64; 2]>, closed: bool) -> Result<Value, ServiceError> {
+    require_finite(&points, "points")?;
+    if points.len() < 2 {
+        return Err(argument("a spline needs at least 2 fit points"));
+    }
+    push_entity(handle, layer, EntityKind::Spline { points, closed })
 }
 
 /// Largest polygon side count [`add_polygon`] accepts.
@@ -1574,6 +1590,7 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                 }
                 EntityKind::Point { at } => rotate(at),
                 EntityKind::Polyline { points, .. } => points.iter_mut().for_each(rotate),
+                EntityKind::Spline { points, .. } => points.iter_mut().for_each(rotate),
                 EntityKind::Text { at, .. } => rotate(at),
                 EntityKind::Dimension { from, to, .. } => {
                     rotate(from);
@@ -1618,6 +1635,7 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                 }
                 EntityKind::Point { at } => scale(at),
                 EntityKind::Polyline { points, .. } => points.iter_mut().for_each(scale),
+                EntityKind::Spline { points, .. } => points.iter_mut().for_each(scale),
                 EntityKind::Text { at, height, .. } => {
                     scale(at);
                     *height *= factor;
@@ -1677,6 +1695,7 @@ fn apply_transform(entity: &mut Entity, operation: TransformOp) {
                 }
                 EntityKind::Point { at } => mirror(at),
                 EntityKind::Polyline { points, .. } => points.iter_mut().for_each(mirror),
+                EntityKind::Spline { points, .. } => points.iter_mut().for_each(mirror),
                 EntityKind::Text { at, .. } => mirror(at),
                 EntityKind::Dimension { from, to, offset, .. } => {
                     mirror(from);
@@ -1870,6 +1889,7 @@ fn kind_name(kind: &EntityKind) -> &'static str {
         EntityKind::Ellipse { .. } => "ellipse",
         EntityKind::Point { .. } => "point",
         EntityKind::Polyline { .. } => "polyline",
+        EntityKind::Spline { .. } => "spline",
         EntityKind::Text { .. } => "text",
         EntityKind::Dimension { .. } => "dimension",
         EntityKind::RadialDimension { .. } => "radial dimension",
@@ -2459,6 +2479,7 @@ fn curve_length(points: &[[f64; 2]]) -> f64 {
 fn entity_closed(kind: &EntityKind) -> bool {
     match kind {
         EntityKind::Polyline { closed, .. } => *closed,
+        EntityKind::Spline { closed, .. } => *closed,
         EntityKind::Hatch { .. } | EntityKind::Circle { .. } => true,
         EntityKind::Ellipse { start_angle, end_angle, .. } => arc_sweep(*start_angle, *end_angle) >= 360.0 - 1e-9,
         _ => false,
@@ -2478,6 +2499,11 @@ fn entity_length_area(kind: &EntityKind) -> (f64, f64) {
                 area += polyline_area(points);
             }
             (length, area)
+        }
+        EntityKind::Spline { points, closed } => {
+            let sampled = sample_spline(points, *closed);
+            let area = if *closed && sampled.len() > 1 { polyline_area(&sampled) } else { 0.0 };
+            (curve_length(&sampled), area)
         }
         EntityKind::Arc { radius, start_angle, end_angle, .. } => (radius.abs() * arc_sweep(*start_angle, *end_angle).to_radians(), 0.0),
         EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
@@ -2667,9 +2693,11 @@ pub fn measure(handle: u64, sheet: Option<String>) -> Result<Value, ServiceError
 ///
 /// Length and area use the same rules as [`measure`]: line segments, polyline
 /// edges (including the closing edge of a closed polyline), hatch boundaries and
-/// analytic arc lengths; ellipse length is sampled at five-degree steps. `area`
-/// covers closed polylines, hatches, full circles and full ellipses, so a closed
-/// polyline reports its perimeter as `length` and its enclosed area as `area`.
+/// analytic arc lengths; ellipse length is sampled at five-degree steps. A
+/// spline is sampled at 16 segments per span for both length and area. `area`
+/// covers closed polylines, closed splines, hatches, full circles and full
+/// ellipses, so a closed polyline reports its perimeter as `length` and its
+/// enclosed area as `area`.
 /// Repeated ids are measured once. A missing id reports `object/not-found`.
 /// The response carries `{ revision, units, entities, totals }`, where each
 /// entity is `{ id, layer, kind, closed, length, area }`.
@@ -4204,6 +4232,7 @@ fn entity_outline(kind: &EntityKind) -> (Vec<[f64; 2]>, bool) {
         }
         EntityKind::Point { at } => (vec![*at], false),
         EntityKind::Polyline { points, closed } => (points.clone(), *closed),
+        EntityKind::Spline { points, closed } => (sample_spline(points, *closed), *closed),
         EntityKind::Text { at, height, content } => {
             let size = height.abs();
             let width = size * 0.6 * content.chars().count() as f64;
@@ -4421,6 +4450,22 @@ fn entity_snap_points(entity: &Entity, modes: &[&str], out: &mut Vec<SnapCandida
                     let next = (index + 1) % points.len();
                     push_snap(out, "midpoint", &entity.id, edge_midpoint(points[index], points[next]));
                 }
+            }
+        }
+        EntityKind::Spline { points, closed } => {
+            let sampled = sample_spline(points, *closed);
+            if endpoint {
+                push_snap(out, "endpoint", &entity.id, *points.first().expect("a spline keeps at least two fit points"));
+                if !*closed
+                    && let Some(last) = points.last()
+                {
+                    push_snap(out, "endpoint", &entity.id, *last);
+                }
+            }
+            if midpoint
+                && let Some(middle) = sampled.get(sampled.len() / 2)
+            {
+                push_snap(out, "midpoint", &entity.id, *middle);
             }
         }
         EntityKind::AngularDimension { center: vertex, first, second, offset, .. } => {
@@ -6880,6 +6925,61 @@ mod tests {
         assert!((start_angle - 30.0).abs() < 1e-9);
         assert!((end_angle - 120.0).abs() < 1e-9);
         assert!(losses.iter().all(|loss| loss.code != "dxf/flattened-arc"));
+        close(handle).expect("close");
+    }
+
+    #[test]
+    fn spline_entities_add_measure_and_round_trip_through_dxf() {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        let points = vec![[0.0, 0.0], [10.0, 10.0], [20.0, 0.0], [30.0, 10.0]];
+        let added = add_spline(handle, DEFAULT_LAYER, points.clone(), false).expect("add spline");
+        assert_eq!(added["entity"]["kind"]["type"], json!("spline"));
+        assert_eq!(added["entity"]["kind"]["points"], json!(points));
+        assert_eq!(
+            add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0]], false).expect_err("one fit point").code,
+            "session/argument-invalid"
+        );
+        assert_eq!(
+            add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [f64::NAN, 0.0]], false).expect_err("nan fit point").code,
+            "session/argument-invalid"
+        );
+
+        let measured = measure_entities(handle, &["entity-1".to_string()]).expect("measure spline");
+        assert!(measured["entities"][0]["length"].as_f64().expect("length") > 30.0, "the sampled curve is longer than the chord");
+        assert_eq!(measured["entities"][0]["area"], json!(0.0), "an open spline encloses no area");
+        let selected = select(handle, SelectionMode::Window, [[-1.0, -1.0], [31.0, 20.0]], None).expect("select spline");
+        assert!(
+            selected["ids"].as_array().is_some_and(|ids| ids.contains(&json!("entity-1"))),
+            "a window over the sampled curve selects the spline: {selected}"
+        );
+
+        let svg = store::read(handle, |session| exchange::svg(&session.drawing)).expect("render svg");
+        assert!(svg.contains("<path"), "the spline is drawn as a path: {svg}");
+        assert!(svg.matches(" L").count() >= 3 * 16, "each of the 3 spans is sampled: {svg}");
+
+        let (text, losses) = store::read(handle, |session| exchange::dxf(&session.drawing)).expect("export dxf");
+        assert!(text.contains("\nSPLINE\n"), "a spline is written as a SPLINE entity: {text}");
+        assert!(text.contains("AC1015"), "a spline raises the DXF version: {text}");
+        assert!(
+            losses.iter().all(|loss| loss.code == "dxf/layer-color"),
+            "a spline writes without spline-specific losses: {:?}",
+            losses.iter().map(|loss| loss.code.clone()).collect::<Vec<_>>()
+        );
+        let (imported, import_losses) = import::dxf(&text, None).expect("import dxf");
+        let EntityKind::Spline { points: imported_points, closed } = &imported.entities[0].kind
+        else {
+            panic!("SPLINE should import as a spline, got {:?}", imported.entities[0].kind);
+        };
+        assert_eq!(imported_points, &points, "fit points round-trip exactly");
+        assert!(!closed);
+        assert!(import_losses.iter().any(|loss| loss.code == "dxf/spline-fit-points"));
+
+        let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let closed_added = add_spline(handle, DEFAULT_LAYER, square, true).expect("closed spline");
+        let closed_id = closed_added["entity"]["id"].as_str().expect("id").to_string();
+        let closed_measured = measure_entities(handle, &[closed_id]).expect("measure closed spline");
+        assert!(closed_measured["entities"][0]["area"].as_f64().expect("area") > 0.0);
         close(handle).expect("close");
     }
 

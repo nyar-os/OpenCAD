@@ -197,6 +197,15 @@ fn drawing_add_polyline(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Adds a cubic spline to one layer of an open drawing.
+#[function]
+fn drawing_add_spline(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_add_spline(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Adds an axis-aligned rectangle as one closed polyline to an open drawing.
 #[function]
 fn drawing_add_rectangle(ctx: CallContext) -> Result<JsValue> {
@@ -1002,6 +1011,13 @@ fn call_add_polyline(handle: u64, request: &Value) -> std::result::Result<Value,
     open_cad_drawing::add_polyline(handle, &layer, points, closed).map_err(service_failure)
 }
 
+fn call_add_spline(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let layer = request_layer(request)?;
+    let points = request_points(request)?;
+    let closed = request.get("closed").and_then(Value::as_bool).unwrap_or(false);
+    open_cad_drawing::add_spline(handle, &layer, points, closed).map_err(service_failure)
+}
+
 fn call_add_rectangle(handle: u64, request: &Value) -> std::result::Result<Value, String> {
     let layer = request_layer(request)?;
     let from = request_point(request, "from")?;
@@ -1661,6 +1677,16 @@ impl IpcHandler for StudioIpcHandler {
                     Err(message) => failure(id, "addPolylineError", message),
                 }
             }
+            "drawing.addSpline" => {
+                let Some(handle) = handle_of(&value)
+                else {
+                    return failure(id, "addSplineError", "an addSpline request needs a drawing handle".to_string());
+                };
+                match call_add_spline(handle, &value) {
+                    Ok(result) => reply(id, "addSplineResult", result),
+                    Err(message) => failure(id, "addSplineError", message),
+                }
+            }
             "drawing.addText" => {
                 let Some(handle) = handle_of(&value)
                 else {
@@ -2250,6 +2276,7 @@ register_module![
     drawing_add_arc,
     drawing_add_ellipse,
     drawing_add_polyline,
+    drawing_add_spline,
     drawing_add_rectangle,
     drawing_add_polygon,
     drawing_add_text,

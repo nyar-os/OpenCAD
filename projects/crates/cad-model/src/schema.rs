@@ -475,6 +475,17 @@ pub enum EntityKind {
         #[serde(default)]
         closed: bool,
     },
+    /// A cubic spline that passes through its fit points, optionally closed.
+    ///
+    /// The curve is a uniform Catmull-Rom spline over the fit points, so every
+    /// fit point lies on the curve. Exporters sample it before drawing.
+    Spline {
+        /// Fit points the curve passes through, in order.
+        points: Vec<[f64; 2]>,
+        /// Whether the curve closes back to the first fit point.
+        #[serde(default)]
+        closed: bool,
+    },
     /// Single-line text.
     Text {
         /// Baseline anchor `[x, y]`.
@@ -618,6 +629,7 @@ impl Entity {
             }
             EntityKind::Point { at } => vec![*at],
             EntityKind::Polyline { points, .. } => points.clone(),
+            EntityKind::Spline { points, closed } => sample_spline(points, *closed),
             EntityKind::Text { at, height, .. } => {
                 let width = at[0] + height * 0.6 * self.label_len() as f64;
                 vec![*at, [width, at[1] + height]]
@@ -659,6 +671,7 @@ impl Entity {
             EntityKind::Ellipse { center, .. } => *center,
             EntityKind::Point { at } => *at,
             EntityKind::Polyline { points, .. } => points.first().copied().unwrap_or([0.0, 0.0]),
+            EntityKind::Spline { points, .. } => points.first().copied().unwrap_or([0.0, 0.0]),
             EntityKind::Text { at, .. } => *at,
             EntityKind::Dimension { from, .. } => *from,
             EntityKind::RadialDimension { center, .. } => *center,
@@ -684,6 +697,11 @@ impl Entity {
             EntityKind::Ellipse { center, .. } => shift(center),
             EntityKind::Point { at } => shift(at),
             EntityKind::Polyline { points, .. } => {
+                for point in points {
+                    shift(point);
+                }
+            }
+            EntityKind::Spline { points, .. } => {
                 for point in points {
                     shift(point);
                 }
@@ -729,6 +747,7 @@ impl Entity {
             }
             EntityKind::Point { at } => finite_point(*at),
             EntityKind::Polyline { points, .. } => points.iter().all(|point| finite_point(*point)),
+            EntityKind::Spline { points, .. } => points.iter().all(|point| finite_point(*point)),
             EntityKind::Text { at, height, .. } => finite_point(*at) && height.is_finite(),
             EntityKind::Dimension { from, to, offset, .. } => finite_point(*from) && finite_point(*to) && offset.is_finite(),
             EntityKind::RadialDimension { center, radius, angle, offset, .. } => {
@@ -765,6 +784,9 @@ impl Entity {
             }
             EntityKind::Hatch { points, .. } if points.len() < 3 => {
                 return Err(format!("entity `{}` hatch needs at least 3 boundary points", self.id));
+            }
+            EntityKind::Spline { points, .. } if points.len() < 2 => {
+                return Err(format!("entity `{}` spline needs at least 2 fit points", self.id));
             }
             EntityKind::AngularDimension { center, first, second, offset, .. } => {
                 if non_positive(*offset) {
@@ -1178,4 +1200,50 @@ fn sample_curve(sweep: f64, point: impl Fn(f64) -> [f64; 2]) -> Vec<[f64; 2]> {
     let steps = (sweep / CURVE_STEP_DEGREES).ceil().max(1.0);
     let count = steps as usize;
     (0..=count).map(|index| point(sweep * index as f64 / count as f64)).collect()
+}
+
+/// Number of straight segments each spline span is sampled into.
+const SPLINE_STEPS_PER_SPAN: usize = 16;
+
+/// Samples a cubic Catmull-Rom spline through `points`, at
+/// [`SPLINE_STEPS_PER_SPAN`] segments per span.
+///
+/// Every fit point lies on the curve. An open spline repeats its end points as
+/// phantom tangents, and a closed spline wraps the first and last spans. Fewer
+/// than three points have no span to smooth and are returned unchanged.
+pub fn sample_spline(points: &[[f64; 2]], closed: bool) -> Vec<[f64; 2]> {
+    let count = points.len();
+    if count < 3 {
+        return points.to_vec();
+    }
+    let spans = if closed { count } else { count - 1 };
+    let mut sampled = Vec::with_capacity(spans * SPLINE_STEPS_PER_SPAN + 1);
+    sampled.push(points[0]);
+    for span in 0..spans {
+        let previous = if span == 0 {
+            if closed { count - 1 } else { 0 }
+        }
+        else {
+            span - 1
+        };
+        let first = points[span];
+        let second = points[(span + 1) % count];
+        let next = if span + 2 < count { span + 2 } else if closed { (span + 2) % count } else { count - 1 };
+        let (before, after) = (points[previous], points[next]);
+        for step in 1..=SPLINE_STEPS_PER_SPAN {
+            let t = step as f64 / SPLINE_STEPS_PER_SPAN as f64;
+            sampled.push(catmull_rom_point(before, first, second, after, t));
+        }
+    }
+    sampled
+}
+
+/// One point on the uniform Catmull-Rom segment `p1 -> p2` at `t` in `(0, 1]`.
+fn catmull_rom_point(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2], p3: [f64; 2], t: f64) -> [f64; 2] {
+    let curve = |a: f64, b: f64, c: f64, d: f64| {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        0.5 * (2.0 * b + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3)
+    };
+    [curve(p0[0], p1[0], p2[0], p3[0]), curve(p0[1], p1[1], p2[1], p3[1])]
 }

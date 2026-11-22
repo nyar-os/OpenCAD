@@ -139,10 +139,15 @@ impl<'a> Collector<'a> {
             let degenerate = match &entity.kind {
                 EntityKind::Line { from, to } => from == to,
                 EntityKind::Polyline { points, .. } => points.len() < 2 || points.windows(2).all(|pair| pair[0] == pair[1]),
+                EntityKind::Spline { points, .. } => points.len() < 2 || points.windows(2).all(|pair| pair[0] == pair[1]),
                 _ => false,
             };
             if degenerate {
-                let name = if matches!(entity.kind, EntityKind::Line { .. }) { "line" } else { "polyline" };
+                let name = match entity.kind {
+                    EntityKind::Line { .. } => "line",
+                    EntityKind::Spline { .. } => "spline",
+                    _ => "polyline",
+                };
                 self.push(
                     "inspection/zero-length",
                     Severity::Error,
@@ -371,6 +376,18 @@ impl<'a> Collector<'a> {
                             Some(&entity.id),
                             true,
                             format!("polyline `{}` is open; its area is not measured and it cannot be extruded", entity.id),
+                        );
+                    }
+                }
+                EntityKind::Spline { points, .. } => {
+                    if self.geometry && points.len() < 2 {
+                        self.push(
+                            "geometry/insufficient-points",
+                            Severity::Error,
+                            Some(&entity.layer),
+                            Some(&entity.id),
+                            true,
+                            format!("spline `{}` has {} fit point(s); at least 2 are required", entity.id, points.len()),
                         );
                     }
                 }

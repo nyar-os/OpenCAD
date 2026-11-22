@@ -745,6 +745,41 @@ entity
     });
 
 entity
+    .command('add-spline', 'cli.cmd.add-spline')
+    .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
+    .option('--points <list>', 'cli.opt.spline-points')
+    .option('--closed', 'cli.opt.closed')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const parsed = points(options, 'points');
+        if (parsed === undefined || parsed.length < 2) {
+            ctx.fail('open-cad.cli.spline-points-required', {
+                message: '`--points "0,0 10,10 20,0 ..."` with at least two fit points is required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.addSpline({
+                    layer: text(options, 'layer') ?? '0',
+                    points: parsed,
+                    closed: flag(options, 'closed'),
+                }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
     .command('add-hatch', 'cli.cmd.add-hatch')
     .option('--layer <layer>', 'cli.opt.layer', { default: '0' })
     .option('--points <list>', 'cli.opt.points')

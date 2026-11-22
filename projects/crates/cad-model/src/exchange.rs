@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::schema::{
     CONTINUOUS_LINETYPE, Drawing, Entity, EntityKind, OrdinateAxis, Units, angular_points, angular_sweep, angular_value, arc_sweep,
-    offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse,
+    offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse, sample_spline,
 };
 
 /// One item an exchange target could not keep.
@@ -305,6 +305,11 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
             let shape = if *closed { Shape::Polygon { points } } else { Shape::Polyline { points } };
             flat.push(Element::new(shape, stroke_style.clone()));
         }
+        EntityKind::Spline { points, closed } => {
+            let points = sample_spline(points, *closed).iter().map(|point| map(*point)).collect::<Vec<_>>();
+            let shape = if *closed { Shape::Polygon { points } } else { Shape::Polyline { points } };
+            flat.push(Element::new(shape, stroke_style.clone()));
+        }
         EntityKind::Text { at, height, content } => {
             flat.push(Element::new(
                 Shape::Text { at: map(*at), text: content.clone(), size: (height.abs() * scale).max(0.01) },
@@ -507,6 +512,47 @@ fn dxf_polyline(out: &mut String, layer: &str, points: &[[f64; 2]], closed: bool
     dxf_pair(out, 8, &layer);
 }
 
+/// Writes one planar cubic SPLINE with a clamped uniform knot vector.
+///
+/// The fit points double as control points so readers that ignore fit points
+/// still have a control polygon, and the fit points make our own reader and
+/// other CAD tools pass the curve through the authored points.
+fn dxf_spline(out: &mut String, layer: &str, points: &[[f64; 2]], closed: bool) {
+    let layer = dxf_layer_name(layer);
+    let (degree, knots) = clamped_spline_knots(points.len());
+    dxf_pair(out, 0, "SPLINE");
+    dxf_pair(out, 8, &layer);
+    dxf_pair(out, 70, 8 | u32::from(closed));
+    dxf_pair(out, 71, degree);
+    dxf_pair(out, 72, knots.len());
+    dxf_pair(out, 73, points.len());
+    dxf_pair(out, 74, points.len());
+    for knot in knots {
+        dxf_pair(out, 40, num_exact(knot));
+    }
+    for point in points {
+        dxf_pair(out, 10, num_exact(point[0]));
+        dxf_pair(out, 20, num_exact(point[1]));
+        dxf_pair(out, 30, "0");
+    }
+    for point in points {
+        dxf_pair(out, 11, num_exact(point[0]));
+        dxf_pair(out, 21, num_exact(point[1]));
+        dxf_pair(out, 31, "0");
+    }
+}
+
+/// Clamped uniform knot vector and degree for `count` fit points.
+fn clamped_spline_knots(count: usize) -> (usize, Vec<f64>) {
+    let degree = count.saturating_sub(1).min(3);
+    let internal = count.saturating_sub(degree + 1);
+    let mut knots = vec![0.0; degree + 1];
+    knots.extend((1..=internal).map(|step| step as f64));
+    let last = internal as f64 + 1.0;
+    knots.extend(std::iter::repeat_n(last, degree + 1));
+    (degree, knots)
+}
+
 /// Renders one drawing to the automatically chosen ASCII DXF version.
 pub(crate) fn dxf(drawing: &Drawing) -> (String, Vec<Loss>) {
     dxf_with_flavor(drawing, false)
@@ -534,7 +580,7 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
     let version = if r12 {
         "AC1009"
     }
-    else if custom_lines || layer_flags || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. })) {
+    else if custom_lines || layer_flags || drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Hatch { .. } | EntityKind::Spline { .. })) {
         "AC1015"
     }
     else {
@@ -724,6 +770,21 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
             }
             EntityKind::Polyline { points, closed } => {
                 dxf_polyline(&mut out, &entity.layer, points, *closed);
+            }
+            EntityKind::Spline { points, closed } => {
+                if r12 {
+                    let sampled = sample_spline(points, *closed);
+                    let outline = if *closed { closed_profile(&sampled) } else { sampled };
+                    dxf_polyline(&mut out, &entity.layer, &outline, *closed);
+                    losses.push(Loss::warning(
+                        "dxf/r12-spline",
+                        Some(&entity.layer),
+                        Some(&entity.id),
+                        "spline is written as a sampled POLYLINE because R12 has no SPLINE entity".to_string(),
+                    ));
+                    continue;
+                }
+                dxf_spline(&mut out, &entity.layer, points, *closed);
             }
             EntityKind::Dimension { from, to, offset, text } => {
                 let (p1, p2) = offset_points(*from, *to, *offset);
@@ -1072,6 +1133,7 @@ pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
     for entity in &drawing.entities {
         let (profile, closed) = match &entity.kind {
             EntityKind::Polyline { points, closed } => (closed_profile(points), *closed),
+            EntityKind::Spline { points, closed } => (closed_profile(&sample_spline(points, *closed)), *closed),
             EntityKind::Arc { center, radius, start_angle, end_angle } => {
                 (closed_profile(&sample_arc(*center, radius.abs(), *start_angle, *end_angle)), false)
             }
@@ -1155,6 +1217,7 @@ pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
     for entity in &drawing.entities {
         let (profile, closed) = match &entity.kind {
             EntityKind::Polyline { points, closed } => (closed_profile(points), *closed),
+            EntityKind::Spline { points, closed } => (closed_profile(&sample_spline(points, *closed)), *closed),
             EntityKind::Arc { center, radius, start_angle, end_angle } => {
                 (closed_profile(&sample_arc(*center, radius.abs(), *start_angle, *end_angle)), false)
             }

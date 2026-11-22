@@ -922,7 +922,7 @@ impl Reader {
                     }
                     let closed = integer(block, 70).is_some_and(|flags| flags & 1 == 1);
                     let points = points.into_iter().map(|point| xform.apply(point)).collect();
-                    self.push(layer, EntityKind::Polyline { points, closed });
+                    self.push(layer, EntityKind::Spline { points, closed });
                 }
                 "LEADER" => {
                     let points = point_run(block, 10, 20);
@@ -1363,7 +1363,7 @@ impl Reader {
             losses.push(Loss::notice(
                 "dxf/spline-fit-points",
                 format!(
-                    "{} SPLINE entity/entities were imported as a polyline through their fit points; the fitted curve was not evaluated",
+                    "{} SPLINE entity/entities were imported as cubic splines through their fit points with a uniform Catmull-Rom approximation; the DXF control points and knot vector are not kept",
                     self.spline_fit_points
                 ),
             ));
@@ -1372,7 +1372,7 @@ impl Reader {
             losses.push(Loss::notice(
                 "dxf/spline-control-polygon",
                 format!(
-                    "{} SPLINE entity/entities had no fit points and were imported as their control polygon; the fitted curve was not evaluated",
+                    "{} SPLINE entity/entities had no fit points and were imported as cubic splines through their control polygon; the fitted curve is approximated by Catmull-Rom spans",
                     self.spline_control_polygons
                 ),
             ));
@@ -1921,15 +1921,15 @@ mod tests {
         let (drawing, losses) = dxf(&document("", &entities), None).expect("read splines");
 
         assert_eq!(drawing.entities.len(), 2);
-        let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+        let EntityKind::Spline { points, closed } = &drawing.entities[0].kind
         else {
-            panic!("expected a spline polyline, got {:?}", drawing.entities[0].kind);
+            panic!("expected a spline, got {:?}", drawing.entities[0].kind);
         };
         assert_eq!(points.as_slice(), &[[0.0, 0.0], [5.0, 5.0], [10.0, 0.0]]);
         assert!(!closed, "fit points of an open spline keep the chain open");
-        let EntityKind::Polyline { points, closed } = &drawing.entities[1].kind
+        let EntityKind::Spline { points, closed } = &drawing.entities[1].kind
         else {
-            panic!("expected a spline polyline, got {:?}", drawing.entities[1].kind);
+            panic!("expected a spline, got {:?}", drawing.entities[1].kind);
         };
         assert_eq!(points.as_slice(), &[[2.0, 2.0], [8.0, 2.0], [8.0, 8.0]]);
         assert!(closed, "a closed SPLINE keeps the closed flag");

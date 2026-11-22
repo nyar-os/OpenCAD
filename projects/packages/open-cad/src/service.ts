@@ -26,6 +26,7 @@ import type {
     AddPolylineRequest,
     AddRadialDimensionRequest,
     AddRectangleRequest,
+    AddSplineRequest,
     AddTextRequest,
     AddTextStyleRequest,
     ArrayRequest,
@@ -251,6 +252,16 @@ export function addEllipse(handle: number, request: AddEllipseRequest): EntityCh
 export function addPolyline(handle: number, request: AddPolylineRequest): EntityChange {
     return decode<EntityChange>(() =>
         binding('drawing.addPolyline').drawing_add_polyline(
+            handle,
+            JSON.stringify({ layer: request.layer, points: request.points, closed: request.closed ?? false }),
+        ),
+    );
+}
+
+/** Adds a cubic spline through its fit points to one layer. */
+export function addSpline(handle: number, request: AddSplineRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.addSpline').drawing_add_spline(
             handle,
             JSON.stringify({ layer: request.layer, points: request.points, closed: request.closed ?? false }),
         ),
