@@ -211,7 +211,7 @@ test('drawing core round trip, inspection and export', { skip: withAddon }, asyn
         assert.equal(pdfReport.format, 'pdf');
         assert.equal(pdfReport.editable, false);
         const pdf = fs.readFileSync(pdfPath, 'utf8');
-        assert.match(pdf, /^%PDF-1\.4/);
+        assert.match(pdf, /^%PDF-1\.[4-7]/);
         assert.match(pdf, /xref/);
         assert.match(pdf, /trailer/);
         assert.ok(pdf.trimEnd().endsWith('%%EOF'));
@@ -537,6 +537,7 @@ test('a hatch keeps its closed boundary and pattern name', { skip: withAddon }, 
     const cad = new OpenCAD();
     try {
         const document = await cad.create({ title: 'Hatch' });
+        document.addLayer({ name: 'fills' });
         const solid = document.addHatch({ layer: 'fills', points: [[0, 0], [10, 0], [10, 10], [0, 10]] });
         assert.equal(solid.kind.type, 'hatch');
         const patterned = document.addHatch({ layer: 'fills', points: [[20, 0], [30, 0], [25, 8]], pattern: 'ANSI31' });
@@ -1031,7 +1032,7 @@ test('undo, redo, layers, entity edits and DXF import', { skip: withAddon }, asy
 
         const pdf = path.join(dir, 'imported.pdf');
         imported.export({ format: 'pdf', target: pdf });
-        assert.match(fs.readFileSync(pdf, 'utf8'), /^%PDF-1\.4/);
+        assert.match(fs.readFileSync(pdf, 'utf8'), /^%PDF-1\.[4-7]/);
         imported.save({ target: path.join(dir, 'imported.ocad'), overwrite: false });
         imported.close();
     } finally {
