@@ -163,6 +163,32 @@ sampled polygon, so a drawing with curved entities reports approximations.
 `measure --sheet` filters by the named layout; drawing-wide totals are only
 available without a sheet name.
 
+## Object snap
+
+`snap` computes candidates without changing the drawing. Modes are `endpoint`,
+`midpoint`, `center`, `quadrant`, `nearest` and `intersection`. A request that
+names no modes keeps the original set — `endpoint`, `midpoint`, `center` and
+`intersection` — so `quadrant` and `nearest` are opt-in.
+
+- `center` covers circles, arcs and ellipses.
+- `quadrant` covers circles and arcs at 0, 90, 180 and 270 degrees. An arc only
+  reports the quadrants inside its counter-clockwise sweep.
+- `nearest` projects the probe point onto a line, one polyline segment, a circle
+  or an arc. It needs a probe point; an arc result is clamped to the start and
+  end angles.
+- `intersection` covers bounded line-to-line, line-to-circle and
+  circle-to-circle pairs. Tangency, parallel lines, concentric circles and
+  separated pairs produce no candidate.
+
+Candidates sort by distance to the probe point, then by entity id, then by mode,
+so equal-distance results are deterministic. A tolerance keeps only candidates
+within that distance and needs a probe point. A degenerate circle with radius 0
+contributes no quadrant, nearest or intersection candidate, and polyline nearest
+points are computed segment by segment, including the closing edge of a closed
+polyline. Ellipses and splines offer `endpoint`, `midpoint` and `center` only;
+quadrants and nearest points are analytic for lines, polylines, circles and
+arcs.
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -173,8 +199,9 @@ available without a sheet name.
   dimensions.
 - No 3D primitives, solids or booleans; STEP/STL/OBJ are faceted projections.
 - No paper-space layout export to DXF, SVG or PDF.
-- No snap for arcs, circles or intersections; snapping is endpoint-based
-  against lines and line-to-line intersections.
+- Snap quadrants and nearest points are analytic for lines, polylines, circles
+  and arcs only; ellipses and splines stay endpoint, midpoint and centre snaps.
+  Intersections cover lines and full circles, not arcs, ellipses or splines.
 - `text find`/`replace` covers `TEXT` entities only, not text inside dimensions
   or hatches.
 - Named UCS entities are not modelled; the UCS is a coordinate query, not a
