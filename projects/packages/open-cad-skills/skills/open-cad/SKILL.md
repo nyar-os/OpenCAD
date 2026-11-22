@@ -79,6 +79,7 @@ open-cad array plan.ocad --ids entity-1 --rows 2 --columns 3 --row-spacing 10 --
 open-cad array plan.ocad --ids entity-1 --center 0,0 --count 6 --angle 360
 open-cad explode plan.ocad --id entity-2
 open-cad offset plan.ocad --id entity-2 --distance 2
+open-cad offset plan.ocad --id entity-2 --distance 2 --side left
 open-cad fillet plan.ocad --first entity-1 --second entity-2 --radius 5
 open-cad chamfer plan.ocad --first entity-1 --second entity-2 --distance-a 3 --distance-b 3
 open-cad measure plan.ocad
@@ -188,12 +189,18 @@ a rectangular grid creates `rows * columns - 1` copies and a polar array
 polyline and replaces it, at the same list position, with one line per edge
 (closed polylines gain the closing edge). `offset` takes `--id` of one circle,
 arc, polyline or line and `--distance`; it appends a new entity on the same layer
-without moving the source. A positive distance grows a radius or offsets an
-open polyline or line to the left of its travel direction; a negative distance
-shrinks or offsets right. Closed polylines miter every vertex. Text, point,
-ellipse and dimension entities are refused with `object/unsupported`, and a
-non-positive resulting radius or a zero-length line with
-`session/argument-invalid`. `fillet` takes `--first`,
+without moving the source. Without `--side` the distance is signed: positive
+grows a radius or offsets left, negative shrinks or offsets right, and zero
+reports `session/argument-invalid`. With optional `--side` the distance must be
+positive; `left` and `right` apply to a line or polyline, measured along its
+travel direction, while `outside` and `inside` apply to a circle or arc and
+change only the radius. With `--side`, a polyline miter longer than four times
+the distance is refused with `offset/miter-limit`, text/point/ellipse/dimension
+entities with `offset/unsupported-entity`, an unknown id with
+`offset/not-found`, a non-positive resulting radius with
+`offset/invalid-distance`, and a mismatched side with `offset/invalid-side`.
+The signed form keeps its original `session/argument-invalid` and
+`object/unsupported` codes. `fillet` takes `--first`,
 `--second` and `--radius`; `chamfer` takes `--first`, `--second`,
 `--distance-a` and optional `--distance-b` (which defaults to the first
 distance). Both require two different line entities, use the closest endpoint

@@ -82,7 +82,7 @@ exactly one transform.
 | `copy` | `--ids a,b`, `--dx n`, `--dy n`, `--count n` |
 | `array` | `--ids a,b`, then `--rows n --columns n [--row-spacing n --column-spacing n]` or `--center x,y --count n --angle deg` |
 | `explode` | `--id <id>` (a block reference; unsupported for other kinds) |
-| `offset` | `--id <id>`, `--distance n` |
+| `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -90,8 +90,20 @@ exactly one transform.
 open-cad transform plan.ocad --layer Structure --translate 100,0
 open-cad copy plan.ocad --ids entity-3,entity-4 --dx 500 --dy 0 --count 3
 open-cad array plan.ocad --ids entity-3 --rows 2 --columns 3 --row-spacing 400
+open-cad offset plan.ocad --id entity-3 --distance 5
+open-cad offset plan.ocad --id entity-3 --distance 5 --side left
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
+
+`offset` appends one new entity on the source layer and leaves the source in
+place. Without `--side` it keeps the signed convention: a positive
+`--distance` grows a circle or arc and offsets a line or polyline to the left,
+while a negative distance shrinks or offsets right. With `--side`, the distance
+must be positive and finite; `--side left` and `--side right` apply to a line or
+polyline and measure along its travel direction, while `--side outside` and
+`--side inside` apply to a circle or arc and change only the radius. A polyline
+corner that would need a miter longer than four times the distance is refused
+when `--side` is used.
 
 ## Measure and select
 

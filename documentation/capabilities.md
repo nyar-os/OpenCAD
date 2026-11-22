@@ -189,6 +189,42 @@ polyline. Ellipses and splines offer `endpoint`, `midpoint` and `center` only;
 quadrants and nearest points are analytic for lines, polylines, circles and
 arcs.
 
+## Offset
+
+Offsetting has two forms. `offset(entityId, distance)` keeps the original
+signed convention: a positive `distance` grows a circle or arc and offsets a
+line or open polyline to the left of its travel direction, while a negative
+distance shrinks or offsets to the right. A zero or non-finite distance reports
+`session/argument-invalid`. `offsetBySide(entityId, distance, side)` requires a
+positive finite distance and names the direction explicitly:
+
+- `left` and `right` apply to a line and polyline, measured along the travel
+  direction.
+- `outside` and `inside` apply to a circle and arc, where only the radius
+  changes. A circle keeps its centre; an arc also keeps its centre and start
+  and end angles.
+
+In both forms a line becomes an equal-length parallel line, and a polyline
+offsets every segment by the same distance and joins consecutive segments with
+a miter. The new entity takes the next deterministic `entity-N` id, inherits the
+source layer — and therefore its colour, line type and lineweight — and
+increments the revision.
+
+With `offsetBySide`, a side that does not match the entity kind reports
+`offset/invalid-side`; a resulting radius at or below zero or a non-finite
+result reports `offset/invalid-distance`; an unknown id reports
+`offset/not-found`; an unsupported kind reports `offset/unsupported-entity`. The
+signed form keeps its original `session/argument-invalid` and
+`object/unsupported` codes.
+
+A polyline corner whose miter would exceed four times `distance` is refused with
+`offset/miter-limit` by `offsetBySide` instead of being silently bevelled. The
+signed form keeps its original miter fallback for nearly collinear normals. In
+both forms the offset is not clipped against itself, so a closed polyline whose
+new edge crosses another edge is returned as computed. Polylines hold straight
+segments only, so there are no arc or bulge segments to miter. Ellipse, spline,
+point, text, hatch and dimension entities stay unsupported.
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -209,6 +245,9 @@ arcs.
 - Dimension styles and text styles are limited to the fields exposed by the
   style commands.
 - Fillet and chamfer accept two straight lines only.
+- Offset covers lines, straight-segment polylines, circles and arcs only. It
+  does not clip self-intersections, miter arc or bulge segments (polylines have
+  none) or offset ellipses, splines, points, text, hatches and dimensions.
 - Valid colours are `#rrggbb`; lineweights are `0`–`10` mm; the line-type
   pattern holds at most 12 finite positive entries.
 - The model does not enforce arbitrary user metadata; only the declared
