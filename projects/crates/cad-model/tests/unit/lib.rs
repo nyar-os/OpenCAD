@@ -3909,6 +3909,139 @@ fn trim_refuses_a_locked_target_layer() {
 }
 
 #[test]
+fn trim_arc_with_line_keeps_the_longer_side_and_exact_angles() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, 0.0, 180.0).expect("target arc");
+    add_line(handle, DEFAULT_LAYER, [1.0, -5.0], [1.0, 5.0]).expect("cutter line");
+
+    let result = trim(handle, "entity-1", "entity-2").expect("trim the arc");
+    assert_eq!(result["entity"]["id"], json!("entity-1"));
+    assert_eq!(result["cutter"], json!("entity-2"));
+    assert_eq!(result["revision"], json!(4));
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [0.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(2.0));
+    let result_start = result["entity"]["kind"]["start_angle"].as_f64().expect("start angle");
+    assert!((result_start - 60.0).abs() < 1e-9, "start {result_start}");
+    assert_eq!(result["entity"]["kind"]["end_angle"], json!(180.0));
+
+    let EntityKind::Arc { center, radius, start_angle, end_angle } = drawing_of(handle).entities[0].kind.clone()
+    else {
+        panic!("the trimmed target must stay an arc");
+    };
+    assert_point(&json!(center), [0.0, 0.0]);
+    assert!((radius - 2.0).abs() < 1e-9, "radius {radius}");
+    assert!((start_angle - 60.0).abs() < 1e-9, "start {start_angle}");
+    assert!((end_angle - 180.0).abs() < 1e-9, "end {end_angle}");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_arc_with_circle_keeps_the_longer_outer_portion() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0, 0.0, 240.0).expect("target arc");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 3.0], 4.0).expect("cutter circle");
+
+    let result = trim(handle, "entity-1", "entity-2").expect("trim the arc");
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [0.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(5.0));
+    let start = result["entity"]["kind"]["start_angle"].as_f64().expect("start angle");
+    let end = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((start - 143.130_102_354_155_98).abs() < 1e-9, "kept start {start}");
+    assert!((end - 240.0).abs() < 1e-9, "kept end {end}");
+    assert!((arc_sweep(start, end) - 96.869_897_645_844_02).abs() < 1e-9, "kept sweep");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_arc_with_arc_filters_the_cutter_sweep() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, 0.0, 180.0).expect("first target arc");
+    add_arc(handle, DEFAULT_LAYER, [2.0, 0.0], 2.0, 0.0, 180.0).expect("upper cutter arc");
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, 0.0, 180.0).expect("second target arc");
+    add_arc(handle, DEFAULT_LAYER, [2.0, 0.0], 2.0, 180.0, 360.0).expect("lower cutter arc");
+
+    let kept = trim(handle, "entity-1", "entity-2").expect("only the upper crossing lies on both sweeps");
+    assert_eq!(kept["entity"]["kind"]["type"], json!("arc"));
+    let start = kept["entity"]["kind"]["start_angle"].as_f64().expect("start angle");
+    assert!((start - 60.0).abs() < 1e-9, "start {start}");
+    assert_eq!(kept["entity"]["kind"]["end_angle"], json!(180.0));
+
+    assert_eq!(trim(handle, "entity-3", "entity-4").expect_err("the lower crossing misses the target sweep").code, "trim/no-intersection");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_circle_with_line_becomes_an_arc_over_the_longer_sweep() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [5.0, 0.0], 2.0).expect("target circle");
+    add_line(handle, DEFAULT_LAYER, [4.0, -5.0], [4.0, 5.0]).expect("cutter line");
+
+    let result = trim(handle, "entity-1", "entity-2").expect("trim the circle");
+    assert_eq!(result["entity"]["id"], json!("entity-1"));
+    assert_eq!(result["entity"]["kind"]["type"], json!("arc"));
+    assert_point(&result["entity"]["kind"]["center"], [5.0, 0.0]);
+    assert_eq!(result["entity"]["kind"]["radius"], json!(2.0));
+    let start = result["entity"]["kind"]["start_angle"].as_f64().expect("start angle");
+    let end = result["entity"]["kind"]["end_angle"].as_f64().expect("end angle");
+    assert!((start - 240.0).abs() < 1e-9, "start {start}");
+    assert!((end - 120.0).abs() < 1e-9, "end {end}");
+    assert!((arc_sweep(start, end) - 240.0).abs() < 1e-9, "the removed span must be the shorter one");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_arc_and_circle_report_missing_or_single_intersections() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, 0.0, 180.0).expect("arc target");
+    add_line(handle, DEFAULT_LAYER, [10.0, -5.0], [10.0, 5.0]).expect("distant line");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0).expect("circle target");
+    add_circle(handle, DEFAULT_LAYER, [10.0, 0.0], 1.0).expect("distant circle");
+    add_line(handle, DEFAULT_LAYER, [2.0, -5.0], [2.0, 5.0]).expect("tangent line");
+    add_circle(handle, DEFAULT_LAYER, [3.0, 0.0], 1.0).expect("tangent circle");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 0.0).expect("zero-radius target");
+    add_line(handle, DEFAULT_LAYER, [0.0, -5.0], [0.0, 5.0]).expect("cutter");
+
+    assert_eq!(trim(handle, "entity-1", "entity-2").expect_err("arc miss").code, "trim/no-intersection");
+    assert_eq!(trim(handle, "entity-3", "entity-4").expect_err("circle miss").code, "trim/no-intersection");
+    assert_eq!(trim(handle, "entity-3", "entity-5").expect_err("line tangent to circle").code, "trim/degenerate");
+    assert_eq!(trim(handle, "entity-3", "entity-6").expect_err("circle tangent to circle").code, "trim/degenerate");
+    assert_eq!(trim(handle, "entity-7", "entity-8").expect_err("zero-radius target").code, "trim/degenerate");
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_arc_refuses_a_cut_on_an_endpoint() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_arc(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0, 0.0, 180.0).expect("target arc");
+    add_line(handle, DEFAULT_LAYER, [2.0, -5.0], [2.0, 5.0]).expect("cutter tangent at the start angle");
+
+    let error = trim(handle, "entity-1", "entity-2").expect_err("endpoint cut");
+    assert_eq!(error.code, "trim/degenerate");
+    assert!(error.message.contains("nothing to trim"), "message was {}", error.message);
+    close(handle).expect("close");
+}
+
+#[test]
+fn trim_refuses_a_locked_arc_target_layer() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_arc(handle, "Structure", [0.0, 0.0], 5.0, 0.0, 180.0).expect("target arc");
+    add_circle(handle, DEFAULT_LAYER, [3.0, 0.0], 2.0).expect("cutter");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(trim(handle, "entity-1", "entity-2").expect_err("locked arc trim").code, "drawing/layer-locked");
+    close(handle).expect("close");
+}
+
+#[test]
 fn extend_line_with_line_moves_the_near_endpoint_to_the_crossing() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);

@@ -244,25 +244,33 @@ point, text, hatch and dimension entities stay unsupported.
 
 ## Trim
 
-`trim(id, cutter)` cuts one line at a line, circle or arc and updates that line
-in place. Both intersections are bounded: a line cutter must cross the target
-segment, and a circle or arc crossing must lie on the arc's counter-clockwise
-sweep. Of the two sides a single crossing produces, the longer one is kept. When
-the cutter crosses twice, the longer of the two outer segments is kept, so the
-span between the cut points and the shorter outer piece are discarded. Equal
-lengths keep the side that starts at the target's original `from` endpoint.
+`trim(id, cutter)` cuts one line, arc or circle target at a line, circle or arc
+cutter and updates that target in place. All intersections are bounded: a line
+cutter must cross the target segment, a circle or arc crossing must lie on the
+arc's counter-clockwise sweep, and a crossing of an arc target must lie on the
+target's own sweep. Of the two sides a single crossing produces, the longer one
+is kept. When the cutter crosses twice, the longer of the two outer segments is
+kept, so the span between the cut points and the shorter outer piece are
+discarded. Equal lengths keep the side that starts at the target's original
+`from` endpoint. An arc target follows the same policy, measured in degrees
+travelled from its start angle, and stays an arc with the same centre and
+radius.
 
-The response carries `{ revision, drawing, entity, cutter }`, where `entity` is
-the updated line. The cutter never moves, only the target's layer is checked for
-locks, and the edit is one history step.
+A circle has no endpoints, so it needs exactly two distinct crossings: the
+shorter span between them is removed and the target becomes an arc covering the
+longer sweep. The response carries `{ revision, drawing, entity, cutter }`, where
+`entity` is the updated target, possibly an arc that came from a circle. The
+cutter never moves, only the target's layer is checked for locks, and the edit
+is one history step.
 
 A cutter that never meets the target reports `trim/no-intersection`. Tangency,
-collinearity, a zero-length target or cutter, and a crossing that falls on a
-target endpoint (so nothing would be removed) report `trim/degenerate`. A target
-that is not a line, or a cutter that is not a line, circle or arc, reports
-`object/unsupported`; an unknown id reports `object/not-found`, a locked target
-layer reports `drawing/layer-locked`, and the same id for target and cutter
-reports `session/argument-invalid`.
+collinearity, a zero-length or zero-radius input, a single or ambiguous circle
+cut, and a crossing that falls on a target endpoint (so nothing would be
+removed) report `trim/degenerate`. A target that is not a line, arc or circle,
+or a cutter that is not a line, circle or arc, reports `object/unsupported`; an
+unknown id reports `object/not-found`, a locked target layer reports
+`drawing/layer-locked`, and the same id for target and cutter reports
+`session/argument-invalid`.
 
 ## Extend
 
@@ -381,8 +389,9 @@ layers (`join_refuses_a_locked_layer`) and repeatability (`join_is_deterministic
 - Dimension styles and text styles are limited to the fields exposed by the
   style commands.
 - Fillet and chamfer accept two straight lines only.
-- Trim cuts a line only, and its cutter must be a line, circle or arc; it does
-  not trim polylines, splines, ellipses, circles or arcs themselves.
+- Trim cuts line, arc and circle targets with a line, circle or arc cutter, and
+  a circle target becomes an arc. It does not trim polylines, splines, ellipses,
+  block references or other entity types.
 - Extend lengthens a line only, and its boundary must be a line, circle or arc.
   It does not extend polylines, arcs, circles, ellipses or splines, and it does
   not follow a boundary past its drawn extent.

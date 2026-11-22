@@ -2641,15 +2641,199 @@ fn line_cutter_hits(from: [f64; 2], to: [f64; 2], cutter: &EntityKind, cutter_id
     }
 }
 
-/// Trims one line at a cutter, keeping the longer side.
+/// Points where two full circles meet. Tangency collapses to one contact point,
+/// while separation, containment and coincidence give no crossing.
+fn circle_circle_hits(first: ([f64; 2], f64), second: ([f64; 2], f64)) -> CutterHits {
+    let ((first_center, first_radius), (second_center, second_radius)) = (first, second);
+    let delta = [second_center[0] - first_center[0], second_center[1] - first_center[1]];
+    let separation = delta[0].hypot(delta[1]);
+    let scale = (first_radius + second_radius).max(1.0);
+    let tolerance = 1e-9 * scale;
+    if separation < 1e-12 {
+        return CutterHits::None;
+    }
+    let unit = [delta[0] / separation, delta[1] / separation];
+    if separation >= first_radius + second_radius - tolerance {
+        if separation <= first_radius + second_radius + tolerance {
+            return CutterHits::Tangent([first_center[0] + unit[0] * first_radius, first_center[1] + unit[1] * first_radius]);
+        }
+        return CutterHits::None;
+    }
+    if separation <= (first_radius - second_radius).abs() + tolerance {
+        if separation >= (first_radius - second_radius).abs() - tolerance {
+            let sign = if first_radius >= second_radius { 1.0 } else { -1.0 };
+            return CutterHits::Tangent([first_center[0] + unit[0] * first_radius * sign, first_center[1] + unit[1] * first_radius * sign]);
+        }
+        return CutterHits::None;
+    }
+    let along = (first_radius * first_radius - second_radius * second_radius + separation * separation) / (2.0 * separation);
+    let height_squared = first_radius * first_radius - along * along;
+    if height_squared <= 0.0 {
+        return CutterHits::None;
+    }
+    let height = height_squared.sqrt();
+    let base = [first_center[0] + unit[0] * along, first_center[1] + unit[1] * along];
+    let offset = [-unit[1] * height, unit[0] * height];
+    CutterHits::Points(vec![[base[0] + offset[0], base[1] + offset[1]], [base[0] - offset[0], base[1] - offset[1]]])
+}
+
+/// Points where the full circle `(center, radius)` meets one cutter. An arc
+/// cutter only contributes the crossings on its own counter-clockwise sweep.
+fn circle_cutter_hits(
+    center: [f64; 2],
+    radius: f64,
+    cutter: &EntityKind,
+    cutter_id: &str,
+    target_kind: &str,
+) -> Result<CutterHits, ServiceError> {
+    match cutter {
+        EntityKind::Line { from, to } => {
+            if distance(*from, *to) <= 1e-12 {
+                return Err(trim_degenerate(format!("cutter `{cutter_id}` has zero length")));
+            }
+            Ok(line_circle_hits(*from, *to, center, radius))
+        }
+        EntityKind::Circle { center: cutter_center, radius: cutter_radius } => {
+            let cutter_radius = cutter_radius.abs();
+            if cutter_radius <= 1e-12 {
+                return Err(trim_degenerate(format!("cutter `{cutter_id}` has zero radius")));
+            }
+            if distance(*cutter_center, center) <= 1e-12 && (cutter_radius - radius).abs() <= 1e-9 * radius.max(1.0) {
+                return Err(trim_degenerate(format!("cutter `{cutter_id}` is the target circle, so the cut is ambiguous")));
+            }
+            Ok(circle_circle_hits((center, radius), (*cutter_center, cutter_radius)))
+        }
+        EntityKind::Arc { center: cutter_center, radius: cutter_radius, start_angle, end_angle } => {
+            let cutter_radius = cutter_radius.abs();
+            if cutter_radius <= 1e-12 {
+                return Err(trim_degenerate(format!("cutter `{cutter_id}` has zero radius")));
+            }
+            let sweep = arc_sweep(*start_angle, *end_angle);
+            let within = |point: [f64; 2]| {
+                angle_within_sweep(*start_angle, sweep, (point[1] - cutter_center[1]).atan2(point[0] - cutter_center[0]).to_degrees())
+            };
+            match circle_circle_hits((center, radius), (*cutter_center, cutter_radius)) {
+                CutterHits::Tangent(point) if within(point) => Ok(CutterHits::Tangent(point)),
+                CutterHits::Tangent(_) | CutterHits::None => Ok(CutterHits::None),
+                CutterHits::Points(points) => Ok(CutterHits::Points(points.into_iter().filter(|point| within(*point)).collect())),
+            }
+        }
+        other => {
+            Err(ServiceError::new("object/unsupported", format!("entity `{cutter_id}` is a {} and cannot cut {target_kind}", kind_name(other))))
+        }
+    }
+}
+
+/// Trims an arc target and returns the kept `EntityKind::Arc`.
 ///
-/// The target must be a line; the cutter may be a line, circle or arc. One
-/// intersection keeps the longer of the two sides. Two intersections keep the
-/// longer of the two outer segments, so the span between the cut points is
-/// discarded. A target and cutter without a valid crossing report
-/// `trim/no-intersection`; tangency, collinearity, a zero-length input or a cut
-/// on a target endpoint reports `trim/degenerate`. The response carries
-/// `{ revision, drawing, entity, cutter }`, where `entity` is the trimmed line.
+/// The target's full circle is cut, then only crossings on the arc sweep are
+/// kept and measured as degrees travelled from the start angle. One crossing
+/// keeps the longer remaining arc; two or more keep the longer outer portion,
+/// discarding the span between the first two crossings.
+fn trim_arc(target: &EntityKind, target_id: &str, cutter: &EntityKind, cutter_id: &str) -> Result<EntityKind, ServiceError> {
+    let EntityKind::Arc { center, radius, start_angle, end_angle } = target
+    else {
+        unreachable!("trim_arc is only called with an arc target");
+    };
+    let sweep = arc_sweep(*start_angle, *end_angle);
+    if radius.abs() <= 1e-12 {
+        return Err(trim_degenerate(format!("target arc `{target_id}` has zero radius")));
+    }
+    let endpoint_tolerance = 1e-9 * sweep.max(1.0);
+    let angular_tolerance = 1e-9_f64.to_degrees();
+    let mut cuts = match circle_cutter_hits(*center, radius.abs(), cutter, cutter_id, "an arc")? {
+        CutterHits::None => Vec::new(),
+        CutterHits::Tangent(point) => vec![point],
+        CutterHits::Points(points) => points,
+    }
+    .into_iter()
+    .map(|point| normalize_angle((point[1] - center[1]).atan2(point[0] - center[0]).to_degrees() - start_angle))
+    .filter(|travelled| sweep >= 360.0 - 1e-9 || *travelled <= sweep + angular_tolerance)
+    .collect::<Vec<_>>();
+    cuts.sort_by(|left, right| left.total_cmp(right));
+    cuts.dedup_by(|left, right| (*left - *right).abs() <= angular_tolerance);
+    if cuts.is_empty() {
+        return Err(ServiceError::new("trim/no-intersection", format!("cutter `{cutter_id}` does not meet the target arc `{target_id}`")));
+    }
+    let (kept_start, kept_end) = if cuts.len() == 1 {
+        let cut = cuts[0].clamp(0.0, sweep);
+        let before = cut;
+        let after = sweep - cut;
+        if before.min(after) <= endpoint_tolerance {
+            return Err(trim_degenerate("the intersection lies on a target arc endpoint, so there is nothing to trim"));
+        }
+        if before >= after { (0.0, cut) } else { (cut, sweep) }
+    }
+    else {
+        let first = cuts[0].clamp(0.0, sweep);
+        let second = cuts[1].clamp(0.0, sweep);
+        let before = first;
+        let after = sweep - second;
+        if before.max(after) <= endpoint_tolerance {
+            return Err(trim_degenerate("both intersections lie on the target arc endpoints, so there is nothing to trim"));
+        }
+        if before >= after { (0.0, first) } else { (second, sweep) }
+    };
+    Ok(EntityKind::Arc {
+        center: *center,
+        radius: *radius,
+        start_angle: normalize_angle(start_angle + kept_start),
+        end_angle: normalize_angle(start_angle + kept_end),
+    })
+}
+
+/// Trims a circle target and returns the kept `EntityKind::Arc`.
+///
+/// A circle has no endpoints, so exactly two distinct crossings are required.
+/// The shorter span between the crossings is removed and the result covers the
+/// longer remaining sweep.
+fn trim_circle(target: &EntityKind, target_id: &str, cutter: &EntityKind, cutter_id: &str) -> Result<EntityKind, ServiceError> {
+    let EntityKind::Circle { center, radius } = target
+    else {
+        unreachable!("trim_circle is only called with a circle target");
+    };
+    if radius.abs() <= 1e-12 {
+        return Err(trim_degenerate(format!("target circle `{target_id}` has zero radius")));
+    }
+    let angular_tolerance = 1e-9_f64.to_degrees();
+    let mut angles = match circle_cutter_hits(*center, radius.abs(), cutter, cutter_id, "a circle")? {
+        CutterHits::None => Vec::new(),
+        CutterHits::Tangent(point) => vec![normalize_angle((point[1] - center[1]).atan2(point[0] - center[0]).to_degrees())],
+        CutterHits::Points(points) => {
+            points.into_iter().map(|point| normalize_angle((point[1] - center[1]).atan2(point[0] - center[0]).to_degrees())).collect()
+        }
+    };
+    angles.sort_by(|left, right| left.total_cmp(right));
+    angles.dedup_by(|left, right| (*left - *right).abs() <= angular_tolerance);
+    if angles.len() > 1 && 360.0 - (angles[angles.len() - 1] - angles[0]) <= angular_tolerance {
+        angles.pop();
+    }
+    if angles.is_empty() {
+        return Err(ServiceError::new("trim/no-intersection", format!("cutter `{cutter_id}` does not meet the target circle `{target_id}`")));
+    }
+    if angles.len() < 2 {
+        return Err(trim_degenerate("the cutter meets the target circle at a single point, so there is nothing to trim"));
+    }
+    let first = angles[0];
+    let second = angles[1];
+    let span = second - first;
+    let (start_angle, end_angle) = if span >= 180.0 { (first, second) } else { (second, first) };
+    Ok(EntityKind::Arc { center: *center, radius: *radius, start_angle, end_angle })
+}
+
+/// Trims a line, arc or circle target at a cutter, keeping the longer side.
+///
+/// The cutter may be a line, circle or arc. A line target keeps the longer of
+/// the two sides for one intersection, and the longer outer segment for two, so
+/// the span between the cut points is discarded. An arc target measures the
+/// crossings along its sweep and applies the same policy. A circle target has
+/// no endpoints, so exactly two distinct crossings are required; the shorter
+/// span between them is removed and the result is an arc covering the longer
+/// sweep. A target and cutter without a valid crossing report
+/// `trim/no-intersection`; tangency, collinearity, a zero-length or zero-radius
+/// input, an ambiguous circle cut and a cut that leaves nothing report
+/// `trim/degenerate`. The response carries `{ revision, drawing, entity, cutter }`,
+/// where `entity` is the trimmed target, possibly an arc that came from a circle.
 pub fn trim(handle: u64, target_id: &str, cutter_id: &str) -> Result<Value, ServiceError> {
     if target_id == cutter_id {
         return Err(argument("a trim needs two different entities"));
@@ -2657,43 +2841,57 @@ pub fn trim(handle: u64, target_id: &str, cutter_id: &str) -> Result<Value, Serv
     let updated = store::edit(handle, |drawing| {
         let target_index = entity_index(drawing, target_id)?;
         let cutter_index = entity_index(drawing, cutter_id)?;
-        let (from, to) = line_endpoints(&drawing.entities[target_index].kind).ok_or_else(|| {
-            ServiceError::new(
+        let target = drawing.entities[target_index].kind.clone();
+        if !matches!(target, EntityKind::Line { .. } | EntityKind::Arc { .. } | EntityKind::Circle { .. }) {
+            return Err(ServiceError::new(
                 "object/unsupported",
-                format!("entity `{target_id}` is a {} and cannot be trimmed", kind_name(&drawing.entities[target_index].kind)),
-            )
-        })?;
+                format!("entity `{target_id}` is a {} and cannot be trimmed", kind_name(&target)),
+            ));
+        }
         if let Some(error) = locked_layer(drawing, &drawing.entities[target_index].layer) {
             return Err(error);
         }
         let cutter = drawing.entities[cutter_index].kind.clone();
-        let length = distance(from, to);
-        let parameter =
-            |point: [f64; 2]| ((point[0] - from[0]) * (to[0] - from[0]) + (point[1] - from[1]) * (to[1] - from[1])) / (length * length);
-        let mut hits = line_cutter_hits(from, to, &cutter, cutter_id)?.into_iter().map(|point| (parameter(point), point)).collect::<Vec<_>>();
-        hits.sort_by(|left, right| left.0.total_cmp(&right.0));
-        hits.dedup_by(|left, right| distance(left.1, right.1) <= 1e-9 * length.max(1.0));
-        if hits.is_empty() {
-            return Err(ServiceError::new("trim/no-intersection", format!("cutter `{cutter_id}` does not meet the target line `{target_id}`")));
-        }
-        let (new_from, new_to) = if hits.len() == 1 {
-            let cut = hits[0].0.clamp(0.0, 1.0);
-            let before = cut * length;
-            let after = (1.0 - cut) * length;
-            if before.min(after) <= 1e-9 * length {
-                return Err(trim_degenerate("the intersection lies on a target endpoint, so there is nothing to trim"));
+        let trimmed = match &target {
+            EntityKind::Line { from, to } => {
+                let (from, to) = (*from, *to);
+                let length = distance(from, to);
+                let parameter =
+                    |point: [f64; 2]| ((point[0] - from[0]) * (to[0] - from[0]) + (point[1] - from[1]) * (to[1] - from[1])) / (length * length);
+                let mut hits =
+                    line_cutter_hits(from, to, &cutter, cutter_id)?.into_iter().map(|point| (parameter(point), point)).collect::<Vec<_>>();
+                hits.sort_by(|left, right| left.0.total_cmp(&right.0));
+                hits.dedup_by(|left, right| distance(left.1, right.1) <= 1e-9 * length.max(1.0));
+                if hits.is_empty() {
+                    return Err(ServiceError::new(
+                        "trim/no-intersection",
+                        format!("cutter `{cutter_id}` does not meet the target line `{target_id}`"),
+                    ));
+                }
+                let (new_from, new_to) = if hits.len() == 1 {
+                    let cut = hits[0].0.clamp(0.0, 1.0);
+                    let before = cut * length;
+                    let after = (1.0 - cut) * length;
+                    if before.min(after) <= 1e-9 * length {
+                        return Err(trim_degenerate("the intersection lies on a target endpoint, so there is nothing to trim"));
+                    }
+                    if before >= after { (from, hits[0].1) } else { (hits[0].1, to) }
+                }
+                else {
+                    let before = hits[0].0.clamp(0.0, 1.0) * length;
+                    let after = (1.0 - hits[1].0.clamp(0.0, 1.0)) * length;
+                    if before.max(after) <= 1e-9 * length {
+                        return Err(trim_degenerate("both intersections lie on the target endpoints, so there is nothing to trim"));
+                    }
+                    if before >= after { (from, hits[0].1) } else { (hits[1].1, to) }
+                };
+                EntityKind::Line { from: new_from, to: new_to }
             }
-            if before >= after { (from, hits[0].1) } else { (hits[0].1, to) }
-        }
-        else {
-            let before = hits[0].0.clamp(0.0, 1.0) * length;
-            let after = (1.0 - hits[1].0.clamp(0.0, 1.0)) * length;
-            if before.max(after) <= 1e-9 * length {
-                return Err(trim_degenerate("both intersections lie on the target endpoints, so there is nothing to trim"));
-            }
-            if before >= after { (from, hits[0].1) } else { (hits[1].1, to) }
+            EntityKind::Arc { .. } => trim_arc(&target, target_id, &cutter, cutter_id)?,
+            EntityKind::Circle { .. } => trim_circle(&target, target_id, &cutter, cutter_id)?,
+            _ => unreachable!("the target kind was checked before the trim"),
         };
-        drawing.entities[target_index].kind = EntityKind::Line { from: new_from, to: new_to };
+        drawing.entities[target_index].kind = trimmed;
         drawing.revision += 1;
         Ok(drawing.entities[target_index].clone())
     })?;

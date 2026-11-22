@@ -83,7 +83,7 @@ exactly one transform.
 | `array` | `--ids a,b`, then `--rows n --columns n [--row-spacing n --column-spacing n]` or `--center x,y --count n --angle deg` |
 | `explode` | `--id <id>` (a block reference; unsupported for other kinds) |
 | `offset` | `--id <entity>`, `--distance n`, optional `--side left\|right\|outside\|inside` |
-| `trim` | `--id <line>`, `--cutter <entity>` (a line, circle or arc) |
+| `trim` | `--id <line\|arc\|circle>`, `--cutter <entity>` (a line, circle or arc) |
 | `extend` | `--id <line>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
 | `break` | `--id <line>`, `--at x,y` (strictly inside the segment) |
 | `join` | `--a <line>`, `--b <line>` (collinear and sharing one endpoint) |
@@ -114,11 +114,13 @@ polyline and measure along its travel direction, while `--side outside` and
 corner that would need a miter longer than four times the distance is refused
 when `--side` is used.
 
-`trim` cuts the `--id` line at the `--cutter` line, circle or arc and saves the
-file. One crossing keeps the longer side; two crossings keep the longer of the
-two outer segments. A cutter without a valid crossing reports
-`trim/no-intersection`; tangency, collinearity, a zero-length input or a cut on
-an endpoint reports `trim/degenerate`.
+`trim` cuts the `--id` line, arc or circle at the `--cutter` line, circle or arc
+and saves the file. A line or arc target keeps the longer side for one crossing
+and the longer of the two outer segments for two. A circle target needs exactly
+two crossings and becomes an arc over the longer sweep. A cutter without a valid
+crossing reports `trim/no-intersection`; tangency, collinearity, a zero-length
+or zero-radius input, a single circle crossing or a cut on an endpoint reports
+`trim/degenerate`.
 
 `extend` lengthens the `--id` line until it meets the `--to` line, circle or
 arc and saves the file. By default the `to` endpoint moves; `--side start` moves

@@ -828,7 +828,7 @@ fn corner_pair(request: &Value) -> std::result::Result<(String, String), String>
     Ok((first, second))
 }
 
-/// Trims one line at a line, circle or arc cutter, keeping the longer side.
+/// Trims a line, arc or circle target at a line, circle or arc cutter, keeping the longer side.
 #[function]
 fn drawing_trim(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
