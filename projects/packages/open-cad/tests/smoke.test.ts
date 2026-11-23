@@ -1284,6 +1284,52 @@ test('ellipse and spline editing keep identity and enforce limits', { skip: with
     }
 });
 
+test('linear dimension fields and style are editable', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Dimension edits' });
+        const dimension = document.addDimension({ layer: 'dimensions', from: [0, 0], to: [100, 0], offset: 10 });
+        const moved = document.updateDimension({ entityId: dimension.id, to: [120, 0] });
+        assert.equal(moved.id, dimension.id);
+        assert.equal(moved.layer, 'dimensions');
+        if (moved.kind.type === 'dimension') {
+            assert.deepEqual(moved.kind.from, [0, 0]);
+            assert.deepEqual(moved.kind.to, [120, 0]);
+            assert.equal(moved.kind.offset, 10);
+            assert.equal(moved.kind.style, null);
+        }
+
+        document.addDimStyle({ name: 'arch' });
+        const styled = document.updateDimension({ entityId: dimension.id, style: 'arch' });
+        if (styled.kind.type === 'dimension') {
+            assert.equal(styled.kind.style, 'arch');
+            assert.deepEqual(styled.kind.to, [120, 0]);
+        }
+
+        assert.throws(
+            () => document.updateDimension({ entityId: dimension.id, style: 'missing' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        assert.throws(
+            () => document.updateDimension({ entityId: dimension.id, from: [120, 0] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.throws(
+            () => document.updateDimension({ entityId: dimension.id }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+
+        const radial = document.addRadialDimension({ layer: 'dimensions', center: [0, 0], radius: 10, angle: 0 });
+        assert.throws(
+            () => document.updateDimension({ entityId: radial.id, offset: 2 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'dimension/unsupported-entity',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('an entity can move to another layer without changing geometry', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

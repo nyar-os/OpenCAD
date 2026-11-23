@@ -119,6 +119,7 @@ import type {
     UcsResult,
     UnitsConversion,
     UpdateArcRequest,
+    UpdateDimensionRequest,
     UpdateDimensionStyleRequest,
     UpdateEllipseRequest,
     UpdateEntityRequest,
@@ -721,6 +722,11 @@ export class DrawingDocument {
      */
     updateEllipse(request: UpdateEllipseRequest): Entity {
         return this.adopt(this.edit((handle) => service.updateEllipse(handle, request)));
+    }
+
+    /** Updates the measured points, offset or style of one linear dimension. */
+    updateDimension(request: UpdateDimensionRequest): Entity {
+        return this.adopt(this.edit((handle) => service.updateDimension(handle, request)));
     }
 
     /** Moves one entity onto another layer without changing its geometry. */

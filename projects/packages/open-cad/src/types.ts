@@ -432,7 +432,15 @@ export type EntityKind =
     | { readonly type: 'polyline'; readonly points: readonly Point[]; readonly closed: boolean }
     | { readonly type: 'spline'; readonly points: readonly Point[]; readonly closed: boolean }
     | { readonly type: 'text'; readonly at: Point; readonly height: number; readonly content: string }
-    | { readonly type: 'dimension'; readonly from: Point; readonly to: Point; readonly offset: number; readonly text: string | null }
+    | {
+          readonly type: 'dimension';
+          readonly from: Point;
+          readonly to: Point;
+          readonly offset: number;
+          readonly text: string | null;
+          /** Dimension style id; `null` uses the drawing default. */
+          readonly style: string | null;
+      }
     | {
           readonly type: 'radial_dimension';
           readonly center: Point;
@@ -1558,6 +1566,19 @@ export interface UpdateEllipseRequest {
     readonly startAngle?: number;
     /** End parameter in degrees, swept counter-clockwise from the start. */
     readonly endAngle?: number;
+}
+
+/** Arguments of `updateDimension()`. */
+export interface UpdateDimensionRequest {
+    readonly entityId: EntityId;
+    /** New first measured point. */
+    readonly from?: Point;
+    /** New second measured point; the resulting span must be non-zero. */
+    readonly to?: Point;
+    /** New signed distance of the dimension line from the measured segment. */
+    readonly offset?: number;
+    /** Dimension style id; it must already be declared by the drawing. */
+    readonly style?: string;
 }
 
 /** Arguments of `assignEntityLayer()`. */

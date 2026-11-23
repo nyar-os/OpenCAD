@@ -78,6 +78,7 @@ export interface NativeBinding {
     drawing_update_arc(handle: number, requestJson: string): string;
     drawing_update_spline(handle: number, requestJson: string): string;
     drawing_update_ellipse(handle: number, requestJson: string): string;
+    drawing_update_dimension(handle: number, requestJson: string): string;
     drawing_assign_entity_layer(handle: number, requestJson: string): string;
     drawing_find_text(handle: number, requestJson: string): string;
     drawing_replace_text(handle: number, requestJson: string): string;

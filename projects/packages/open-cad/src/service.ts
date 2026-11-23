@@ -124,6 +124,7 @@ import type {
     UcsResult,
     UnitsConversion,
     UpdateArcRequest,
+    UpdateDimensionRequest,
     UpdateDimensionStyleRequest,
     UpdateEllipseRequest,
     UpdateEntityRequest,
@@ -846,6 +847,22 @@ export function updateEllipse(handle: number, request: UpdateEllipseRequest): En
                 rotation: request.rotation,
                 startAngle: request.startAngle,
                 endAngle: request.endAngle,
+            }),
+        ),
+    );
+}
+
+/** Updates the measured points, offset or style of one linear dimension. */
+export function updateDimension(handle: number, request: UpdateDimensionRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.updateDimension').drawing_update_dimension(
+            handle,
+            JSON.stringify({
+                entityId: request.entityId,
+                from: request.from,
+                to: request.to,
+                offset: request.offset,
+                style: request.style,
             }),
         ),
     );

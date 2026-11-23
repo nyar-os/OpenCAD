@@ -724,6 +724,15 @@ fn drawing_update_ellipse(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Updates the measured points, offset or style of one linear dimension.
+#[function]
+fn drawing_update_dimension(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_update_dimension(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity onto another layer.
 #[function]
 fn drawing_assign_entity_layer(ctx: CallContext) -> Result<JsValue> {
@@ -1560,6 +1569,15 @@ fn call_update_ellipse(handle: u64, request: &Value) -> std::result::Result<Valu
     let end_angle = request.get("endAngle").and_then(Value::as_f64);
     open_cad_drawing::update_ellipse(handle, &entity, open_cad_drawing::EllipseUpdate { rx, ry, rotation, start_angle, end_angle })
         .map_err(service_failure)
+}
+
+fn call_update_dimension(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let entity = request_string(request, "entityId")?;
+    let from = if request.get("from").is_some() { Some(request_point(request, "from")?) } else { None };
+    let to = if request.get("to").is_some() { Some(request_point(request, "to")?) } else { None };
+    let offset = request.get("offset").and_then(Value::as_f64);
+    let style = request.get("style").and_then(Value::as_str).map(str::to_string);
+    open_cad_drawing::update_dimension(handle, &entity, open_cad_drawing::DimensionUpdate { from, to, offset, style }).map_err(service_failure)
 }
 
 fn call_assign_entity_layer(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -2642,6 +2660,7 @@ register_module![
     drawing_update_arc,
     drawing_update_spline,
     drawing_update_ellipse,
+    drawing_update_dimension,
     drawing_assign_entity_layer,
     drawing_find_text,
     drawing_replace_text,
