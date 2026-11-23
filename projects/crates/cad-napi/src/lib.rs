@@ -706,6 +706,24 @@ fn drawing_update_arc(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Edits the fit points or closed flag of one spline.
+#[function]
+fn drawing_update_spline(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_update_spline(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
+/// Updates the radii, rotation or sweep parameters of one ellipse.
+#[function]
+fn drawing_update_ellipse(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_update_ellipse(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Moves one entity onto another layer.
 #[function]
 fn drawing_assign_entity_layer(ctx: CallContext) -> Result<JsValue> {
@@ -1498,6 +1516,34 @@ fn call_update_arc(handle: u64, request: &Value) -> std::result::Result<Value, S
     let start_angle = request.get("startAngle").and_then(Value::as_f64);
     let end_angle = request.get("endAngle").and_then(Value::as_f64);
     open_cad_drawing::update_arc(handle, &entity, radius, start_angle, end_angle).map_err(service_failure)
+}
+
+fn call_update_spline(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let entity = request_string(request, "entityId")?;
+    let points = if request.get("points").is_some() { Some(request_points(request)?) } else { None };
+    let closed = request.get("closed").and_then(Value::as_bool);
+    let insert_at = request_index(request, "insertAt")?;
+    let insert_point = if request.get("insertPoint").is_some() { Some(request_point(request, "insertPoint")?) } else { None };
+    let remove_at = request_index(request, "removeAt")?;
+    let move_at = request_index(request, "moveAt")?;
+    let move_to = if request.get("moveTo").is_some() { Some(request_point(request, "moveTo")?) } else { None };
+    open_cad_drawing::update_spline(
+        handle,
+        &entity,
+        open_cad_drawing::SplineUpdate { points, closed, insert_at, insert_point, remove_at, move_at, move_to },
+    )
+    .map_err(service_failure)
+}
+
+fn call_update_ellipse(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let entity = request_string(request, "entityId")?;
+    let rx = request.get("rx").and_then(Value::as_f64);
+    let ry = request.get("ry").and_then(Value::as_f64);
+    let rotation = request.get("rotation").and_then(Value::as_f64);
+    let start_angle = request.get("startAngle").and_then(Value::as_f64);
+    let end_angle = request.get("endAngle").and_then(Value::as_f64);
+    open_cad_drawing::update_ellipse(handle, &entity, open_cad_drawing::EllipseUpdate { rx, ry, rotation, start_angle, end_angle })
+        .map_err(service_failure)
 }
 
 fn call_assign_entity_layer(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -2578,6 +2624,8 @@ register_module![
     drawing_update_entity,
     drawing_update_polyline,
     drawing_update_arc,
+    drawing_update_spline,
+    drawing_update_ellipse,
     drawing_assign_entity_layer,
     drawing_find_text,
     drawing_replace_text,

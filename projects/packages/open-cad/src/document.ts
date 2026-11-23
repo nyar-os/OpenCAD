@@ -119,12 +119,14 @@ import type {
     UnitsConversion,
     UpdateArcRequest,
     UpdateDimensionStyleRequest,
+    UpdateEllipseRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
     UpdateLayoutRequest,
     UpdateLinetypeRequest,
     UpdatePolylineRequest,
     UpdatePropertiesRequest,
+    UpdateSplineRequest,
     UpdateTextStyleRequest,
 } from './types.js';
 
@@ -705,6 +707,19 @@ export class DrawingDocument {
     /** Updates the radius or sweep angles of one arc. */
     updateArc(request: UpdateArcRequest): Entity {
         return this.adopt(this.edit((handle) => service.updateArc(handle, request)));
+    }
+
+    /** Edits the fit points or closed flag of one spline. */
+    updateSpline(request: UpdateSplineRequest): Entity {
+        return this.adopt(this.edit((handle) => service.updateSpline(handle, request)));
+    }
+
+    /**
+     * Updates the radii, rotation or sweep parameters of one ellipse. Only the
+     * supplied fields change; `rx` and `ry` must stay positive.
+     */
+    updateEllipse(request: UpdateEllipseRequest): Entity {
+        return this.adopt(this.edit((handle) => service.updateEllipse(handle, request)));
     }
 
     /** Moves one entity onto another layer without changing its geometry. */

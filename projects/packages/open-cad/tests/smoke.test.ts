@@ -1187,6 +1187,66 @@ test('arc radius and sweep angles are editable', { skip: withAddon }, async () =
     }
 });
 
+test('ellipse and spline editing keep identity and enforce limits', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Curve edits' });
+        const ellipse = document.addEllipse({ layer: '0', center: [0, 0], rx: 10, ry: 5, rotation: 0 });
+        const updatedEllipse = document.updateEllipse({ entityId: ellipse.id, rx: 12, rotation: 15 });
+        assert.equal(updatedEllipse.id, ellipse.id);
+        assert.equal(updatedEllipse.layer, '0');
+        if (updatedEllipse.kind.type === 'ellipse') {
+            assert.equal(updatedEllipse.kind.rx, 12);
+            assert.equal(updatedEllipse.kind.ry, 5);
+            assert.equal(updatedEllipse.kind.rotation, 15);
+            assert.equal(updatedEllipse.kind.start_angle, 0);
+        }
+        assert.throws(
+            () => document.updateEllipse({ entityId: ellipse.id, rx: 0 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.throws(
+            () => document.updateEllipse({ entityId: ellipse.id }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+
+        const spline = document.addSpline({ layer: '0', points: [[0, 0], [10, 5], [20, 0]] });
+        const closed = document.updateSpline({ entityId: spline.id, closed: true });
+        if (closed.kind.type === 'spline') {
+            assert.equal(closed.kind.closed, true);
+        }
+        const inserted = document.updateSpline({ entityId: spline.id, insertAt: 1, insertPoint: [5, 6] });
+        if (inserted.kind.type === 'spline') {
+            assert.deepEqual(inserted.kind.points, [[0, 0], [5, 6], [10, 5], [20, 0]]);
+        }
+        const moved = document.updateSpline({ entityId: spline.id, moveAt: 1, moveTo: [6, 7] });
+        if (moved.kind.type === 'spline') {
+            assert.deepEqual(moved.kind.points, [[0, 0], [6, 7], [10, 5], [20, 0]]);
+        }
+        const removed = document.updateSpline({ entityId: spline.id, removeAt: 1 });
+        if (removed.kind.type === 'spline') {
+            assert.deepEqual(removed.kind.points, [[0, 0], [10, 5], [20, 0]]);
+        }
+        assert.throws(
+            () => document.updateSpline({ entityId: spline.id, points: [[0, 0]] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [1, 0] });
+        assert.throws(
+            () => document.updateEllipse({ entityId: line.id, rx: 5 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/unsupported',
+        );
+        assert.throws(
+            () => document.updateSpline({ entityId: line.id, closed: true }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/unsupported',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('an entity can move to another layer without changing geometry', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

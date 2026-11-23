@@ -124,12 +124,14 @@ import type {
     UnitsConversion,
     UpdateArcRequest,
     UpdateDimensionStyleRequest,
+    UpdateEllipseRequest,
     UpdateEntityRequest,
     UpdateLayerRequest,
     UpdateLayoutRequest,
     UpdateLinetypeRequest,
     UpdatePolylineRequest,
     UpdatePropertiesRequest,
+    UpdateSplineRequest,
     UpdateTextStyleRequest,
 } from './types.js';
 
@@ -805,6 +807,42 @@ export function updateArc(handle: number, request: UpdateArcRequest): EntityChan
             JSON.stringify({
                 entityId: request.entityId,
                 radius: request.radius,
+                startAngle: request.startAngle,
+                endAngle: request.endAngle,
+            }),
+        ),
+    );
+}
+
+/** Edits the fit points or closed flag of one spline. */
+export function updateSpline(handle: number, request: UpdateSplineRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.updateSpline').drawing_update_spline(
+            handle,
+            JSON.stringify({
+                entityId: request.entityId,
+                points: request.points,
+                closed: request.closed,
+                insertAt: request.insertAt,
+                insertPoint: request.insertPoint,
+                removeAt: request.removeAt,
+                moveAt: request.moveAt,
+                moveTo: request.moveTo,
+            }),
+        ),
+    );
+}
+
+/** Updates the radii, rotation or sweep parameters of one ellipse. */
+export function updateEllipse(handle: number, request: UpdateEllipseRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.updateEllipse').drawing_update_ellipse(
+            handle,
+            JSON.stringify({
+                entityId: request.entityId,
+                rx: request.rx,
+                ry: request.ry,
+                rotation: request.rotation,
                 startAngle: request.startAngle,
                 endAngle: request.endAngle,
             }),

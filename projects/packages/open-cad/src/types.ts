@@ -1490,6 +1490,32 @@ export interface UpdatePolylineRequest {
 }
 
 /**
+ * Arguments of `updateSpline()`.
+ *
+ * Pass a replacement `points` list, one `insertAt`/`insertPoint` pair, one
+ * `removeAt` index, one `moveAt`/`moveTo` pair or a new `closed` flag.
+ * Replacing the list cannot be combined with a single-vertex edit and one call
+ * edits at most one fit point; a spline always keeps at least two fit points.
+ */
+export interface UpdateSplineRequest {
+    readonly entityId: EntityId;
+    /** Replacement fit points; omit to keep the current list. */
+    readonly points?: readonly Point[];
+    /** Closed flag; omit to keep the current flag. */
+    readonly closed?: boolean;
+    /** Zero-based index the inserted fit point takes; the fit-point count appends. */
+    readonly insertAt?: number;
+    /** Fit point to insert; required together with `insertAt`. */
+    readonly insertPoint?: Point;
+    /** Zero-based index of the fit point to remove. */
+    readonly removeAt?: number;
+    /** Zero-based index of the fit point to move. */
+    readonly moveAt?: number;
+    /** New fit-point position; required together with `moveAt`. */
+    readonly moveTo?: Point;
+}
+
+/**
  * Arguments of `updateArc()`.
  *
  * At least one field is required. Angles are degrees and the arc sweeps
@@ -1502,6 +1528,27 @@ export interface UpdateArcRequest {
     /** Start angle in degrees. */
     readonly startAngle?: number;
     /** End angle in degrees; equal to the start angle denotes a full turn. */
+    readonly endAngle?: number;
+}
+
+/**
+ * Arguments of `updateEllipse()`.
+ *
+ * At least one field is required and every supplied field replaces only that
+ * value. `rx` and `ry` must be positive; the angles and rotation are degrees and
+ * the sweep runs counter-clockwise from `startAngle` to `endAngle`.
+ */
+export interface UpdateEllipseRequest {
+    readonly entityId: EntityId;
+    /** Positive radius along the major (local X) axis. */
+    readonly rx?: number;
+    /** Positive radius along the minor (local Y) axis. */
+    readonly ry?: number;
+    /** Major-axis rotation in degrees. */
+    readonly rotation?: number;
+    /** Start parameter in degrees, measured from the major axis. */
+    readonly startAngle?: number;
+    /** End parameter in degrees, swept counter-clockwise from the start. */
     readonly endAngle?: number;
 }
 
