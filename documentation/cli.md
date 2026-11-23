@@ -68,6 +68,7 @@ or start point.
 | `polyline remove-vertex` | `--id <id>`, `--index n` |
 | `polyline move-vertex` | `--id <id>`, `--index n`, `--at x,y` |
 | `polyline smooth` | `--id <id>`, `--iterations n` (default 2, 1-8), `--ratio n` (default 0.25, between 0 and 0.5) |
+| `polyline chamfer` | `--id <id>`, `--distance n` (each adjacent segment must be longer than `2 * n`) |
 | `spline update` | `--id <id>`, then `--points "x,y ..."` (at least two fit points) or `--closed on\|off` |
 | `spline insert-vertex` | `--id <id>`, `--index n`, `--at x,y` |
 | `spline remove-vertex` | `--id <id>`, `--index n` |
@@ -78,6 +79,7 @@ open-cad polyline insert-vertex plan.ocad --id entity-7 --index 2 --at 240,120
 open-cad polyline move-vertex plan.ocad --id entity-7 --index 0 --at 0,0
 open-cad polyline remove-vertex plan.ocad --id entity-7 --index 3
 open-cad polyline smooth plan.ocad --id entity-7 --iterations 3
+open-cad polyline chamfer plan.ocad --id entity-7 --distance 4
 open-cad ellipse update plan.ocad --id entity-4 --rx 60 --rotation 15
 open-cad spline insert-vertex plan.ocad --id entity-9 --index 1 --at 40,25
 ```
@@ -231,6 +233,17 @@ layer. `--iterations` defaults to `2` and accepts `1`-`8`; `--ratio` defaults to
 `polyline/unsupported-entity`; a chain with fewer than three vertices reports
 `polyline/degenerate`; an out-of-range pass count or ratio reports
 `polyline/invalid-iterations` or `polyline/invalid-ratio`.
+
+`polyline chamfer` bevels every corner of one polyline and saves the file in
+place. Every interior vertex of an open chain, and every vertex of a closed
+chain, is trimmed `--distance` along both adjacent segments: the corner is
+replaced by the two trim points, so the entity stays one polyline and keeps its
+id, layer and closed flag. `--distance` must be positive and finite, and every
+adjacent segment must be longer than `2 * --distance`; a shorter or exactly
+equal segment makes the whole edit fail with `session/argument-invalid` and
+nothing is written. A non-polyline reports `polyline/unsupported-entity` and a
+chain with fewer than three vertices reports `polyline/degenerate`. The
+two-line `chamfer` command is separate.
 
 ## Comparing projects
 

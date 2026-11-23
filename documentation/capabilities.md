@@ -36,7 +36,8 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
 `distribute`, `overkill`, `hatch-pattern`, `title-block`, `polyline-smooth`,
-`diff`, `quantity-table`, `measure`, `measure-entity`, `measure-points`, `stats`,
+`polyline-chamfer`, `diff`, `quantity-table`, `measure`, `measure-entity`,
+`measure-points`, `stats`,
 `dimension-style`, `text-style`, `text-search`, `group`, `select`, `properties`,
 `snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
@@ -576,6 +577,38 @@ the closed chain without a duplicated vertex
 every refusal (`smooth_polyline_rejects_bad_requests_and_protected_layers`) and
 the single undoable history step (`smooth_polyline_is_one_undoable_history_step`).
 
+## Polyline chamfer
+
+`polylineChamfer(request)` bevels every corner of one polyline. Every interior
+vertex of an open chain, and every vertex of a closed chain including the
+first, is trimmed `distance` along both adjacent segments. The corner point is
+removed and the two trim points take its place, so the entity stays one
+polyline with two extra vertices per beveled corner. It keeps its id, layer and
+closed flag, and the edit is one history step and one revision.
+
+`distance` must be positive and finite. Every adjacent segment must be longer
+than `2 * distance`; a segment shorter than or equal to that cannot supply both
+trim points, so the whole edit is refused with `session/argument-invalid` and
+nothing is written. An open chain keeps its first and last vertex unchanged.
+Polylines hold straight segments only, so there is no bulge or arc segment to
+preserve. The response carries `{ revision, drawing, entity }`.
+
+| Code | Cause |
+| :--- | :--- |
+| `session/argument-invalid` | `distance` is not positive and finite, or a segment is not longer than `2 * distance`. |
+| `polyline/unsupported-entity` | The id names an entity that is not a polyline. |
+| `polyline/degenerate` | The chain has fewer than three vertices, so it has no corner to bevel. |
+| `object/not-found` | The id does not name an entity. |
+| `drawing/layer-locked` | The polyline layer is locked. |
+| `drawing/layer-frozen` | The polyline layer is frozen. |
+
+The model tests cover the open chain (`polyline_chamfer_bevels_every_interior_vertex_of_an_open_chain`),
+the closed chain including its first corner
+(`polyline_chamfer_bevels_a_closed_chain_including_the_first_corner`), every
+refusal without a write (`polyline_chamfer_rejects_short_segments_and_bad_requests_without_writing`)
+and the single undoable step with the save/reopen round trip
+(`polyline_chamfer_is_one_undoable_step_and_survives_a_round_trip`).
+
 ## Ellipse and spline editing
 
 `updateEllipse` and `updateSpline` edit one existing entity in place. The entity
@@ -663,7 +696,12 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
   stored object.
 - Dimension styles and text styles are limited to the fields exposed by the
   style commands.
-- Fillet and chamfer accept two straight lines only.
+- Fillet and the two-line `chamfer` accept two straight lines only. A bulk
+  bevel of one polyline is `polylineChamfer` instead.
+- Polyline chamfer bevels straight-segment polylines only. Every adjacent
+  segment must be longer than twice the distance, there is no per-corner
+  distance list, the first and last vertex of an open chain stay put, and it
+  does not chamfer arcs, ellipses, splines or two-line corners.
 - Trim cuts line, arc and circle targets with a line, circle or arc cutter, and
   a circle target becomes an arc. It does not trim polylines, splines, ellipses,
   block references or other entity types.
