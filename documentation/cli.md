@@ -232,7 +232,8 @@ open-cad --json diff current.ocad baseline.ocad > diff.json
 | :--- | :--- |
 | `measure` | `--ids a,b` (per entity) or `--sheet <name>` (drawing-wide within one layout) |
 | `measure-points` | `--points "x,y x,y"` or `--points "x,y x,y x,y"` (two or three points) |
-| `stats` | — |
+| `stats` | `--group-by layer\|type\|color\|linetype` (defaults to `layer`) |
+| `quantity-table` | `--group-by layer\|type\|color\|linetype`, `--layer <name>`, `--origin x,y`, `--text-height n`, `--title <text>` |
 | `select` | `--box x1,y1,x2,y2`, `--crossing`, `--layer <name>` |
 | `snap` | `--modes <list>`, `--near x,y`, `--tolerance n`, `--layer <name>`, `--ids a,b` |
 | `ucs` | `--origin x,y`, `--rotation deg`, `--direction to-world\|to-ucs`, `--points "x,y ..."`, `--ids a,b` (at least one of points or ids) |
@@ -256,6 +257,29 @@ open-cad snap plan.ocad --modes quadrant,nearest --near 120,80 --tolerance 15
 open-cad snap plan.ocad --modes perpendicular --near 120,80 --ids entity-3
 open-cad snap plan.ocad --modes tangent --near 120,80 --ids entity-3
 open-cad snap plan.ocad --modes intersection --ids entity-3,entity-4
+```
+
+`stats` lists one aggregate per group with the entity count, path length and
+enclosed area, plus a total. `--group-by layer` keeps the layer order and
+includes empty layers; `type`, `color` and `linetype` list only keys that occur,
+sorted by key. Length and area follow `measure`.
+
+`quantity-table` draws those aggregates as a framed table and saves the file. A
+row per group is followed by a total row; a caption row sits above the header
+unless `--title ""` suppresses it. The bottom-left corner comes from `--origin`
+(default `0,0`), the width is `60 × --text-height` (default `3.5`) and every row
+is `2.5 × --text-height` tall. Everything is a real line or text entity on
+`--layer` (default `quantity`, created when missing), so SVG, PDF and DXF carry
+it. Rows are computed before the table is inserted, so a layer grouping never
+lists the table itself. A non-positive `--text-height`, a non-finite `--origin`
+or a caption longer than the property limit reports `session/argument-invalid`;
+a locked or frozen layer reports `drawing/layer-locked` or
+`drawing/layer-frozen`.
+
+```bash
+open-cad stats plan.ocad --group-by type
+open-cad quantity-table plan.ocad --group-by layer --origin 0,-2500 --text-height 120
+open-cad quantity-table plan.ocad --group-by type --layer Schedule --title "Bill of quantities"
 ```
 
 ## Layers

@@ -36,7 +36,7 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
 `distribute`, `overkill`, `hatch-pattern`, `title-block`, `polyline-smooth`,
-`diff`, `measure`, `measure-entity`, `measure-points`, `stats`,
+`diff`, `quantity-table`, `measure`, `measure-entity`, `measure-points`, `stats`,
 `dimension-style`, `text-style`, `text-search`, `group`, `select`, `properties`,
 `snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
@@ -166,6 +166,12 @@ from the sampled outline, not the exact curve. Perimeter and area use the
 sampled polygon, so a drawing with curved entities reports approximations.
 `measure --sheet` filters by the named layout; drawing-wide totals are only
 available without a sheet name.
+
+`stats` reports one entry per layer in `layers`, plus a `groups` list that
+follows `groupBy`. `layer` keeps the layer order and includes layers that carry
+no entity; `type`, `color` and `linetype` list only keys that occur, sorted by
+key, so the result does not depend on insertion order. Length and area use the
+same rules as `measure`, so a full circle contributes area but no length.
 
 ## Object snap
 
@@ -509,6 +515,37 @@ overrides on a custom layer (`title_block_honours_overrides_and_a_custom_sheet`)
 and the invalid-dimension, invalid-sheet, long-override, locked and frozen
 refusals (`title_block_rejects_bad_sheets_and_protected_layers`).
 
+## Quantity take-off
+
+`quantityTable(request)` draws a framed quantity take-off table from the same
+aggregates `stats` reports. One row per group of `groupBy` (`layer` by default,
+or `type`, `color`, `linetype`) carries the entity count, path length and
+enclosed area, and a total row closes the table. A caption row sits above the
+header unless `title` is empty. The bottom-left corner is `origin` (default the
+origin), the table is `60 * textHeight` wide and every row is `2.5 * textHeight`
+tall; `textHeight` defaults to `3.5`. Columns are Group, Count, Length and Area,
+and the values use at most three decimals without trailing zeros. Rows are
+computed before the table is inserted, so a layer grouping never lists the
+table's own entities. Everything is a real `line` or `text` entity with a fresh
+deterministic id on `layer` (default `quantity`, created with a neutral colour
+when missing). The response carries `{ revision, drawing, groupBy, columns,
+rows, totals, created }`, and the edit is one history step and one revision.
+
+| Code | Cause |
+| :--- | :--- |
+| `session/argument-invalid` | `textHeight` is not positive and finite, `origin` is not finite, or the caption exceeds the property limit. |
+| `drawing/layer-locked` | The target layer is locked. |
+| `drawing/layer-frozen` | The target layer is frozen. |
+
+The model tests cover the framed table, its totals and its geometry
+(`quantity_table_draws_a_framed_table_with_totals`), a custom origin, caption,
+text height and type grouping
+(`quantity_table_honours_origin_caption_and_type_grouping`), the invalid-input,
+locked and frozen refusals
+(`quantity_table_rejects_bad_requests_and_protected_layers`) and repeatability
+(`quantity_table_is_deterministic`). Grouping itself is covered by
+`stats_groups_entities_by_type_colour_and_linetype`.
+
 ## Polyline smoothing
 
 `smoothPolyline(request)` rounds the corners of one `polyline` with Chaikin
@@ -614,6 +651,13 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
 - Title blocks are plain line and text entities. They carry no attributes,
   fields, automatic date updates or reusable block definition, and they are not
   linked to the drawing properties after creation.
+- Quantity tables are plain line and text entities. They are not editable table
+  objects: cells carry no formula or override, the values are a snapshot taken
+  at insert time, and a later geometry edit does not refresh the table. A long
+  group label is not wrapped or clipped.
+- `stats` groups by layer, entity kind, layer colour and layer line type only.
+  It does not group by block, text content or arbitrary metadata, and curved
+  lengths and areas follow the sampled measurement rules.
 - Polyline smoothing is Chaikin corner cutting on a straight-segment polyline.
   It does not convert a polyline into a spline, fit a curve through the original
   vertices, simplify a chain, close an open chain or smooth arcs, ellipses,
