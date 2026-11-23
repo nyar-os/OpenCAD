@@ -100,6 +100,30 @@ A non-spline reports `object/unsupported`; an unknown id reports
 `object/not-found`; a locked or frozen layer reports `drawing/layer-locked` or
 `drawing/layer-frozen`.
 
+## Dimensions
+
+| Command | Options |
+| :--- | :--- |
+| `dimension update` | `--id <id>`, at least one of `--from x,y`, `--to x,y`, `--offset n` or `--style <id>` |
+
+```bash
+open-cad dimension update plan.ocad --id entity-12 --to 12000,0
+open-cad dimension update plan.ocad --id entity-12 --offset 600 --style arch
+```
+
+`dimension update` changes only the supplied fields of one linear dimension and
+saves the file. `--from`/`--to` move the measured points, `--offset` sets the
+signed distance of the dimension line from the measured segment, and `--style`
+assigns a declared dimension style id. Omitted fields keep their value, so the
+text override, id and layer are preserved.
+
+A non-finite point or offset, a resulting zero-length span, or an empty
+`--style` reports `session/argument-invalid`; an unknown `--style` or `--id`
+reports `object/not-found`; a locked or frozen layer reports
+`drawing/layer-locked` or `drawing/layer-frozen`. Only linear dimensions are
+editable in this version: a radial, diameter, ordinate or angular dimension, or
+another entity kind, reports `dimension/unsupported-entity`.
+
 ## Edit, copy and transform
 
 `--ids` takes a comma-separated list. `transform` needs exactly one selector and

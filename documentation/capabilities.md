@@ -649,6 +649,37 @@ layers, the single revision bump, the save/reopen round trip and determinism
 (`ellipse_fields_are_editable_in_place`,
 `spline_fit_points_and_closure_are_editable`).
 
+## Linear dimension editing
+
+`updateDimension` edits one existing linear dimension in place. Only
+`EntityKind::Dimension` is accepted in this version: a radial, diameter, ordinate
+or angular dimension, and every other entity kind, reports
+`dimension/unsupported-entity`. The entity keeps its id and layer, the edit is one
+history step and the revision bumps exactly once.
+
+The supplied fields `from`, `to`, `offset` and `style` replace only that value and
+at least one field is required, so the text override and every omitted field stay
+as they were. `from` and `to` must be finite and the resulting measured span must
+be non-zero. `offset` is the signed distance of the dimension line from the
+measured segment and must be finite. `style` is a dimension style id: it is
+trimmed and must name a declared dimension style, and a missing value keeps the
+current style.
+
+| Code | Cause |
+| :--- | :--- |
+| `session/argument-invalid` | No field is supplied, a measured point or the offset is not finite, the resulting span is zero, or `style` is empty. |
+| `dimension/unsupported-entity` | The id names a radial, diameter, ordinate or angular dimension, or another entity kind. |
+| `object/not-found` | The id does not name an entity, or `style` names no declared dimension style. |
+| `drawing/layer-locked` | The entity's layer is locked. |
+| `drawing/layer-frozen` | The entity's layer is frozen. |
+
+A rejected edit leaves the drawing and the revision untouched. The model tests
+cover partial field edits with untouched values kept
+(`linear_dimension_fields_and_style_are_editable_in_place`), a style assignment,
+the zero-span, non-finite and empty-style refusals, unknown ids and styles, the
+linear-only boundary, locked and frozen layers, the single revision bump, the
+save/reopen round trip and determinism.
+
 ## Drawing diff
 
 `diff(left, right)` reads two `.ocad` projects without opening a handle and
@@ -696,6 +727,13 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
   stored object.
 - Dimension styles and text styles are limited to the fields exposed by the
   style commands.
+- `dimension update` edits linear dimensions only. Radial, diameter, ordinate and
+  angular dimensions report `dimension/unsupported-entity`, and the command never
+  changes an entity's kind or creates a dimension.
+- A linear dimension records an optional dimension style id that
+  `dimension update --style` validates against the declared styles. SVG, PDF and
+  DXF export still use their fixed label metrics, so the stored style does not
+  change the drawn geometry yet.
 - Fillet and the two-line `chamfer` accept two straight lines only. A bulk
   bevel of one polyline is `polylineChamfer` instead.
 - Polyline chamfer bevels straight-segment polylines only. Every adjacent
