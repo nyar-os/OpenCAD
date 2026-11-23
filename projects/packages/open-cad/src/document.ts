@@ -99,6 +99,7 @@ import type {
     SaveReport,
     SelectionRequest,
     SelectionResult,
+    SmoothPolylineRequest,
     SnapRequest,
     SnapResult,
     TextStyle,
@@ -883,6 +884,17 @@ export class DrawingDocument {
         return this.edit((handle) => service.titleBlock(handle, request), (result) => {
             this.state = result.drawing;
         });
+    }
+
+    /**
+     * Rounds the corners of one polyline with Chaikin corner cutting. An open
+     * chain keeps its endpoints, a closed chain keeps its closed flag, and the
+     * entity keeps its id and layer. `iterations` defaults to 2 and `ratio` to
+     * 0.25. A non-polyline reports `polyline/unsupported-entity` and a chain
+     * with fewer than three vertices reports `polyline/degenerate`.
+     */
+    smoothPolyline(request: SmoothPolylineRequest): Entity {
+        return this.adopt(this.edit((handle) => service.smoothPolyline(handle, request)));
     }
 
     /** Fillets two lines, trimming both, and returns the new arc. */

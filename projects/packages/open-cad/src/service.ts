@@ -47,6 +47,8 @@ import type {
     DistributeRequest,
     DistributeResult,
     Drawing,
+    DrawingDiffRequest,
+    DrawingDiffResult,
     DrawingPropertiesChange,
     DrawingPropertiesResult,
     DrawOrderAction,
@@ -101,6 +103,7 @@ import type {
     SaveReport,
     SelectionRequest,
     SelectionResult,
+    SmoothPolylineRequest,
     SnapRequest,
     SnapResult,
     TextStyleChange,
@@ -984,6 +987,21 @@ export function titleBlock(handle: number, request: TitleBlockRequest): TitleBlo
             }),
         ),
     );
+}
+
+/** Rounds the corners of one polyline with Chaikin corner cutting. */
+export function smoothPolyline(handle: number, request: SmoothPolylineRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.smoothPolyline').drawing_smooth_polyline(
+            handle,
+            JSON.stringify({ id: request.id, iterations: request.iterations, ratio: request.ratio }),
+        ),
+    );
+}
+
+/** Compares two project files at entity level without opening either handle. */
+export function diff(request: DrawingDiffRequest): DrawingDiffResult {
+    return decode<DrawingDiffResult>(() => binding('drawing.diff').drawing_diff(request.left, request.right));
 }
 
 /** Measures bounds, path length and enclosed area. */

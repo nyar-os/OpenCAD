@@ -29,7 +29,8 @@ use std::{
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
     DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
-    OverkillRequest, ServiceError, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    OverkillRequest, ServiceError, SmoothPolylineRequest, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection,
+    UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -964,6 +965,32 @@ fn drawing_title_block(ctx: CallContext) -> Result<JsValue> {
         },
     )
     .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Rounds the corners of one polyline with Chaikin corner cutting.
+#[function]
+fn drawing_smooth_polyline(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = open_cad_drawing::smooth_polyline(
+        handle,
+        SmoothPolylineRequest {
+            id: request_string(&request, "id").map_err(Error::new)?,
+            iterations: request.get("iterations").and_then(Value::as_u64).map(|value| value.min(u32::MAX as u64) as u32),
+            ratio: optional_number(&request, "ratio"),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Compares two project files at entity level.
+#[function]
+fn drawing_diff(ctx: CallContext) -> Result<JsValue> {
+    let left = text(&ctx, 0)?;
+    let right = text(&ctx, 1)?;
+    let result = open_cad_drawing::diff(Path::new(&left), Path::new(&right)).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2527,6 +2554,8 @@ register_module![
     drawing_overkill,
     drawing_hatch_pattern,
     drawing_title_block,
+    drawing_smooth_polyline,
+    drawing_diff,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

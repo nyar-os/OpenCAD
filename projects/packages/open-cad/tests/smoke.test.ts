@@ -1054,6 +1054,87 @@ test('polyline vertices and the closed flag are editable', { skip: withAddon }, 
     }
 });
 
+test('polyline smoothing rounds corners and keeps the entity', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Polyline smoothing' });
+        const polyline = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10]] });
+
+        const smoothed = document.smoothPolyline({ id: polyline.id, iterations: 1 });
+        assert.equal(smoothed.id, polyline.id);
+        assert.equal(smoothed.layer, '0');
+        if (smoothed.kind.type === 'polyline') {
+            assert.deepEqual(smoothed.kind.points, [[0, 0], [2.5, 0], [7.5, 0], [10, 2.5], [10, 7.5], [10, 10]]);
+            assert.equal(smoothed.kind.closed, false);
+        }
+        assert.equal(document.revision, 3);
+
+        assert.throws(
+            () => document.smoothPolyline({ id: polyline.id, iterations: 0 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'polyline/invalid-iterations',
+        );
+        assert.throws(
+            () => document.smoothPolyline({ id: polyline.id, ratio: 0.5 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'polyline/invalid-ratio',
+        );
+        assert.throws(
+            () => document.smoothPolyline({ id: 'entity-99' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
+test('diff reports entity, layer and metadata differences between two projects', { skip: withAddon }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-diff-'));
+    const left = path.join(dir, 'left.ocad');
+    const right = path.join(dir, 'right.ocad');
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Left plan' });
+        document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const circle = document.addCircle({ layer: '0', center: [5, 5], radius: 2 });
+        document.save({ target: left, overwrite: false });
+
+        document.deleteEntity('entity-1');
+        document.moveEntity({ entityId: circle.id, dx: 1, dy: 0 });
+        document.addLine({ layer: '0', from: [0, 20], to: [10, 20] });
+        document.updateLayer({ layerId: '0', color: '#ff0000' });
+        document.updateProperties({ title: 'Right plan' });
+        document.save({ target: right, overwrite: false });
+
+        const report = await cad.diff({ left, right });
+        assert.equal(report.identical, false);
+        assert.equal(report.summary.added, 1);
+        assert.equal(report.summary.removed, 1);
+        assert.equal(report.summary.changed, 1);
+        assert.equal(report.summary.layersChanged, 1);
+        assert.equal(report.summary.metadata, 1);
+        assert.equal(report.entities.removed[0]?.id, 'entity-1');
+        assert.deepEqual(report.entities.changed[0]?.fields, ['geometry']);
+        assert.deepEqual(report.layers.changed[0]?.fields, ['color']);
+        assert.equal(report.metadata[0]?.field, 'title');
+
+        const same = await cad.diff({ left, right: left });
+        assert.equal(same.identical, true);
+        assert.equal(same.summary.added, 0);
+
+        await assert.rejects(
+            cad.diff({ left: path.join(dir, 'missing.ocad'), right }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'drawing/not-found',
+        );
+        await assert.rejects(
+            cad.diff({ left: '', right } as unknown as { left: string; right: string }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('arc radius and sweep angles are editable', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

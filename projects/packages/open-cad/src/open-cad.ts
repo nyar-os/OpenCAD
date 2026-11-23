@@ -14,6 +14,8 @@ import { OpenCADError } from './errors.js';
 import * as service from './service.js';
 import type {
     DrawingCreateOptions,
+    DrawingDiffRequest,
+    DrawingDiffResult,
     DrawingInput,
     HistoryMode,
     ImportDxfRequest,
@@ -127,6 +129,33 @@ export class OpenCAD {
         } finally {
             this.release(opened.handle);
         }
+    }
+
+    /**
+     * Compares two `.ocad` projects at entity level without opening a handle.
+     *
+     * Entities and layers are matched by their stable id, so the report lists
+     * what only the right side carries, what only the left side carries and
+     * what both carry with different fields. Metadata covers the title, the
+     * unit and the declared properties. Revisions, styles, line types, groups,
+     * layouts and draw order are not compared. A missing or malformed file
+     * reports `drawing/not-found`, `drawing/io-error` or `format/invalid`.
+     */
+    async diff(request: DrawingDiffRequest): Promise<DrawingDiffResult> {
+        this.assertActive();
+        const candidate = request as unknown as Record<string, unknown> | null;
+        if (typeof candidate !== 'object' || candidate === null) {
+            throw new OpenCADError('session/argument-invalid', 'DrawingDiffRequest must contain `left` and `right`');
+        }
+        for (const side of ['left', 'right'] as const) {
+            const value = candidate[side];
+            if (typeof value !== 'string' || value.length === 0) {
+                throw new OpenCADError('session/argument-invalid', `\`${side}\` must be a non-empty path`, {
+                    details: { feature: `diff.${side}` },
+                });
+            }
+        }
+        return service.diff({ left: candidate.left as string, right: candidate.right as string });
     }
 
     /** Releases every document the session still owns. Idempotent. */

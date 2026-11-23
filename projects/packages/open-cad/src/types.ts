@@ -997,6 +997,100 @@ export interface TitleBlockResult {
     readonly created: readonly Entity[];
 }
 
+/** Arguments of `smoothPolyline()`. */
+export interface SmoothPolylineRequest {
+    /** Polyline entity whose corners are rounded. */
+    readonly id: EntityId;
+    /** Corner-cutting passes; defaults to 2 and must be within 1..=8. */
+    readonly iterations?: number;
+    /** Fraction each new corner is pulled towards its neighbour; defaults to 0.25, exclusive range (0, 0.5). */
+    readonly ratio?: number;
+}
+
+/** Arguments of `OpenCAD.diff()`. Both sides are project paths. */
+export interface DrawingDiffRequest {
+    readonly left: string;
+    readonly right: string;
+}
+
+/** One side of a drawing diff. */
+export interface DrawingDiffSide {
+    readonly path: string;
+    readonly id: DrawingId;
+    readonly title: string | null;
+    readonly revision: number;
+    readonly units: 'mm' | 'inch';
+    readonly entities: number;
+    readonly layers: number;
+}
+
+/** Entity fields a diff can report as changed. */
+export type DrawingDiffField = 'layer' | 'geometry';
+
+/** Layer fields a diff can report as changed. */
+export type DrawingDiffLayerField =
+    | 'name'
+    | 'color'
+    | 'visible'
+    | 'locked'
+    | 'frozen'
+    | 'plottable'
+    | 'linetype'
+    | 'lineweight';
+
+/** One entity present in both projects with at least one differing field. */
+export interface DrawingDiffEntityChange {
+    readonly id: EntityId;
+    readonly fields: readonly DrawingDiffField[];
+    readonly left: Entity;
+    readonly right: Entity;
+}
+
+/** One layer present in both projects with at least one differing field. */
+export interface DrawingDiffLayerChange {
+    readonly id: LayerId;
+    readonly fields: readonly DrawingDiffLayerField[];
+    readonly left: LayerSummary;
+    readonly right: LayerSummary;
+}
+
+/** One drawing-level field that differs between the two projects. */
+export interface DrawingDiffMetadataChange {
+    readonly field: 'title' | 'units' | 'author' | 'description' | 'company' | 'project' | 'keywords';
+    readonly left: string | null;
+    readonly right: string | null;
+}
+
+/** Counts of every difference the report carries. */
+export interface DrawingDiffSummary {
+    readonly added: number;
+    readonly removed: number;
+    readonly changed: number;
+    readonly layersAdded: number;
+    readonly layersRemoved: number;
+    readonly layersChanged: number;
+    readonly metadata: number;
+}
+
+/** Result of `OpenCAD.diff()`. `identical` is true when every count is zero. */
+export interface DrawingDiffResult {
+    readonly identical: boolean;
+    readonly left: DrawingDiffSide;
+    readonly right: DrawingDiffSide;
+    readonly summary: DrawingDiffSummary;
+    readonly entities: {
+        readonly added: readonly Entity[];
+        readonly removed: readonly Entity[];
+        readonly changed: readonly DrawingDiffEntityChange[];
+    };
+    readonly layers: {
+        readonly added: readonly LayerSummary[];
+        readonly removed: readonly LayerSummary[];
+        readonly changed: readonly DrawingDiffLayerChange[];
+    };
+    readonly metadata: readonly DrawingDiffMetadataChange[];
+}
+
 /** Arguments of `copy()`. */
 export interface CopyRequest {
     readonly ids: readonly EntityId[];
