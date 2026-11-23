@@ -6095,6 +6095,150 @@ fn smooth_polyline_is_one_undoable_history_step() {
 }
 
 #[test]
+fn polyline_chamfer_bevels_every_interior_vertex_of_an_open_chain() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Outline", Some("#00ff00")).expect("layer");
+    let polyline = add_polyline(handle, "Outline", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+    let revision = drawing_of(handle).revision;
+
+    let result = polyline_chamfer(handle, PolylineChamferRequest { id: id.clone(), distance: 2.0 }).expect("chamfer");
+    assert_eq!(result["revision"], json!(revision + 1), "one chamfer is one revision");
+    let entity = &result["entity"];
+    assert_eq!(entity["id"], json!(id), "the entity keeps its id");
+    assert_eq!(entity["layer"], json!("Outline"), "the entity keeps its layer");
+    assert_eq!(entity["kind"]["closed"], json!(false), "an open chain stays open");
+    let points = entity["kind"]["points"].as_array().expect("points");
+    let expected = [[0.0, 0.0], [8.0, 0.0], [10.0, 2.0], [10.0, 10.0]];
+    assert_eq!(points.len(), expected.len(), "one corner adds two points and removes the corner");
+    for (point, expected) in points.iter().zip(expected) {
+        assert_point(point, expected);
+    }
+
+    let second = create(CreateRequest::default()).expect("second create");
+    let second_handle = handle_of(&second);
+    add_layer(second_handle, "Outline", Some("#00ff00")).expect("second layer");
+    let second_polyline = add_polyline(second_handle, "Outline", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("second polyline");
+    let second_id = second_polyline["entity"]["id"].as_str().expect("id").to_string();
+    let again = polyline_chamfer(second_handle, PolylineChamferRequest { id: second_id, distance: 2.0 }).expect("second chamfer");
+    assert_eq!(again["entity"], *entity, "the same input yields the same vertices");
+    close(second_handle).expect("close second");
+    close(handle).expect("close");
+}
+
+#[test]
+fn polyline_chamfer_bevels_a_closed_chain_including_the_first_corner() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let polyline = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+
+    let result = polyline_chamfer(handle, PolylineChamferRequest { id, distance: 2.0 }).expect("chamfer");
+    let entity = &result["entity"];
+    assert_eq!(entity["kind"]["closed"], json!(true), "a closed chain stays closed");
+    let points = entity["kind"]["points"].as_array().expect("points");
+    let expected = [[0.0, 2.0], [2.0, 0.0], [8.0, 0.0], [10.0, 2.0], [10.0, 8.0], [8.0, 10.0], [2.0, 10.0], [0.0, 8.0]];
+    assert_eq!(points.len(), expected.len(), "every vertex of a closed chain keeps two points");
+    for (point, expected) in points.iter().zip(expected) {
+        assert_point(point, expected);
+    }
+    close(handle).expect("close");
+}
+
+#[test]
+fn polyline_chamfer_rejects_short_segments_and_bad_requests_without_writing() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let polyline = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+    let line = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [20.0, 0.0]).expect("line");
+    let line_id = line["entity"]["id"].as_str().expect("id").to_string();
+    let short = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [5.0, 0.0], [5.0, 10.0]], false).expect("short polyline");
+    let short_id = short["entity"]["id"].as_str().expect("id").to_string();
+    let flat = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0]], false).expect("flat polyline");
+    let flat_id = flat["entity"]["id"].as_str().expect("id").to_string();
+    let before = drawing_of(handle);
+
+    assert_eq!(
+        polyline_chamfer(handle, PolylineChamferRequest { id: id.clone(), distance: 5.0 }).expect_err("half a segment").code,
+        "session/argument-invalid",
+        "a distance exactly half a segment cannot be beveled"
+    );
+    assert_eq!(
+        polyline_chamfer(handle, PolylineChamferRequest { id: short_id, distance: 2.5 }).expect_err("short segment").code,
+        "session/argument-invalid",
+        "a segment equal to 2 * distance cannot be beveled"
+    );
+    for distance in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            polyline_chamfer(handle, PolylineChamferRequest { id: id.clone(), distance }).expect_err("bad distance").code,
+            "session/argument-invalid"
+        );
+    }
+    assert_eq!(
+        polyline_chamfer(handle, PolylineChamferRequest { id: "entity-99".to_string(), distance: 1.0 }).expect_err("unknown id").code,
+        "object/not-found"
+    );
+    assert_eq!(
+        polyline_chamfer(handle, PolylineChamferRequest { id: line_id, distance: 1.0 }).expect_err("not a polyline").code,
+        "polyline/unsupported-entity"
+    );
+    assert_eq!(
+        polyline_chamfer(handle, PolylineChamferRequest { id: flat_id, distance: 1.0 }).expect_err("too few vertices").code,
+        "polyline/degenerate"
+    );
+    assert_eq!(drawing_of(handle), before, "a refused chamfer writes nothing");
+
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        polyline_chamfer(handle, PolylineChamferRequest { id: id.clone(), distance: 1.0 }).expect_err("locked layer").code,
+        "drawing/layer-locked"
+    );
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(polyline_chamfer(handle, PolylineChamferRequest { id, distance: 1.0 }).expect_err("frozen layer").code, "drawing/layer-frozen");
+    close(handle).expect("close");
+}
+
+#[test]
+fn polyline_chamfer_is_one_undoable_step_and_survives_a_round_trip() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let original = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]];
+    let polyline = add_polyline(handle, DEFAULT_LAYER, original.clone(), false).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+    let chamfered = polyline_chamfer(handle, PolylineChamferRequest { id: id.clone(), distance: 3.0 }).expect("chamfer");
+    assert_eq!(chamfered["entity"]["kind"]["points"].as_array().expect("points").len(), 4);
+
+    undo(handle).expect("undo");
+    let restored = drawing_of(handle);
+    assert_eq!(restored.entities[0].kind, EntityKind::Polyline { points: original.clone(), closed: false });
+
+    let revision = restored.revision;
+    let again = polyline_chamfer(handle, PolylineChamferRequest { id: id.clone(), distance: 3.0 }).expect("chamfer again");
+    assert_eq!(again["revision"], json!(revision + 1), "the chamfer bumps the revision once");
+
+    let dir = TempDir::new("polyline-chamfer");
+    let path = dir.path.join("bevel.ocad");
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+    else {
+        panic!("expected a polyline, got {:?}", drawing.entities[0].kind);
+    };
+    assert!(!*closed);
+    let expected = [[0.0, 0.0], [7.0, 0.0], [10.0, 3.0], [10.0, 10.0]];
+    assert_eq!(points.len(), expected.len());
+    for (point, expected) in points.iter().zip(expected) {
+        assert!((point[0] - expected[0]).abs() < 1e-9 && (point[1] - expected[1]).abs() < 1e-9);
+    }
+    close(reopened).expect("close reopened");
+}
+
+#[test]
 fn diff_reports_identical_projects() {
     let dir = TempDir::new("diff-identical");
     let created = create(CreateRequest::default()).expect("create");

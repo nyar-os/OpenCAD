@@ -117,8 +117,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
-/// overkill, hatch-pattern, title-block, polyline-smooth, quantity-table, diff
-/// and measure);
+/// overkill, hatch-pattern, title-block, polyline-smooth, polyline-chamfer,
+/// quantity-table, diff and measure);
 /// constraint solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
@@ -210,6 +210,7 @@ pub fn capabilities() -> Value {
                 "hatch-pattern",
                 "title-block",
                 "polyline-smooth",
+                "polyline-chamfer",
                 "diff",
                 "quantity-table",
                 "constraints",
@@ -218,8 +219,8 @@ pub fn capabilities() -> Value {
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
                 | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
-                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth" | "diff"
-                | "quantity-table" => {
+                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth"
+                | "polyline-chamfer" | "diff" | "quantity-table" => {
                     "supported"
                 }
                 _ => "unsupported",
@@ -7583,6 +7584,101 @@ pub fn smooth_polyline(handle: u64, request: SmoothPolylineRequest) -> Result<Va
             smoothed = chaikin_pass(&smoothed, closed, ratio);
         }
         drawing.entities[index].kind = EntityKind::Polyline { points: smoothed, closed };
+        drawing.revision += 1;
+        Ok(drawing.entities[index].clone())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
+/// Arguments of [`polyline_chamfer`].
+#[derive(Debug, Clone, Default)]
+pub struct PolylineChamferRequest {
+    /// Identifier of the polyline to bevel.
+    pub id: String,
+    /// Distance trimmed from each side of every beveled corner.
+    pub distance: f64,
+}
+
+/// Point `distance` away from `corner` along the segment towards `target`.
+fn toward(corner: [f64; 2], target: [f64; 2], distance: f64) -> [f64; 2] {
+    let length = self::distance(corner, target);
+    [corner[0] + (target[0] - corner[0]) * distance / length, corner[1] + (target[1] - corner[1]) * distance / length]
+}
+
+/// Bevels every corner of one polyline by trimming both adjacent segments.
+///
+/// Every interior vertex of an open chain, and every vertex of a closed chain,
+/// is replaced by the two points `distance` along each adjacent segment. The
+/// entity stays one polyline with two extra vertices per beveled corner, keeps
+/// its closure, id and layer, and the edit is one history step and one
+/// revision. Polylines hold straight segments only, so there is no bulge or arc
+/// segment to preserve. The response carries `{ revision, drawing, entity }`.
+///
+/// `distance` must be positive and finite. Every adjacent segment must be
+/// longer than `2 * distance`, because a shorter segment cannot supply both
+/// trim points; otherwise the whole edit is refused and nothing is written. An
+/// unknown id reports `object/not-found`; a non-polyline reports
+/// `polyline/unsupported-entity`; fewer than three vertices report
+/// `polyline/degenerate`; a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn polyline_chamfer(handle: u64, request: PolylineChamferRequest) -> Result<Value, ServiceError> {
+    let PolylineChamferRequest { id, distance } = request;
+    if !distance.is_finite() || distance <= 0.0 {
+        return Err(argument("`distance` must be a positive finite number"));
+    }
+    let entity = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, &id)?;
+        let (points, closed, layer) = match &drawing.entities[index].kind {
+            EntityKind::Polyline { points, closed } => (points.clone(), *closed, drawing.entities[index].layer.clone()),
+            other => {
+                return Err(ServiceError::new(
+                    "polyline/unsupported-entity",
+                    format!("entity `{id}` is a {}, not a polyline", kind_name(other)),
+                ));
+            }
+        };
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if points.len() < 3 {
+            return Err(ServiceError::new("polyline/degenerate", format!("polyline `{id}` needs at least 3 vertices to chamfer")));
+        }
+        let count = points.len();
+        let segments = if closed { count } else { count - 1 };
+        for segment in 0..segments {
+            let next = (segment + 1) % count;
+            let length = self::distance(points[segment], points[next]);
+            if length <= 2.0 * distance {
+                return Err(argument(format!(
+                    "a chamfer distance of {distance} needs every segment longer than {}, but the segment from vertex {segment} to vertex {next} is {length}",
+                    2.0 * distance
+                )));
+            }
+        }
+        let mut chamfered = Vec::with_capacity(2 * count);
+        if closed {
+            for vertex in 0..count {
+                let corner = points[vertex];
+                chamfered.push(toward(corner, points[(vertex + count - 1) % count], distance));
+                chamfered.push(toward(corner, points[(vertex + 1) % count], distance));
+            }
+        }
+        else {
+            chamfered.push(points[0]);
+            for vertex in 1..count - 1 {
+                let corner = points[vertex];
+                chamfered.push(toward(corner, points[vertex - 1], distance));
+                chamfered.push(toward(corner, points[vertex + 1], distance));
+            }
+            chamfered.push(points[count - 1]);
+        }
+        drawing.entities[index].kind = EntityKind::Polyline { points: chamfered, closed };
         drawing.revision += 1;
         Ok(drawing.entities[index].clone())
     })?;
