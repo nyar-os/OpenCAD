@@ -92,6 +92,7 @@ import type {
     OverkillResult,
     Point,
     PointMeasurement,
+    PolylineChamferRequest,
     QuantityTableRequest,
     QuantityTableResult,
     MergeLayerRequest,
@@ -913,6 +914,19 @@ export class DrawingDocument {
      */
     smoothPolyline(request: SmoothPolylineRequest): Entity {
         return this.adopt(this.edit((handle) => service.smoothPolyline(handle, request)));
+    }
+
+    /**
+     * Bevels every corner of one polyline by trimming both adjacent segments.
+     * An open chain keeps its endpoints, a closed chain bevels every vertex
+     * including the first, and the entity keeps its id, layer and closure.
+     * `distance` must be positive and finite and every segment must be longer
+     * than twice it. A non-polyline reports `polyline/unsupported-entity`, a
+     * chain with fewer than three vertices `polyline/degenerate` and a short
+     * segment `session/argument-invalid`.
+     */
+    polylineChamfer(request: PolylineChamferRequest): Entity {
+        return this.adopt(this.edit((handle) => service.polylineChamfer(handle, request)));
     }
 
     /** Fillets two lines, trimming both, and returns the new arc. */

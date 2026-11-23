@@ -29,8 +29,8 @@ use std::{
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
     DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
-    OverkillRequest, QuantityTableRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest, TransformOp, TransformRequest,
-    TransformTarget, UcsDirection, UcsRequest,
+    OverkillRequest, PolylineChamferRequest, QuantityTableRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest,
+    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -997,6 +997,22 @@ fn drawing_smooth_polyline(ctx: CallContext) -> Result<JsValue> {
             id: request_string(&request, "id").map_err(Error::new)?,
             iterations: request.get("iterations").and_then(Value::as_u64).map(|value| value.min(u32::MAX as u64) as u32),
             ratio: optional_number(&request, "ratio"),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Bevels every corner of one polyline by trimming both adjacent segments.
+#[function]
+fn drawing_polyline_chamfer(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = open_cad_drawing::polyline_chamfer(
+        handle,
+        PolylineChamferRequest {
+            id: request_string(&request, "id").map_err(Error::new)?,
+            distance: request_number(&request, "distance").map_err(Error::new)?,
         },
     )
     .map_err(fail)?;
@@ -2645,6 +2661,7 @@ register_module![
     drawing_hatch_pattern,
     drawing_title_block,
     drawing_smooth_polyline,
+    drawing_polyline_chamfer,
     drawing_diff,
     drawing_fillet,
     drawing_chamfer,

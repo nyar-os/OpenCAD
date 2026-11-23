@@ -97,6 +97,7 @@ export interface NativeBinding {
     drawing_hatch_pattern(handle: number, requestJson: string): string;
     drawing_title_block(handle: number, requestJson: string): string;
     drawing_smooth_polyline(handle: number, requestJson: string): string;
+    drawing_polyline_chamfer(handle: number, requestJson: string): string;
     drawing_diff(leftPath: string, rightPath: string): string;
     drawing_fillet(handle: number, requestJson: string): string;
     drawing_chamfer(handle: number, requestJson: string): string;

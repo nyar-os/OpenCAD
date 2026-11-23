@@ -1107,6 +1107,43 @@ test('polyline smoothing rounds corners and keeps the entity', { skip: withAddon
     }
 });
 
+test('polyline chamfer bevels every corner and keeps the entity', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Polyline chamfer' });
+        const polyline = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10]] });
+
+        const before = document.revision;
+        const chamfered = document.polylineChamfer({ id: polyline.id, distance: 2 });
+        assert.equal(chamfered.id, polyline.id);
+        assert.equal(chamfered.layer, '0');
+        assert.equal(document.revision, before + 1);
+        if (chamfered.kind.type === 'polyline') {
+            assert.deepEqual(chamfered.kind.points, [[0, 0], [8, 0], [10, 2], [10, 10]]);
+            assert.equal(chamfered.kind.closed, false);
+        }
+
+        const square = document.addPolyline({ layer: '0', points: [[0, 0], [10, 0], [10, 10], [0, 10]], closed: true });
+        const beveled = document.polylineChamfer({ id: square.id, distance: 2 });
+        if (beveled.kind.type === 'polyline') {
+            assert.equal(beveled.kind.closed, true);
+            assert.deepEqual(beveled.kind.points, [[0, 2], [2, 0], [8, 0], [10, 2], [10, 8], [8, 10], [2, 10], [0, 8]]);
+        }
+
+        assert.throws(
+            () => document.polylineChamfer({ id: polyline.id, distance: 5 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.throws(
+            () => document.polylineChamfer({ id: 'entity-99', distance: 1 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'object/not-found',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('diff reports entity, layer and metadata differences between two projects', { skip: withAddon }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-diff-'));
     const left = path.join(dir, 'left.ocad');

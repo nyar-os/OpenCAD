@@ -1008,6 +1008,14 @@ export interface SmoothPolylineRequest {
     readonly ratio?: number;
 }
 
+/** Arguments of `polylineChamfer()`. */
+export interface PolylineChamferRequest {
+    /** Polyline entity whose corners are beveled. */
+    readonly id: EntityId;
+    /** Distance trimmed from each side of every beveled corner; must be positive and finite. */
+    readonly distance: number;
+}
+
 /** Arguments of `OpenCAD.diff()`. Both sides are project paths. */
 export interface DrawingDiffRequest {
     readonly left: string;

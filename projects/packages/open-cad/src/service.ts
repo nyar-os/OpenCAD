@@ -99,6 +99,7 @@ import type {
     OverkillResult,
     Point,
     PointMeasurement,
+    PolylineChamferRequest,
     QuantityTableRequest,
     QuantityTableResult,
     ReplaceTextRequest,
@@ -1036,6 +1037,16 @@ export function smoothPolyline(handle: number, request: SmoothPolylineRequest): 
         binding('drawing.smoothPolyline').drawing_smooth_polyline(
             handle,
             JSON.stringify({ id: request.id, iterations: request.iterations, ratio: request.ratio }),
+        ),
+    );
+}
+
+/** Bevels every corner of one polyline by trimming both adjacent segments. */
+export function polylineChamfer(handle: number, request: PolylineChamferRequest): EntityChange {
+    return decode<EntityChange>(() =>
+        binding('drawing.polylineChamfer').drawing_polyline_chamfer(
+            handle,
+            JSON.stringify({ id: request.id, distance: request.distance }),
         ),
     );
 }
