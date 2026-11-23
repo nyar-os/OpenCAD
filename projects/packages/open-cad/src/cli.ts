@@ -44,6 +44,7 @@ import type {
     ExtendResult,
     ExtendSide,
     GroupDeletion,
+    HatchPatternResult,
     HistoryResult,
     ImportLoss,
     InspectCheck,
@@ -70,6 +71,7 @@ import type {
     TextStyleChange,
     TextMatchResult,
     TextReplaceResult,
+    TitleBlockResult,
     TransformOperation,
     TransformResult,
     TransformTarget,
@@ -346,6 +348,15 @@ function describeOverkill(result: OverkillResult): string {
     const merges = result.merged.map((group) => `${group.sources.join('+')}=>${group.created}`).join(',');
     const tail = merges === '' ? '' : ` ${merges}`;
     return `overkill removed ${result.removed.length} duplicates merged ${result.merged.length} groups skipped=${result.skipped} revision=${result.revision}${tail}`;
+}
+
+function describeHatchPattern(result: HatchPatternResult): string {
+    return `hatch pattern added ${result.created.length} lines revision=${result.revision}`;
+}
+
+function describeTitleBlock(result: TitleBlockResult): string {
+    const lines = result.created.filter((entity) => entity.kind.type === 'line').length;
+    return `title block added ${result.created.length} entities (${lines} lines) revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -856,6 +867,40 @@ entity
             );
             const change = entityChange(opened, entity);
             ctx.emitResult(change, describeEntity(change));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+entity
+    .command('hatch-pattern', 'cli.cmd.hatch-pattern')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--angle <degrees>', 'cli.opt.hatch-angle')
+    .option('--spacing <number>', 'cli.opt.spacing')
+    .option('--cross <state>', 'cli.opt.cross', { enum: ['on', 'off'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        if (id === undefined) {
+            ctx.fail('open-cad.cli.hatch-pattern-required', { message: '`--id <entity>` is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.hatchPattern({
+                    id,
+                    angle: number(options, 'angle'),
+                    spacing: number(options, 'spacing'),
+                    cross: toggle(options, 'cross'),
+                }),
+            );
+            ctx.emitResult(result, describeHatchPattern(result));
             return 0;
         } finally {
             opened.close();
@@ -1919,6 +1964,51 @@ cli
                 opened.overkill({ tolerance: number(options, 'tolerance'), mergeOverlapping: toggle(options, 'merge-overlapping') }),
             );
             ctx.emitResult(result, describeOverkill(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('title-block', 'cli.cmd.title-block')
+    .option('--layer <layer>', 'cli.opt.title-block-layer')
+    .option('--width <number>', 'cli.opt.width')
+    .option('--height <number>', 'cli.opt.sheet-height')
+    .option('--margin <number>', 'cli.opt.margin')
+    .option('--text-height <number>', 'cli.opt.title-block-text-height')
+    .option('--title <text>', 'cli.opt.title')
+    .option('--number <text>', 'cli.opt.number')
+    .option('--revision <text>', 'cli.opt.revision')
+    .option('--scale <text>', 'cli.opt.title-block-scale')
+    .option('--date <text>', 'cli.opt.date')
+    .option('--author <text>', 'cli.opt.author')
+    .option('--sheet <text>', 'cli.opt.title-block-sheet')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.titleBlock({
+                    layer: text(options, 'layer'),
+                    width: number(options, 'width'),
+                    height: number(options, 'height'),
+                    margin: number(options, 'margin'),
+                    textHeight: number(options, 'text-height'),
+                    title: text(options, 'title'),
+                    number: text(options, 'number'),
+                    revision: text(options, 'revision'),
+                    scale: text(options, 'scale'),
+                    date: text(options, 'date'),
+                    author: text(options, 'author'),
+                    sheet: text(options, 'sheet'),
+                }),
+            );
+            ctx.emitResult(result, describeTitleBlock(result));
             return 0;
         } finally {
             opened.close();

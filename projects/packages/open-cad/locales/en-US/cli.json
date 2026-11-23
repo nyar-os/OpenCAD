@@ -33,6 +33,7 @@
             "align": "Align entities to one bounding-box edge or centreline and save the file",
             "distribute": "Spread entities with equal gaps between bounding boxes and save the file",
             "overkill": "Remove exact duplicate entities and optionally merge collinear overlapping lines, then save the file",
+            "title-block": "Add a sheet frame and a title block filled from the drawing properties and save the file",
             "fillet": "Fillet two lines with a tangent arc, trimming both, and save the file",
             "chamfer": "Chamfer two lines with a bevel, trimming both, and save the file",
             "measure": "Measure bounds, path length and enclosed area of a drawing file; pass --ids to measure single entities",
@@ -49,6 +50,7 @@
             "add-rectangle": "Add an axis-aligned rectangle as a closed polyline and save the file in place",
             "add-polygon": "Add a regular polygon as a closed polyline and save the file in place",
             "add-hatch": "Add a hatch bounded by a closed polygon and save the file in place",
+            "hatch-pattern": "Fill a hatch with pattern lines clipped to its boundary and save the file in place",
             "add-text": "Add single-line text and save the file in place",
             "add-dimension": "Add a linear dimension and save the file in place",
             "add-radial-dimension": "Add a radial or diameter dimension and save the file in place",
@@ -109,6 +111,7 @@
             "checks": "Comma-separated checks: units, layers, geometry, polylines, dimensions, duplicate-entity, zero-length, open-contour (constraints and references are not implemented)",
             "format": "Exchange format to write: dxf, obj, step, stl, svg or pdf (obj, step and stl extrude closed profiles)",
             "layer": "Target layer id (defaults to 0; dimensions default to dimensions)",
+            "title-block-layer": "Target layer for the frame and block; defaults to titleblock",
             "from": "Start point as x,y",
             "to": "End point as x,y",
             "center": "Circle, arc or ellipse centre as x,y",
@@ -226,7 +229,23 @@
             "description": "Free-form drawing description",
             "company": "Company or organisation",
             "project": "Project name",
-            "keywords": "Keyword list, kept verbatim"
+            "keywords": "Keyword list, kept verbatim",
+            "hatch-angle": "Pattern direction in degrees; defaults to 0",
+            "spacing": "Perpendicular distance between pattern lines; defaults to 5",
+            "cross": "Add a second pattern family perpendicular to the first",
+            "width": "Sheet width in drawing units; defaults to the A3 landscape width",
+            "sheet-height": "Sheet height in drawing units; defaults to the A3 landscape height",
+            "margin": "Frame inset from the sheet edge; defaults to 10",
+            "title-block-text-height": "Height of the title-block text; defaults to 3.5",
+            "number": "Drawing number; defaults to the drawing id",
+            "revision": "Revision label; defaults to the drawing revision",
+            "title-block-scale": "Scale label in the title block; defaults to 1:1",
+            "date": "Date label; defaults to an empty cell",
+            "title-block-sheet": "Sheet label in the title block; defaults to 1"
+        },
+        "error": {
+            "hatch-pattern-required": "`--id <entity>` is required",
+            "title-block-invalid": "`--width`, `--height`, `--margin` and `--text-height` must be positive numbers"
         }
     }
 }
