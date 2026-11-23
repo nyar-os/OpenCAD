@@ -81,6 +81,8 @@ fn capability_matrix_matches_the_implemented_surface() {
         "ucs",
         "hatch-pattern",
         "title-block",
+        "polyline-smooth",
+        "diff",
     ] {
         assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
     }
@@ -5590,5 +5592,204 @@ fn title_block_rejects_bad_sheets_and_protected_layers() {
     update_layer(handle, "titleblock", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
     assert_eq!(add_title_block(handle, TitleBlockRequest::default()).expect_err("frozen layer").code, "drawing/layer-frozen");
     assert_eq!(drawing_of(handle).entities.len(), 0, "refused requests never add entities");
+    close(handle).expect("close");
+}
+
+#[test]
+fn smooth_polyline_rounds_an_open_chain_and_keeps_its_identity() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Outline", Some("#ff0000")).expect("layer");
+    let polyline = add_polyline(handle, "Outline", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+
+    let result = smooth_polyline(handle, SmoothPolylineRequest { id: id.clone(), iterations: Some(1), ratio: None }).expect("smooth");
+    assert_eq!(result["revision"], json!(4), "one smoothing pass is one revision");
+    let entity = &result["entity"];
+    assert_eq!(entity["id"], json!(id));
+    assert_eq!(entity["layer"], json!("Outline"), "the entity stays on its layer");
+    assert_eq!(entity["kind"]["closed"], json!(false));
+    let points = entity["kind"]["points"].as_array().expect("points");
+    let expected = [[0.0, 0.0], [2.5, 0.0], [7.5, 0.0], [10.0, 2.5], [10.0, 7.5], [10.0, 10.0]];
+    assert_eq!(points.len(), expected.len(), "one pass replaces every segment with two points");
+    for (point, expected) in points.iter().zip(expected) {
+        assert_point(point, expected);
+    }
+
+    let second = create(CreateRequest::default()).expect("second create");
+    let second_handle = handle_of(&second);
+    add_layer(second_handle, "Outline", Some("#ff0000")).expect("second layer");
+    let second_polyline = add_polyline(second_handle, "Outline", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("second polyline");
+    let second_id = second_polyline["entity"]["id"].as_str().expect("id").to_string();
+    let again =
+        smooth_polyline(second_handle, SmoothPolylineRequest { id: second_id, iterations: Some(1), ratio: None }).expect("second smooth");
+    assert_eq!(again["entity"], *entity, "the same input yields the same vertices");
+    close(second_handle).expect("close second");
+    close(handle).expect("close");
+}
+
+#[test]
+fn smooth_polyline_keeps_a_closed_chain_closed_without_duplicating_the_first_vertex() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let polyline = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+
+    let result = smooth_polyline(handle, SmoothPolylineRequest { id, iterations: Some(1), ratio: Some(0.25) }).expect("smooth");
+    let points = result["entity"]["kind"]["points"].as_array().expect("points");
+    let expected = [[2.5, 0.0], [7.5, 0.0], [10.0, 2.5], [10.0, 7.5], [7.5, 10.0], [2.5, 10.0], [0.0, 7.5], [0.0, 2.5]];
+    assert_eq!(points.len(), expected.len(), "a closed chain keeps two points per edge and no fixed vertex");
+    for (point, expected) in points.iter().zip(expected) {
+        assert_point(point, expected);
+    }
+    assert_eq!(result["entity"]["kind"]["closed"], json!(true));
+    close(handle).expect("close");
+}
+
+#[test]
+fn smooth_polyline_rejects_bad_requests_and_protected_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let polyline = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+    let line = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    let line_id = line["entity"]["id"].as_str().expect("id").to_string();
+    let short = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 0.0]], false).expect("short polyline");
+    let short_id = short["entity"]["id"].as_str().expect("id").to_string();
+
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id: "entity-99".to_string(), ..SmoothPolylineRequest::default() })
+            .expect_err("unknown id")
+            .code,
+        "object/not-found"
+    );
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id: line_id, iterations: None, ratio: None }).expect_err("not a polyline").code,
+        "polyline/unsupported-entity"
+    );
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id: short_id, iterations: None, ratio: None }).expect_err("too few vertices").code,
+        "polyline/degenerate"
+    );
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id: id.clone(), iterations: Some(0), ratio: None }).expect_err("zero iterations").code,
+        "polyline/invalid-iterations"
+    );
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id: id.clone(), iterations: Some(9), ratio: None })
+            .expect_err("too many iterations")
+            .code,
+        "polyline/invalid-iterations"
+    );
+    for ratio in [0.0, 0.5, f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            smooth_polyline(handle, SmoothPolylineRequest { id: id.clone(), iterations: None, ratio: Some(ratio) })
+                .expect_err("bad ratio")
+                .code,
+            "polyline/invalid-ratio"
+        );
+    }
+
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id: id.clone(), iterations: None, ratio: None }).expect_err("locked layer").code,
+        "drawing/layer-locked"
+    );
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(
+        smooth_polyline(handle, SmoothPolylineRequest { id, iterations: None, ratio: None }).expect_err("frozen layer").code,
+        "drawing/layer-frozen"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn smooth_polyline_is_one_undoable_history_step() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let polyline = add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], false).expect("polyline");
+    let id = polyline["entity"]["id"].as_str().expect("id").to_string();
+    smooth_polyline(handle, SmoothPolylineRequest { id: id.clone(), iterations: Some(2), ratio: None }).expect("smooth");
+
+    undo(handle).expect("undo");
+    let restored = drawing_of(handle);
+    assert_eq!(restored.entities.len(), 1);
+    assert_eq!(restored.entities[0].kind, EntityKind::Polyline { points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], closed: false });
+    close(handle).expect("close");
+}
+
+#[test]
+fn diff_reports_identical_projects() {
+    let dir = TempDir::new("diff-identical");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let left = dir.path.join("left.ocad");
+    let right = dir.path.join("right.ocad");
+    save(handle, &left, false).expect("save left");
+    save(handle, &right, false).expect("save right");
+
+    let report = diff(&left, &right).expect("diff");
+    assert_eq!(report["identical"], json!(true));
+    assert_eq!(report["summary"]["added"], json!(0));
+    assert_eq!(report["summary"]["removed"], json!(0));
+    assert_eq!(report["summary"]["changed"], json!(0));
+    assert_eq!(report["summary"]["metadata"], json!(0));
+    assert_eq!(report["left"]["entities"], json!(1));
+    assert_eq!(report["right"]["path"], json!(right.display().to_string()));
+    close(handle).expect("close");
+}
+
+#[test]
+fn diff_lists_added_removed_changed_and_metadata_entries() {
+    let dir = TempDir::new("diff-changes");
+    let left = dir.path.join("left.ocad");
+    let right = dir.path.join("right.ocad");
+
+    let created = create(CreateRequest { title: Some("Left plan".to_string()), ..CreateRequest::default() }).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    let circle = add_circle(handle, DEFAULT_LAYER, [5.0, 5.0], 2.0).expect("circle");
+    let circle_id = circle["entity"]["id"].as_str().expect("id").to_string();
+    save(handle, &left, false).expect("save left");
+
+    delete_entity(handle, "entity-1").expect("delete line");
+    move_entity(handle, &circle_id, Some([1.0, 0.0]), None).expect("move circle");
+    add_line(handle, DEFAULT_LAYER, [0.0, 20.0], [10.0, 20.0]).expect("new line");
+    update_layer(handle, DEFAULT_LAYER, LayerUpdate { color: Some("#ff0000".to_string()), ..LayerUpdate::default() }).expect("color");
+    update_properties(handle, PropertiesUpdate { title: Some("Right plan".to_string()), ..PropertiesUpdate::default() }).expect("title");
+    save(handle, &right, false).expect("save right");
+
+    let report = diff(&left, &right).expect("diff");
+    assert_eq!(report["identical"], json!(false));
+    let summary = &report["summary"];
+    assert_eq!(summary["added"], json!(1), "one new line");
+    assert_eq!(summary["removed"], json!(1), "the first line is gone");
+    assert_eq!(summary["changed"], json!(1), "the circle moved");
+    assert_eq!(summary["layersChanged"], json!(1), "layer 0 changed colour");
+    assert_eq!(summary["metadata"], json!(1), "the title changed");
+
+    assert_eq!(report["entities"]["added"][0]["kind"]["type"], json!("line"));
+    assert_eq!(report["entities"]["removed"][0]["id"], json!("entity-1"));
+    let changed = &report["entities"]["changed"][0];
+    assert_eq!(changed["id"], json!(circle_id));
+    assert_eq!(changed["fields"], json!(["geometry"]));
+    assert_eq!(report["layers"]["changed"][0]["fields"], json!(["color"]));
+    assert_eq!(report["metadata"][0], json!({ "field": "title", "left": "Left plan", "right": "Right plan" }));
+    close(handle).expect("close");
+}
+
+#[test]
+fn diff_reports_unreadable_and_malformed_projects() {
+    let dir = TempDir::new("diff-errors");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let valid = dir.path.join("valid.ocad");
+    save(handle, &valid, false).expect("save");
+
+    assert_eq!(diff(&dir.path.join("missing.ocad"), &valid).expect_err("missing").code, "drawing/not-found");
+    let junk = dir.path.join("junk.ocad");
+    fs::write(&junk, b"{ not json").expect("write junk");
+    assert_eq!(diff(&valid, &junk).expect_err("malformed").code, "format/invalid");
     close(handle).expect("close");
 }

@@ -117,8 +117,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
-/// overkill, hatch-pattern, title-block and measure); constraint solving and a
-/// 3D kernel stay unsupported.
+/// overkill, hatch-pattern, title-block, polyline-smooth, diff and measure);
+/// constraint solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -208,13 +208,17 @@ pub fn capabilities() -> Value {
                 "ucs",
                 "hatch-pattern",
                 "title-block",
+                "polyline-smooth",
+                "diff",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
                 | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
-                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" => "supported",
+                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth" | "diff" => {
+                    "supported"
+                }
                 _ => "unsupported",
             },
         ),
@@ -245,12 +249,12 @@ pub fn create(request: CreateRequest) -> Result<Value, ServiceError> {
     Ok(json!({ "handle": handle, "drawing": summary }))
 }
 
-/// Opens a `.ocad` project and returns `{ handle, drawing }`.
+/// Reads and validates one `.ocad` project without opening a handle.
 ///
 /// The file must be UTF-8 JSON with the `open-cad-drawing` tag and version 1.
 /// Malformed content reports `format/invalid`; a future version reports
 /// `format/unsupported-version`; neither path panics.
-pub fn open(path: &Path) -> Result<Value, ServiceError> {
+fn load_drawing(path: &Path) -> Result<Drawing, ServiceError> {
     let bytes = fs::read(path).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             ServiceError::new("drawing/not-found", format!("`{}` does not exist", path.display()))
@@ -278,7 +282,16 @@ pub fn open(path: &Path) -> Result<Value, ServiceError> {
     let drawing: Drawing =
         serde_json::from_value(document.clone()).map_err(|error| invalid(format!("`{}` has an invalid document: {error}", path.display())))?;
     drawing.validate().map_err(|message| invalid(format!("`{}` is invalid: {message}", path.display())))?;
+    Ok(drawing)
+}
 
+/// Opens a `.ocad` project and returns `{ handle, drawing }`.
+///
+/// The file must be UTF-8 JSON with the `open-cad-drawing` tag and version 1.
+/// Malformed content reports `format/invalid`; a future version reports
+/// `format/unsupported-version`; neither path panics.
+pub fn open(path: &Path) -> Result<Value, ServiceError> {
+    let drawing = load_drawing(path)?;
     let handle = store::insert(drawing);
     let summary = store::read(handle, |session| session.summary())?;
     Ok(json!({ "handle": handle, "drawing": summary }))
@@ -6956,6 +6969,279 @@ pub fn add_title_block(handle: u64, request: TitleBlockRequest) -> Result<Value,
             "created": created,
         })
     })
+}
+
+/// Arguments of [`smooth_polyline`].
+#[derive(Debug, Clone, Default)]
+pub struct SmoothPolylineRequest {
+    /// Identifier of the polyline to smooth.
+    pub id: String,
+    /// Corner-cutting passes; defaults to `2` and must be within `1..=8`.
+    pub iterations: Option<u32>,
+    /// Fraction each new corner is pulled towards its neighbour; defaults to
+    /// `0.25` and must be strictly between `0` and `0.5`.
+    pub ratio: Option<f64>,
+}
+
+/// Most vertices one smoothing request may produce.
+const SMOOTH_VERTEX_LIMIT: u64 = 100_000;
+
+/// One Chaikin corner-cutting pass over a vertex chain.
+///
+/// An open chain keeps its first and last vertex and replaces every segment
+/// with the two points at `ratio` and `1 - ratio` along it. A closed chain
+/// treats the last-to-first edge as one more segment and keeps no vertex.
+/// The result is deterministic and preserves the winding order.
+fn chaikin_pass(points: &[[f64; 2]], closed: bool, ratio: f64) -> Vec<[f64; 2]> {
+    let mut result = Vec::with_capacity(points.len() * 2);
+    if !closed {
+        result.push(points[0]);
+    }
+    let segments = if closed { points.len() } else { points.len() - 1 };
+    for index in 0..segments {
+        let from = points[index];
+        let to = points[(index + 1) % points.len()];
+        let near = [from[0] + (to[0] - from[0]) * ratio, from[1] + (to[1] - from[1]) * ratio];
+        let far = [from[0] + (to[0] - from[0]) * (1.0 - ratio), from[1] + (to[1] - from[1]) * (1.0 - ratio)];
+        result.push(near);
+        result.push(far);
+    }
+    if !closed {
+        result.push(points[points.len() - 1]);
+    }
+    result
+}
+
+/// Rounds the corners of one polyline with Chaikin corner cutting.
+///
+/// Each pass replaces every segment by the two points `ratio` and
+/// `1 - ratio` along it, so an open chain keeps its endpoints and a closed
+/// chain keeps its closed flag and never duplicates the first vertex. The
+/// entity keeps its id and layer, and the edit is one history step and one
+/// revision. The response carries `{ revision, drawing, entity }`.
+///
+/// `iterations` defaults to `2` and `ratio` to `0.25`. An unknown id reports
+/// `object/not-found`; a non-polyline reports
+/// `polyline/unsupported-entity`; a chain with fewer than three vertices
+/// reports `polyline/degenerate`; an iteration count outside `1..=8` reports
+/// `polyline/invalid-iterations`; a ratio outside `(0, 0.5)` reports
+/// `polyline/invalid-ratio`; a result beyond the vertex budget reports
+/// `polyline/vertex-limit`; a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn smooth_polyline(handle: u64, request: SmoothPolylineRequest) -> Result<Value, ServiceError> {
+    let SmoothPolylineRequest { id, iterations, ratio } = request;
+    let iterations = iterations.unwrap_or(2);
+    if !(1..=8).contains(&iterations) {
+        return Err(ServiceError::new("polyline/invalid-iterations", "`iterations` must be between 1 and 8"));
+    }
+    let ratio = ratio.unwrap_or(0.25);
+    if !ratio.is_finite() || ratio <= 0.0 || ratio >= 0.5 {
+        return Err(ServiceError::new("polyline/invalid-ratio", "`ratio` must be finite and strictly between 0 and 0.5"));
+    }
+    let entity = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, &id)?;
+        let (points, closed, layer) = match &drawing.entities[index].kind {
+            EntityKind::Polyline { points, closed } => (points.clone(), *closed, drawing.entities[index].layer.clone()),
+            other => {
+                return Err(ServiceError::new(
+                    "polyline/unsupported-entity",
+                    format!("entity `{id}` is a {}, not a polyline", kind_name(other)),
+                ));
+            }
+        };
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if points.len() < 3 {
+            return Err(ServiceError::new("polyline/degenerate", format!("polyline `{id}` needs at least 3 vertices to smooth")));
+        }
+        let mut smoothed = points;
+        for _ in 0..iterations {
+            if smoothed.len() as u64 * 2 > SMOOTH_VERTEX_LIMIT {
+                return Err(ServiceError::new(
+                    "polyline/vertex-limit",
+                    format!("smoothing would exceed {SMOOTH_VERTEX_LIMIT} vertices; lower `iterations`"),
+                ));
+            }
+            smoothed = chaikin_pass(&smoothed, closed, ratio);
+        }
+        drawing.entities[index].kind = EntityKind::Polyline { points: smoothed, closed };
+        drawing.revision += 1;
+        Ok(drawing.entities[index].clone())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
+/// Fields that differ between two versions of the same entity.
+fn changed_entity_fields(before: &Entity, after: &Entity) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if before.layer != after.layer {
+        fields.push("layer");
+    }
+    if before.kind != after.kind {
+        fields.push("geometry");
+    }
+    fields
+}
+
+/// Fields that differ between two versions of the same layer.
+fn changed_layer_fields(before: &Layer, after: &Layer) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if before.name != after.name {
+        fields.push("name");
+    }
+    if before.color != after.color {
+        fields.push("color");
+    }
+    if before.visible != after.visible {
+        fields.push("visible");
+    }
+    if before.locked != after.locked {
+        fields.push("locked");
+    }
+    if before.frozen != after.frozen {
+        fields.push("frozen");
+    }
+    if before.plottable != after.plottable {
+        fields.push("plottable");
+    }
+    if before.linetype != after.linetype {
+        fields.push("linetype");
+    }
+    if before.lineweight != after.lineweight {
+        fields.push("lineweight");
+    }
+    fields
+}
+
+/// Compact descriptor of one side of a [`diff`] call.
+fn diff_side(drawing: &Drawing, path: &Path) -> Value {
+    json!({
+        "path": path.display().to_string(),
+        "id": drawing.id,
+        "title": drawing.title,
+        "revision": drawing.revision,
+        "units": drawing.units.as_str(),
+        "entities": drawing.entities.len(),
+        "layers": drawing.layers.len(),
+    })
+}
+
+/// Drawing-level metadata differences between two projects.
+fn diff_metadata(left: &Drawing, right: &Drawing) -> Vec<Value> {
+    let mut entries = Vec::new();
+    if left.title != right.title {
+        entries.push(json!({ "field": "title", "left": left.title, "right": right.title }));
+    }
+    if left.units != right.units {
+        entries.push(json!({ "field": "units", "left": left.units.as_str(), "right": right.units.as_str() }));
+    }
+    let properties = [
+        ("author", &left.properties.author, &right.properties.author),
+        ("description", &left.properties.description, &right.properties.description),
+        ("company", &left.properties.company, &right.properties.company),
+        ("project", &left.properties.project, &right.properties.project),
+        ("keywords", &left.properties.keywords, &right.properties.keywords),
+    ];
+    for (field, before, after) in properties {
+        if before != after {
+            entries.push(json!({ "field": field, "left": before, "right": after }));
+        }
+    }
+    entries
+}
+
+/// Compares two `.ocad` projects at entity level and returns a difference
+/// report.
+///
+/// Entities and layers are matched by their stable id. The report carries
+/// `added` (only in `right`), `removed` (only in `left`) and `changed`
+/// entries with the differing `fields`, each in document order. Drawing-level
+/// `metadata` covers the title, the unit and the declared properties. The
+/// report is deterministic and does not modify either file; `identical` is
+/// true when no entity, layer or metadata entry differs.
+///
+/// Revisions, dimension/text styles, line types, groups, layouts, draw order
+/// and `nextEntity` are reported on each side but are not compared.
+///
+/// An unreadable, malformed or unsupported file reports the same codes as
+/// [`open`]: `drawing/not-found`, `drawing/io-error`, `format/invalid` or
+/// `format/unsupported-version`.
+pub fn diff(left: &Path, right: &Path) -> Result<Value, ServiceError> {
+    let left_drawing = load_drawing(left)?;
+    let right_drawing = load_drawing(right)?;
+
+    let left_entities = left_drawing.entities.iter().map(|entity| (entity.id.as_str(), entity)).collect::<std::collections::HashMap<_, _>>();
+    let right_entities = right_drawing.entities.iter().map(|entity| (entity.id.as_str(), entity)).collect::<std::collections::HashMap<_, _>>();
+
+    let added_entities = right_drawing.entities.iter().filter(|entity| !left_entities.contains_key(entity.id.as_str())).collect::<Vec<_>>();
+    let removed_entities = left_drawing.entities.iter().filter(|entity| !right_entities.contains_key(entity.id.as_str())).collect::<Vec<_>>();
+    let changed_entities = right_drawing
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            left_entities
+                .get(entity.id.as_str())
+                .filter(|before| **before != entity)
+                .map(|before| json!({ "id": entity.id, "fields": changed_entity_fields(before, entity), "left": before, "right": entity }))
+        })
+        .collect::<Vec<_>>();
+
+    let left_layers = left_drawing.layers.iter().map(|layer| (layer.id.as_str(), layer)).collect::<std::collections::HashMap<_, _>>();
+    let right_layers = right_drawing.layers.iter().map(|layer| (layer.id.as_str(), layer)).collect::<std::collections::HashMap<_, _>>();
+    let added_layers = right_drawing.layers.iter().filter(|layer| !left_layers.contains_key(layer.id.as_str())).collect::<Vec<_>>();
+    let removed_layers = left_drawing.layers.iter().filter(|layer| !right_layers.contains_key(layer.id.as_str())).collect::<Vec<_>>();
+    let changed_layers = right_drawing
+        .layers
+        .iter()
+        .filter_map(|layer| {
+            left_layers
+                .get(layer.id.as_str())
+                .filter(|before| **before != layer)
+                .map(|before| json!({ "id": layer.id, "fields": changed_layer_fields(before, layer), "left": before, "right": layer }))
+        })
+        .collect::<Vec<_>>();
+
+    let metadata = diff_metadata(&left_drawing, &right_drawing);
+    let identical = added_entities.is_empty()
+        && removed_entities.is_empty()
+        && changed_entities.is_empty()
+        && added_layers.is_empty()
+        && removed_layers.is_empty()
+        && changed_layers.is_empty()
+        && metadata.is_empty();
+
+    Ok(json!({
+        "identical": identical,
+        "left": diff_side(&left_drawing, left),
+        "right": diff_side(&right_drawing, right),
+        "summary": {
+            "added": added_entities.len(),
+            "removed": removed_entities.len(),
+            "changed": changed_entities.len(),
+            "layersAdded": added_layers.len(),
+            "layersRemoved": removed_layers.len(),
+            "layersChanged": changed_layers.len(),
+            "metadata": metadata.len(),
+        },
+        "entities": {
+            "added": added_entities,
+            "removed": removed_entities,
+            "changed": changed_entities,
+        },
+        "layers": {
+            "added": added_layers,
+            "removed": removed_layers,
+            "changed": changed_layers,
+        },
+        "metadata": metadata,
+    }))
 }
 
 #[cfg(test)]
