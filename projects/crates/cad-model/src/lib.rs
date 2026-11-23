@@ -117,7 +117,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
-/// overkill, hatch-pattern, title-block, polyline-smooth, diff and measure);
+/// overkill, hatch-pattern, title-block, polyline-smooth, quantity-table, diff
+/// and measure);
 /// constraint solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
@@ -210,13 +211,15 @@ pub fn capabilities() -> Value {
                 "title-block",
                 "polyline-smooth",
                 "diff",
+                "quantity-table",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
                 | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
-                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth" | "diff" => {
+                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth" | "diff"
+                | "quantity-table" => {
                     "supported"
                 }
                 _ => "unsupported",
@@ -4462,27 +4465,141 @@ pub fn measure_points(handle: u64, points: &[[f64; 2]]) -> Result<Value, Service
     })?
 }
 
-/// Summarises entity count, path length and enclosed area per layer.
+/// Dimension [`stats`] groups its aggregates by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatsGroup {
+    /// One group per layer, including layers that carry no entity.
+    #[default]
+    Layer,
+    /// One group per entity kind.
+    Type,
+    /// One group per layer colour.
+    Color,
+    /// One group per layer line type.
+    Linetype,
+}
+
+impl StatsGroup {
+    /// Stable lowercase name used in JSON and the CLI.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Layer => "layer",
+            Self::Type => "type",
+            Self::Color => "color",
+            Self::Linetype => "linetype",
+        }
+    }
+
+    /// Parses a grouping name. Unknown names are rejected instead of defaulting.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "layer" => Some(Self::Layer),
+            "type" | "kind" => Some(Self::Type),
+            "color" | "colour" => Some(Self::Color),
+            "linetype" | "line-type" => Some(Self::Linetype),
+            _ => None,
+        }
+    }
+}
+
+/// One aggregate of [`stats`] and [`add_quantity_table`].
+struct GroupSummary {
+    key: String,
+    label: String,
+    entities: usize,
+    length: f64,
+    area: f64,
+}
+
+/// Sums entity count, path length and enclosed area of one entity sequence.
+fn accumulate<'a>(entities: impl Iterator<Item = &'a Entity>) -> (usize, f64, f64) {
+    let mut count = 0;
+    let mut length = 0.0;
+    let mut area = 0.0;
+    for entity in entities {
+        let (entity_length, entity_area) = entity_length_area(&entity.kind);
+        count += 1;
+        length += entity_length;
+        area += entity_area;
+    }
+    (count, length, area)
+}
+
+/// Aggregates the drawing by `group_by`, in a deterministic order.
+///
+/// Layer groups keep the layer order and include empty layers. Type, colour and
+/// line-type groups list only keys that occur, sorted by key, so the result
+/// does not depend on entity insertion order.
+fn group_summaries(drawing: &Drawing, group_by: StatsGroup) -> Vec<GroupSummary> {
+    match group_by {
+        StatsGroup::Layer => drawing
+            .layers
+            .iter()
+            .map(|layer| {
+                let (entities, length, area) = accumulate(drawing.entities.iter().filter(|entity| entity.layer == layer.id));
+                GroupSummary { key: layer.id.clone(), label: layer.name.clone(), entities, length, area }
+            })
+            .collect(),
+        StatsGroup::Type => {
+            let mut keys = drawing.entities.iter().map(|entity| kind_name(&entity.kind)).collect::<Vec<_>>();
+            keys.sort_unstable();
+            keys.dedup();
+            keys.into_iter()
+                .map(|name| {
+                    let (entities, length, area) = accumulate(drawing.entities.iter().filter(|entity| kind_name(&entity.kind) == name));
+                    GroupSummary { key: name.to_string(), label: name.to_string(), entities, length, area }
+                })
+                .collect()
+        }
+        StatsGroup::Color => groups_by_field(drawing, |layer| layer.color.as_str()),
+        StatsGroup::Linetype => groups_by_field(drawing, |layer| layer.linetype.as_str()),
+    }
+}
+
+/// Aggregates entities by one string field of their layer.
+///
+/// Layers that do not exist contribute the empty key, so a hand-edited project
+/// still produces a deterministic summary instead of panicking.
+fn groups_by_field<'a>(drawing: &'a Drawing, field: fn(&'a Layer) -> &'a str) -> Vec<GroupSummary> {
+    let mut keys = drawing.entities.iter().map(|entity| drawing.layer(&entity.layer).map(field).unwrap_or_default()).collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    keys.into_iter()
+        .map(|key| {
+            let (entities, length, area) =
+                accumulate(drawing.entities.iter().filter(|entity| drawing.layer(&entity.layer).map(field).unwrap_or_default() == key));
+            GroupSummary { key: key.to_string(), label: key.to_string(), entities, length, area }
+        })
+        .collect()
+}
+
+fn group_json(group: &GroupSummary) -> Value {
+    json!({
+        "key": group.key,
+        "label": group.label,
+        "entityCount": group.entities,
+        "length": group.length,
+        "area": group.area,
+    })
+}
+
+/// Summarises entity count, path length and enclosed area.
 ///
 /// Length and area use the same rules as [`measure`]: analytic lines, arcs and
 /// circles, five-degree ellipse sampling, and shoelace area only for closed
 /// polylines, full circles and full ellipses. Annotations contribute nothing.
-/// The response carries `{ revision, units, layers, totals }`, where each layer
-/// is `{ id, name, visible, locked, entityCount, length, area }`.
-pub fn stats(handle: u64) -> Result<Value, ServiceError> {
+/// `layers` always reports one entry per layer; `groups` follows `group_by`
+/// (`layer` by default, or `type`, `color` and `linetype`) and each entry is
+/// `{ key, label, entityCount, length, area }`. Layer groups keep the layer
+/// order and include empty layers; the other groupings list only keys that
+/// occur, sorted by key. The response carries
+/// `{ revision, units, groupBy, layers, groups, totals }`.
+pub fn stats(handle: u64, group_by: StatsGroup) -> Result<Value, ServiceError> {
     store::read(handle, |session| {
         let drawing = &session.drawing;
         let mut layers = Vec::with_capacity(drawing.layers.len());
         for layer in &drawing.layers {
-            let mut entity_count = 0;
-            let mut length = 0.0;
-            let mut area = 0.0;
-            for entity in drawing.entities.iter().filter(|entity| entity.layer == layer.id) {
-                let (entity_length, entity_area) = entity_length_area(&entity.kind);
-                entity_count += 1;
-                length += entity_length;
-                area += entity_area;
-            }
+            let (entity_count, length, area) = accumulate(drawing.entities.iter().filter(|entity| entity.layer == layer.id));
             layers.push(json!({
                 "id": layer.id,
                 "name": layer.name,
@@ -4493,18 +4610,15 @@ pub fn stats(handle: u64) -> Result<Value, ServiceError> {
                 "area": area,
             }));
         }
-        let mut total_length = 0.0;
-        let mut total_area = 0.0;
-        for entity in &drawing.entities {
-            let (entity_length, entity_area) = entity_length_area(&entity.kind);
-            total_length += entity_length;
-            total_area += entity_area;
-        }
+        let groups = group_summaries(drawing, group_by).iter().map(group_json).collect::<Vec<_>>();
+        let (entities, length, area) = accumulate(drawing.entities.iter());
         json!({
             "revision": drawing.revision,
             "units": drawing.units.as_str(),
+            "groupBy": group_by.as_str(),
             "layers": layers,
-            "totals": { "entities": drawing.entities.len(), "length": total_length, "area": total_area },
+            "groups": groups,
+            "totals": { "entities": entities, "length": length, "area": area },
         })
     })
 }
@@ -6966,6 +7080,197 @@ pub fn add_title_block(handle: u64, request: TitleBlockRequest) -> Result<Value,
         json!({
             "revision": session.drawing.revision,
             "drawing": session.summary(),
+            "created": created,
+        })
+    })
+}
+
+/// Arguments of [`add_quantity_table`].
+#[derive(Debug, Clone, Default)]
+pub struct QuantityTableRequest {
+    /// Layer that carries the table; created when missing.
+    pub layer: Option<String>,
+    /// Grouping the rows summarise.
+    pub group_by: StatsGroup,
+    /// Bottom-left corner of the table; defaults to the origin.
+    pub origin: Option<[f64; 2]>,
+    /// Height of the table text; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Caption written above the header; an empty value omits the caption row.
+    pub title: Option<String>,
+}
+
+/// Default layer the generated quantity table is drawn on.
+const QUANTITY_TABLE_LAYER: &str = "quantity";
+
+/// Caption the quantity table writes when the caller does not set one.
+const QUANTITY_TABLE_TITLE: &str = "Quantity take-off";
+
+/// Column headers of the quantity table, left to right.
+const QUANTITY_COLUMNS: [&str; 4] = ["Group", "Count", "Length", "Area"];
+
+/// Fraction of the table width each column occupies, left to right.
+const QUANTITY_COLUMN_SHARE: [f64; 4] = [0.45, 0.15, 0.2, 0.2];
+
+/// Formats one aggregate with at most three decimals and no trailing zeros.
+fn format_quantity(value: f64) -> String {
+    if !value.is_finite() || value.abs() < 0.0005 {
+        return "0".to_string();
+    }
+    let mut text = format!("{value:.3}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
+}
+
+/// Value of the caption row, or `None` when the caller suppressed it.
+fn quantity_caption(request: &QuantityTableRequest) -> Result<Option<String>, ServiceError> {
+    let Some(raw) = request.title.as_deref()
+    else {
+        return Ok(Some(QUANTITY_TABLE_TITLE.to_string()));
+    };
+    let value = property_value(raw, "title")?;
+    Ok((!value.is_empty()).then_some(value))
+}
+
+/// Draws a framed quantity take-off table of the drawing aggregates.
+///
+/// The table lists one row per group of [`stats`] (`layer` by default, or
+/// `type`, `color` and `linetype`) with the entity count, path length and
+/// enclosed area, followed by a total row. A caption row sits above the header
+/// unless `title` is empty. The bottom-left corner sits at `origin`, the width
+/// is `60 * textHeight` and every row is `2.5 * textHeight` tall. Everything is
+/// a real `line` or `text` entity with a fresh deterministic id on `layer`
+/// (default `quantity`, created with a neutral colour when missing). Rows are
+/// computed before the table is inserted, so a `layer` grouping never lists the
+/// table's own entities. The edit is one history step and one revision, and the
+/// response carries `{ revision, drawing, groupBy, columns, rows, totals,
+/// created }`.
+///
+/// Non-finite or non-positive dimensions and non-finite origins report
+/// `session/argument-invalid`, a caption longer than the property limit reports
+/// `session/argument-invalid`, and a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn add_quantity_table(handle: u64, request: QuantityTableRequest) -> Result<Value, ServiceError> {
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !text_height.is_finite() || text_height <= 0.0 {
+        return Err(argument("`textHeight` must be a positive finite number"));
+    }
+    let origin = request.origin.unwrap_or([0.0, 0.0]);
+    if !finite_point(origin) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    let caption = quantity_caption(&request)?;
+    let layer_name = request.layer.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
+    let width = text_height * 60.0;
+    if !width.is_finite() {
+        return Err(argument("`textHeight` is too large"));
+    }
+    let row_height = text_height * 2.5;
+    let (created, rows, totals) = store::edit(handle, |drawing| {
+        let groups = group_summaries(drawing, request.group_by);
+        let (total_entities, total_length, total_area) = accumulate(drawing.entities.iter());
+        let rows = groups
+            .iter()
+            .map(|group| {
+                json!({
+                    "key": group.key,
+                    "label": group.label,
+                    "entityCount": group.entities,
+                    "length": group.length,
+                    "area": group.area,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut cells = groups
+            .iter()
+            .map(|group| [group.label.clone(), group.entities.to_string(), format_quantity(group.length), format_quantity(group.area)])
+            .collect::<Vec<_>>();
+        cells.push(["Total".to_string(), total_entities.to_string(), format_quantity(total_length), format_quantity(total_area)]);
+        let layer = layer_name.clone().unwrap_or_else(|| QUANTITY_TABLE_LAYER.to_string());
+        if drawing.layer(&layer).is_none() {
+            drawing.layers.push(Layer {
+                id: layer.clone(),
+                name: layer.clone(),
+                color: "#d0d7de".to_string(),
+                visible: true,
+                locked: false,
+                frozen: false,
+                plottable: true,
+                linetype: CONTINUOUS_LINETYPE.to_string(),
+                lineweight: 0.0,
+            });
+        }
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        let [x0, y0] = origin;
+        let x1 = x0 + width;
+        let y1 = y0 + row_height * (cells.len() + 1 + usize::from(caption.is_some())) as f64;
+        let mut kinds = Vec::new();
+        kinds.extend_from_slice(&[
+            EntityKind::Line { from: [x0, y0], to: [x1, y0] },
+            EntityKind::Line { from: [x1, y0], to: [x1, y1] },
+            EntityKind::Line { from: [x1, y1], to: [x0, y1] },
+            EntityKind::Line { from: [x0, y1], to: [x0, y0] },
+        ]);
+        let mut separator = y1;
+        if caption.is_some() {
+            separator -= row_height;
+            kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
+        }
+        separator -= row_height;
+        kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
+        for _ in 1..cells.len() {
+            separator -= row_height;
+            kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
+        }
+        let mut column_x = [0.0f64; QUANTITY_COLUMN_SHARE.len()];
+        let mut cursor = x0;
+        for (index, share) in QUANTITY_COLUMN_SHARE.iter().enumerate() {
+            column_x[index] = cursor;
+            cursor += width * share;
+        }
+        let inset = text_height * 0.5;
+        for x in &column_x[1..] {
+            kinds.push(EntityKind::Line { from: [*x, y0], to: [*x, y1] });
+        }
+        let mut baseline = y1 - row_height + (row_height - text_height) / 2.0;
+        if let Some(caption) = &caption {
+            kinds.push(EntityKind::Text { at: [x0 + inset, baseline], height: text_height, content: caption.clone() });
+            baseline -= row_height;
+        }
+        for (index, header) in QUANTITY_COLUMNS.iter().enumerate() {
+            kinds.push(EntityKind::Text { at: [column_x[index] + inset, baseline], height: text_height, content: (*header).to_string() });
+        }
+        baseline -= row_height;
+        for row in &cells {
+            for (index, value) in row.iter().enumerate() {
+                kinds.push(EntityKind::Text { at: [column_x[index] + inset, baseline], height: text_height, content: value.clone() });
+            }
+            baseline -= row_height;
+        }
+        let mut created = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok((created, rows, json!({ "entities": total_entities, "length": total_length, "area": total_area })))
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "groupBy": request.group_by.as_str(),
+            "columns": QUANTITY_COLUMNS,
+            "rows": rows,
+            "totals": totals,
             "created": created,
         })
     })

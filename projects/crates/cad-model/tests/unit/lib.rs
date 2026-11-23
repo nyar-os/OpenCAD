@@ -83,6 +83,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "title-block",
         "polyline-smooth",
         "diff",
+        "quantity-table",
     ] {
         assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
     }
@@ -5167,7 +5168,7 @@ fn stats_group_length_and_area_by_layer() {
     add_circle(handle, DEFAULT_LAYER, [10.0, 10.0], 2.0).expect("circle");
     add_text(handle, DIMENSION_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
 
-    let summary = stats(handle).expect("stats");
+    let summary = stats(handle, StatsGroup::Layer).expect("stats");
     assert_eq!(summary["units"], json!("mm"));
     assert_eq!(summary["revision"], json!(6));
     assert_eq!(summary["totals"]["entities"], json!(4));
@@ -5185,6 +5186,155 @@ fn stats_group_length_and_area_by_layer() {
     assert_eq!(dimensions["length"], json!(0.0));
     assert!((summary["totals"]["area"].as_f64().expect("total area") - (16.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-9);
     close(handle).expect("close");
+}
+
+#[test]
+fn stats_groups_entities_by_type_colour_and_linetype() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", Some("#ff0000")).expect("layer");
+    add_line(handle, "Walls", [0.0, 0.0], [3.0, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [10.0, 10.0], 2.0).expect("circle");
+    add_text(handle, DIMENSION_LAYER, [0.0, 0.0], 2.0, "note").expect("text");
+
+    let by_type = stats(handle, StatsGroup::Type).expect("type stats");
+    assert_eq!(by_type["groupBy"], json!("type"));
+    let groups = by_type["groups"].as_array().expect("groups");
+    assert_eq!(
+        groups.iter().map(|group| group["key"].as_str().unwrap_or_default()).collect::<Vec<_>>(),
+        vec!["circle", "line", "text"],
+        "type groups are sorted by name"
+    );
+    assert_eq!(groups[1]["entityCount"], json!(1));
+    assert_eq!(groups[1]["length"], json!(3.0));
+    assert!(groups[1]["label"].is_string());
+
+    let by_colour = stats(handle, StatsGroup::Color).expect("colour stats");
+    let colours = by_colour["groups"].as_array().expect("colour groups");
+    assert_eq!(
+        colours.iter().map(|group| group["key"].as_str().unwrap_or_default()).collect::<Vec<_>>(),
+        vec!["#0b7285", "#d0d7de", "#ff0000"]
+    );
+    assert_eq!(colours[2]["entityCount"], json!(1));
+    assert_eq!(colours[2]["length"], json!(3.0));
+
+    let by_linetype = stats(handle, StatsGroup::Linetype).expect("linetype stats");
+    let linetypes = by_linetype["groups"].as_array().expect("linetype groups");
+    assert_eq!(linetypes.len(), 1, "every default layer uses `continuous`");
+    assert_eq!(linetypes[0]["key"], json!("continuous"));
+    assert_eq!(linetypes[0]["entityCount"], json!(3));
+    assert_eq!(by_linetype["layers"].as_array().map(Vec::len), Some(3), "the per-layer view stays available");
+    close(handle).expect("close");
+}
+
+#[test]
+fn quantity_table_draws_a_framed_table_with_totals() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Walls", Some("#ff0000")).expect("layer");
+    add_line(handle, "Walls", [0.0, 0.0], [3.0, 0.0]).expect("line");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], true).expect("square");
+    let before = summary(handle).expect("summary")["revision"].as_u64().unwrap_or_default();
+
+    let result = add_quantity_table(handle, QuantityTableRequest::default()).expect("table");
+    assert_eq!(result["groupBy"], json!("layer"));
+    assert_eq!(result["revision"], json!(before + 1));
+    let rows = result["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3, "two default layers plus Walls");
+    assert_eq!(rows[0]["label"], json!("0"));
+    assert_eq!(rows[0]["entityCount"], json!(1));
+    assert_eq!(rows[0]["length"], json!(16.0));
+    assert_eq!(rows[1]["entityCount"], json!(0), "the empty dimensions layer is listed");
+    assert_eq!(rows[2]["label"], json!("Walls"));
+    assert_eq!(rows[2]["length"], json!(3.0));
+    assert_eq!(result["totals"]["entities"], json!(2), "the table never counts itself");
+    assert_eq!(result["totals"]["length"], json!(19.0));
+    assert_eq!(result["totals"]["area"], json!(16.0));
+    let entities = result["created"].as_array().expect("created");
+    assert_eq!(entities[0]["kind"]["type"], json!("line"));
+    assert_eq!(entities[0]["kind"]["from"], json!([0.0, 0.0]));
+    assert_eq!(entities[0]["kind"]["to"], json!([210.0, 0.0]), "width is 60 * textHeight");
+    assert_eq!(entities[1]["kind"]["to"], json!([210.0, 52.5]));
+    assert!(entities.iter().all(|entity| entity["layer"] == json!("quantity")));
+    let contents = entities.iter().filter_map(|entity| entity["kind"]["content"].as_str()).collect::<Vec<_>>();
+    assert!(contents.contains(&"Quantity take-off"));
+    assert!(contents.contains(&"Group"));
+    assert!(contents.contains(&"Total"));
+    assert!(contents.contains(&"19"));
+    close(handle).expect("close");
+}
+
+#[test]
+fn quantity_table_honours_origin_caption_and_type_grouping() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [2.0, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0).expect("circle");
+    let request = QuantityTableRequest {
+        layer: Some("schedule".to_string()),
+        group_by: StatsGroup::Type,
+        origin: Some([100.0, 200.0]),
+        text_height: Some(2.0),
+        title: Some("Bill of quantities".to_string()),
+    };
+    let result = add_quantity_table(handle, request).expect("table");
+    assert_eq!(result["groupBy"], json!("type"));
+    assert_eq!(result["columns"], json!(["Group", "Count", "Length", "Area"]));
+    let rows = result["rows"].as_array().expect("rows");
+    assert_eq!(rows.iter().map(|row| row["label"].as_str().unwrap_or_default()).collect::<Vec<_>>(), vec!["circle", "line"]);
+    let entities = result["created"].as_array().expect("created");
+    assert_eq!(entities[0]["kind"]["from"], json!([100.0, 200.0]));
+    assert_eq!(entities[0]["kind"]["to"], json!([220.0, 200.0]), "width is 60 * textHeight");
+    assert!(entities.iter().all(|entity| entity["layer"] == json!("schedule")));
+    let contents = entities.iter().filter_map(|entity| entity["kind"]["content"].as_str()).collect::<Vec<_>>();
+    assert!(contents.contains(&"Bill of quantities"));
+    assert!(contents.contains(&"circle"));
+    close(handle).expect("close");
+}
+
+#[test]
+fn quantity_table_rejects_bad_requests_and_protected_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+
+    let bad_height = add_quantity_table(handle, QuantityTableRequest { text_height: Some(0.0), ..QuantityTableRequest::default() })
+        .expect_err("zero height");
+    assert_eq!(bad_height.code, "session/argument-invalid");
+    let bad_origin = add_quantity_table(handle, QuantityTableRequest { origin: Some([f64::NAN, 0.0]), ..QuantityTableRequest::default() })
+        .expect_err("non-finite origin");
+    assert_eq!(bad_origin.code, "session/argument-invalid");
+
+    add_layer(handle, "locked", None).expect("layer");
+    update_layer(handle, "locked", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    let locked = add_quantity_table(handle, QuantityTableRequest { layer: Some("locked".to_string()), ..QuantityTableRequest::default() })
+        .expect_err("locked layer");
+    assert_eq!(locked.code, "drawing/layer-locked");
+
+    add_layer(handle, "frozen", None).expect("layer");
+    update_layer(handle, "frozen", LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    let frozen = add_quantity_table(handle, QuantityTableRequest { layer: Some("frozen".to_string()), ..QuantityTableRequest::default() })
+        .expect_err("frozen layer");
+    assert_eq!(frozen.code, "drawing/layer-frozen");
+    close(handle).expect("close");
+}
+
+#[test]
+fn quantity_table_is_deterministic() {
+    let run = || {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [3.0, 0.0]).expect("line");
+        add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0).expect("circle");
+        let result = add_quantity_table(handle, QuantityTableRequest::default()).expect("table");
+        close(handle).expect("close");
+        result
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first["created"], second["created"]);
+    assert_eq!(first["rows"], second["rows"]);
+    assert_eq!(first["totals"], second["totals"]);
 }
 
 #[test]
