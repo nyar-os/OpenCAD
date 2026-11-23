@@ -28,8 +28,8 @@ use std::{
 
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
-    DrawOrderAction, ExtendSide, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis, OverkillRequest, ServiceError,
-    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
+    OverkillRequest, ServiceError, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -923,6 +923,50 @@ fn drawing_overkill(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Fills one hatch with pattern lines clipped to its boundary.
+#[function]
+fn drawing_hatch_pattern(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = open_cad_drawing::hatch_pattern(
+        handle,
+        HatchPatternRequest {
+            id: request_string(&request, "id").map_err(Error::new)?,
+            angle: optional_number(&request, "angle"),
+            spacing: optional_number(&request, "spacing"),
+            cross: request.get("cross").and_then(Value::as_bool),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Adds a sheet frame and a title block filled from the drawing properties.
+#[function]
+fn drawing_title_block(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = open_cad_drawing::add_title_block(
+        handle,
+        TitleBlockRequest {
+            layer: optional_string(&request, "layer"),
+            width: optional_number(&request, "width"),
+            height: optional_number(&request, "height"),
+            margin: optional_number(&request, "margin"),
+            text_height: optional_number(&request, "textHeight"),
+            title: optional_string(&request, "title"),
+            number: optional_string(&request, "number"),
+            revision: optional_string(&request, "revision"),
+            scale: optional_string(&request, "scale"),
+            date: optional_string(&request, "date"),
+            author: optional_string(&request, "author"),
+            sheet: optional_string(&request, "sheet"),
+        },
+    )
+    .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
 /// Summarises entity count, path length and enclosed area per layer.
 #[function]
 fn drawing_stats(ctx: CallContext) -> Result<JsValue> {
@@ -1055,6 +1099,10 @@ fn request_u32(request: &Value, key: &str) -> std::result::Result<u32, String> {
 
 fn request_string(request: &Value, key: &str) -> std::result::Result<String, String> {
     request.get(key).and_then(Value::as_str).map(str::to_string).ok_or_else(|| format!("session/argument-invalid: `{key}` must be a string"))
+}
+
+fn optional_string(request: &Value, key: &str) -> Option<String> {
+    request.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 fn points_from_value(value: &Value) -> std::result::Result<Vec<[f64; 2]>, String> {
@@ -2477,6 +2525,8 @@ register_module![
     drawing_align,
     drawing_distribute,
     drawing_overkill,
+    drawing_hatch_pattern,
+    drawing_title_block,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

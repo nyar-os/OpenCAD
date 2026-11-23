@@ -943,6 +943,60 @@ export interface OverkillResult {
     readonly after: number;
 }
 
+/** Arguments of `hatchPattern()`. */
+export interface HatchPatternRequest {
+    /** Hatch entity whose boundary clips the pattern. */
+    readonly id: EntityId;
+    /** Pattern direction in degrees; defaults to 0. */
+    readonly angle?: number;
+    /** Perpendicular distance between adjacent pattern lines; defaults to 5. */
+    readonly spacing?: number;
+    /** Add a second family perpendicular to the first; defaults to false. */
+    readonly cross?: boolean;
+}
+
+/** Result of `hatchPattern()`. `created` holds the new line entities. */
+export interface HatchPatternResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+}
+
+/** Arguments of `titleBlock()`. */
+export interface TitleBlockRequest {
+    /** Layer that carries the frame and block; defaults to `titleblock`. */
+    readonly layer?: LayerId;
+    /** Sheet width; defaults to the A3 landscape width. */
+    readonly width?: number;
+    /** Sheet height; defaults to the A3 landscape height. */
+    readonly height?: number;
+    /** Frame inset from the sheet edge; defaults to 10. */
+    readonly margin?: number;
+    /** Height of the block text; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Title override; defaults to the drawing title. */
+    readonly title?: string;
+    /** Drawing number override; defaults to the drawing id. */
+    readonly number?: string;
+    /** Revision label override; defaults to the drawing revision. */
+    readonly revision?: string;
+    /** Scale label; defaults to `1:1`. */
+    readonly scale?: string;
+    /** Date label; defaults to an empty cell. */
+    readonly date?: string;
+    /** Author override; defaults to the drawing author. */
+    readonly author?: string;
+    /** Sheet label; defaults to `1`. */
+    readonly sheet?: string;
+}
+
+/** Result of `titleBlock()`. `created` holds the grid and text entities. */
+export interface TitleBlockResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+}
+
 /** Arguments of `copy()`. */
 export interface CopyRequest {
     readonly ids: readonly EntityId[];

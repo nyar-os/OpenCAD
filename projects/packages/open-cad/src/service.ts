@@ -67,6 +67,8 @@ import type {
     GroupDeletion,
     GroupList,
     GroupMembersRequest,
+    HatchPatternRequest,
+    HatchPatternResult,
     HistoryResult,
     ImportDxfRequest,
     ImportDxfResult,
@@ -106,6 +108,8 @@ import type {
     TextStyleList,
     TextMatchResult,
     TextReplaceResult,
+    TitleBlockRequest,
+    TitleBlockResult,
     TransformRequest,
     TransformResult,
     TrimResult,
@@ -945,6 +949,39 @@ export function overkill(handle: number, request: OverkillRequest): OverkillResu
         binding('drawing.overkill').drawing_overkill(
             handle,
             JSON.stringify({ tolerance: request.tolerance, mergeOverlapping: request.mergeOverlapping }),
+        ),
+    );
+}
+
+/** Fills one hatch with pattern lines clipped to its boundary. */
+export function hatchPattern(handle: number, request: HatchPatternRequest): HatchPatternResult {
+    return decode<HatchPatternResult>(() =>
+        binding('drawing.hatchPattern').drawing_hatch_pattern(
+            handle,
+            JSON.stringify({ id: request.id, angle: request.angle, spacing: request.spacing, cross: request.cross }),
+        ),
+    );
+}
+
+/** Adds a sheet frame and a title block filled from the drawing properties. */
+export function titleBlock(handle: number, request: TitleBlockRequest): TitleBlockResult {
+    return decode<TitleBlockResult>(() =>
+        binding('drawing.titleBlock').drawing_title_block(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                width: request.width,
+                height: request.height,
+                margin: request.margin,
+                textHeight: request.textHeight,
+                title: request.title,
+                number: request.number,
+                revision: request.revision,
+                scale: request.scale,
+                date: request.date,
+                author: request.author,
+                sheet: request.sheet,
+            }),
         ),
     );
 }

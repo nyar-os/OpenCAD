@@ -68,6 +68,8 @@ import type {
     FindTextRequest,
     GroupDeletion,
     GroupMembersRequest,
+    HatchPatternRequest,
+    HatchPatternResult,
     HistoryMode,
     HistoryResult,
     ImportLoss,
@@ -103,6 +105,8 @@ import type {
     TextStyleDeletion,
     TextMatchResult,
     TextReplaceResult,
+    TitleBlockRequest,
+    TitleBlockResult,
     TransformRequest,
     TransformResult,
     TrimResult,
@@ -854,6 +858,29 @@ export class DrawingDocument {
      */
     overkill(request: OverkillRequest = {}): OverkillResult {
         return this.edit((handle) => service.overkill(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Fills one hatch with pattern line segments clipped to its boundary.
+     * The pattern lands on the hatch layer as real line entities, so every
+     * exporter carries it. `angle` defaults to 0, `spacing` to 5 and `cross`
+     * to false.
+     */
+    hatchPattern(request: HatchPatternRequest): HatchPatternResult {
+        return this.edit((handle) => service.hatchPattern(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Adds a sheet frame and a title block filled from the drawing properties.
+     * Defaults to an A3 landscape sheet, a 10-unit margin and a `titleblock`
+     * layer; every field can be overridden.
+     */
+    titleBlock(request: TitleBlockRequest = {}): TitleBlockResult {
+        return this.edit((handle) => service.titleBlock(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

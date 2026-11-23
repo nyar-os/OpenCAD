@@ -92,6 +92,8 @@ export interface NativeBinding {
     drawing_align(handle: number, requestJson: string): string;
     drawing_distribute(handle: number, requestJson: string): string;
     drawing_overkill(handle: number, requestJson: string): string;
+    drawing_hatch_pattern(handle: number, requestJson: string): string;
+    drawing_title_block(handle: number, requestJson: string): string;
     drawing_fillet(handle: number, requestJson: string): string;
     drawing_chamfer(handle: number, requestJson: string): string;
     drawing_measure(handle: number, sheet?: string): string;
