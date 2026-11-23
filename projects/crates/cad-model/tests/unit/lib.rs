@@ -79,6 +79,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "text-style",
         "select",
         "ucs",
+        "hatch-pattern",
     ] {
         assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
     }
@@ -5368,3 +5369,132 @@ fn dxf_r12_omits_layer_flags_r12_cannot_write() {
     assert!(!codes.contains(&"dxf/r12-plottable"), "{codes:?}");
     close(empty_handle).expect("close");
 }
+
+fn created_text(created: &Value) -> Vec<String> {
+    created
+        .as_array()
+        .expect("created")
+        .iter()
+        .filter(|entity| entity["kind"]["type"] == json!("text"))
+        .filter_map(|entity| entity["kind"]["content"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn hatch_pattern_fills_a_closed_boundary_with_lines() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Hatch", Some("#00ff00")).expect("layer");
+    let hatch =
+        add_hatch(handle, "Hatch", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], Some("ANSI31".to_string())).expect("hatch");
+    let id = hatch["entity"]["id"].as_str().expect("id").to_string();
+
+    let result = hatch_pattern(handle, HatchPatternRequest { id, angle: None, spacing: None, cross: None }).expect("hatch pattern");
+    assert_eq!(result["revision"], json!(4), "one fill is one revision");
+    let lines = result["created"].as_array().expect("created");
+    assert_eq!(lines.len(), 1, "a 10x10 boundary with spacing 5 keeps one interior scanline");
+    for line in lines {
+        assert_eq!(line["kind"]["type"], json!("line"));
+        assert_eq!(line["layer"], json!("Hatch"), "the pattern stays on the hatch layer");
+        assert_eq!(line["kind"]["from"][1], line["kind"]["to"][1], "the default angle keeps pattern lines horizontal");
+    }
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 2, "the hatch boundary survives");
+    assert_eq!(
+        drawing.entities[0].kind,
+        EntityKind::Hatch { points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], pattern: "ANSI31".to_string() }
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn hatch_pattern_honours_angle_spacing_and_cross() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Hatch", Some("#00ff00")).expect("layer");
+    let hatch =
+        add_hatch(handle, "Hatch", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], Some("ANSI31".to_string())).expect("hatch");
+    let id = hatch["entity"]["id"].as_str().expect("id").to_string();
+
+    let spaced =
+        hatch_pattern(handle, HatchPatternRequest { id: id.clone(), angle: Some(0.0), spacing: Some(2.5), cross: None }).expect("spacing 2.5");
+    assert_eq!(spaced["created"].as_array().map(Vec::len), Some(3), "three interior scanlines at spacing 2.5");
+
+    let crossed = hatch_pattern(handle, HatchPatternRequest { id, angle: Some(0.0), spacing: Some(5.0), cross: Some(true) }).expect("cross");
+    let crossed_lines = crossed["created"].as_array().expect("created");
+    assert_eq!(crossed_lines.len(), 2, "cross adds a perpendicular family");
+    let horizontal = crossed_lines.iter().filter(|line| line["kind"]["from"][1] == line["kind"]["to"][1]).count();
+    assert_eq!(horizontal, 1, "one horizontal pattern line");
+    assert_eq!(crossed_lines.len() - horizontal, 1, "one vertical pattern line");
+    close(handle).expect("close");
+}
+
+#[test]
+fn hatch_pattern_rejects_bad_requests_and_protected_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Hatch", Some("#00ff00")).expect("layer");
+    let hatch =
+        add_hatch(handle, "Hatch", vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], Some("ANSI31".to_string())).expect("hatch");
+    let id = hatch["entity"]["id"].as_str().expect("id").to_string();
+
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: id.clone(), angle: Some(0.0), spacing: Some(0.0), cross: None })
+            .expect_err("zero spacing")
+            .code,
+        "hatch/invalid-spacing"
+    );
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: id.clone(), angle: Some(f64::INFINITY), spacing: None, cross: None })
+            .expect_err("infinite angle")
+            .code,
+        "hatch/invalid-angle"
+    );
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: id.clone(), angle: None, spacing: Some(1e-9), cross: None })
+            .expect_err("too fine")
+            .code,
+        "hatch/spacing-too-fine"
+    );
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: "entity-99".to_string(), angle: None, spacing: None, cross: None })
+            .expect_err("unknown hatch")
+            .code,
+        "object/not-found"
+    );
+    let line = add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    let line_id = line["entity"]["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: line_id, angle: None, spacing: None, cross: None }).expect_err("not a hatch").code,
+        "hatch/unsupported-entity"
+    );
+
+    let solid = add_hatch(handle, "Hatch", vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], None).expect("solid hatch");
+    let solid_id = solid["entity"]["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: solid_id, angle: None, spacing: None, cross: None }).expect_err("solid pattern").code,
+        "hatch/solid-pattern"
+    );
+
+    let degenerate =
+        add_hatch(handle, "Hatch", vec![[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]], Some("ANSI31".to_string())).expect("degenerate hatch");
+    let degenerate_id = degenerate["entity"]["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: degenerate_id, angle: None, spacing: None, cross: None }).expect_err("zero area").code,
+        "hatch/degenerate-boundary"
+    );
+
+    update_layer(handle, "Hatch", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id: id.clone(), angle: None, spacing: None, cross: None }).expect_err("locked layer").code,
+        "drawing/layer-locked"
+    );
+    update_layer(handle, "Hatch", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(
+        hatch_pattern(handle, HatchPatternRequest { id, angle: None, spacing: None, cross: None }).expect_err("frozen layer").code,
+        "drawing/layer-frozen"
+    );
+    assert_eq!(drawing_of(handle).entities.len(), 4, "refused requests never add entities");
+    close(handle).expect("close");
+}
+

@@ -117,7 +117,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
-/// overkill and measure); constraint solving and a 3D kernel stay unsupported.
+/// overkill, hatch-pattern and measure); constraint solving and a
+/// 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -205,13 +206,14 @@ pub fn capabilities() -> Value {
                 "snap",
                 "linetype",
                 "ucs",
+                "hatch-pattern",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
                 | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
-                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" => "supported",
+                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -6653,6 +6655,143 @@ pub fn import_dxf(source: &Path, title: Option<String>) -> Result<Value, Service
             "drawing": session.summary(),
             "imported": imported,
             "losses": losses,
+        })
+    })
+}
+
+/// Arguments of [`hatch_pattern`].
+#[derive(Debug, Clone)]
+pub struct HatchPatternRequest {
+    /// Identifier of the hatch entity to fill.
+    pub id: String,
+    /// Direction of the pattern lines in degrees; defaults to `0`.
+    pub angle: Option<f64>,
+    /// Perpendicular distance between adjacent pattern lines; defaults to `5`.
+    pub spacing: Option<f64>,
+    /// Adds a second family perpendicular to the first; defaults to `false`.
+    pub cross: Option<bool>,
+}
+
+/// Maximum number of scanlines one pattern family may emit.
+const HATCH_PATTERN_LINE_LIMIT: u64 = 100_000;
+
+/// One clipped pattern segment as its two world-space endpoints.
+type PatternSpan = ([f64; 2], [f64; 2]);
+
+/// Scanline-fills one closed polygon with parallel segments at `angle` degrees.
+///
+/// The boundary is rotated by `-angle` so the pattern lines become horizontal,
+/// then the scanline `v = k * spacing` for integer `k` (anchored to the world
+/// origin) crosses each edge under a half-open rule that counts a shared
+/// vertex exactly once. Levels within `1e-9` of the boundary are skipped, so
+/// the boundary is not traced a second time and the rotation error of a
+/// cardinal angle cannot add a coincident line. Crossings are sorted with a
+/// total order and paired by the even-odd rule; every span longer than
+/// `1e-12` is rotated back into world coordinates.
+fn pattern_spans(points: &[[f64; 2]], angle: f64, spacing: f64) -> Result<Vec<PatternSpan>, ServiceError> {
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let rotated: Vec<[f64; 2]> = points.iter().map(|point| [point[0] * cos + point[1] * sin, -point[0] * sin + point[1] * cos]).collect();
+    let min_v = rotated.iter().map(|point| point[1]).fold(f64::INFINITY, f64::min);
+    let max_v = rotated.iter().map(|point| point[1]).fold(f64::NEG_INFINITY, f64::max);
+    let epsilon = 1e-9 * (max_v - min_v).abs().max(spacing);
+    let first = (min_v / spacing).floor();
+    let last = (max_v / spacing).ceil();
+    let count = (last - first) as u64;
+    if count > HATCH_PATTERN_LINE_LIMIT {
+        return Err(ServiceError::new(
+            "hatch/spacing-too-fine",
+            format!("the pattern needs more than {HATCH_PATTERN_LINE_LIMIT} lines; increase `spacing`"),
+        ));
+    }
+    let mut spans = Vec::new();
+    for step in 0..=count {
+        let level = (first + step as f64) * spacing;
+        if level <= min_v + epsilon || level >= max_v - epsilon {
+            continue;
+        }
+        let mut crossings: Vec<f64> = Vec::new();
+        for index in 0..rotated.len() {
+            let [u0, v0] = rotated[index];
+            let [u1, v1] = rotated[(index + 1) % rotated.len()];
+            if (v0 <= level && v1 > level) || (v1 <= level && v0 > level) {
+                crossings.push(u0 + (level - v0) * (u1 - u0) / (v1 - v0));
+            }
+        }
+        crossings.sort_by(f64::total_cmp);
+        for pair in crossings.chunks(2) {
+            if pair.len() == 2 && pair[1] - pair[0] > 1e-12 {
+                spans.push((
+                    [pair[0] * cos - level * sin, pair[0] * sin + level * cos],
+                    [pair[1] * cos - level * sin, pair[1] * sin + level * cos],
+                ));
+            }
+        }
+    }
+    Ok(spans)
+}
+
+/// Fills one hatch with pattern line segments clipped to its boundary.
+///
+/// The hatch keeps its boundary and pattern name; this operation adds the
+/// pattern as real `line` entities on the hatch's layer, so every exporter
+/// carries the fill. Lines are anchored to the world origin: the same request
+/// on the same boundary always yields the same segments. `cross` adds a second
+/// family perpendicular to the first. The edit is one history step and one
+/// revision, and the response carries `{ revision, drawing, created }`.
+///
+/// An unknown id reports `object/not-found`; a non-hatch entity reports
+/// `hatch/unsupported-entity`; a `SOLID` fill reports `hatch/solid-pattern`;
+/// non-positive or non-finite spacing reports `hatch/invalid-spacing`; a
+/// non-finite angle reports `hatch/invalid-angle`; a zero-area boundary reports
+/// `hatch/degenerate-boundary`; a pattern beyond the line budget reports
+/// `hatch/spacing-too-fine`; a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn hatch_pattern(handle: u64, request: HatchPatternRequest) -> Result<Value, ServiceError> {
+    let HatchPatternRequest { id, angle, spacing, cross } = request;
+    let angle = angle.unwrap_or(0.0);
+    if !angle.is_finite() {
+        return Err(ServiceError::new("hatch/invalid-angle", "`angle` must be finite"));
+    }
+    let spacing = spacing.unwrap_or(5.0);
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return Err(ServiceError::new("hatch/invalid-spacing", "`spacing` must be a positive finite number"));
+    }
+    let cross = cross.unwrap_or(false);
+    let created = store::edit(handle, |drawing| {
+        let index = entity_index(drawing, &id)?;
+        let (points, pattern, layer) = match &drawing.entities[index].kind {
+            EntityKind::Hatch { points, pattern } => (points.clone(), pattern.clone(), drawing.entities[index].layer.clone()),
+            other => {
+                return Err(ServiceError::new("hatch/unsupported-entity", format!("entity `{id}` is a {}, not a hatch", kind_name(other))));
+            }
+        };
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if pattern.eq_ignore_ascii_case("SOLID") {
+            return Err(ServiceError::new("hatch/solid-pattern", format!("hatch `{id}` is a solid fill; pattern lines need a named pattern")));
+        }
+        if polyline_area(&points).abs() <= 1e-12 {
+            return Err(ServiceError::new("hatch/degenerate-boundary", format!("hatch `{id}` has a zero-area boundary")));
+        }
+        let mut spans = pattern_spans(&points, angle, spacing)?;
+        if cross {
+            spans.extend(pattern_spans(&points, angle + 90.0, spacing)?);
+        }
+        let mut created = Vec::with_capacity(spans.len());
+        for (from, to) in spans {
+            let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind: EntityKind::Line { from, to } };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok(created)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": created,
         })
     })
 }
