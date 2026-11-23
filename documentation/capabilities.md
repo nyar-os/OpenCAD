@@ -35,9 +35,10 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
-`distribute`, `overkill`, `hatch-pattern`, `title-block`, `measure`,
-`measure-entity`, `measure-points`, `stats`, `dimension-style`, `text-style`,
-`text-search`, `group`, `select`, `properties`, `snap`, `linetype`, `ucs`.
+`distribute`, `overkill`, `hatch-pattern`, `title-block`, `polyline-smooth`,
+`diff`, `measure`, `measure-entity`, `measure-points`, `stats`,
+`dimension-style`, `text-style`, `text-search`, `group`, `select`, `properties`,
+`snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
 
 ## DXF import subset
@@ -508,6 +509,63 @@ overrides on a custom layer (`title_block_honours_overrides_and_a_custom_sheet`)
 and the invalid-dimension, invalid-sheet, long-override, locked and frozen
 refusals (`title_block_rejects_bad_sheets_and_protected_layers`).
 
+## Polyline smoothing
+
+`smoothPolyline(request)` rounds the corners of one `polyline` with Chaikin
+corner cutting. Each pass replaces every segment by the point at `ratio` and
+the point at `1 - ratio` along it, so an open chain keeps its first and last
+vertex and a closed chain keeps its closed flag and never duplicates the first
+vertex. The entity keeps its id, layer and draw-order position, and the edit is
+one history step and one revision.
+
+`iterations` defaults to `2` and must be within `1..=8`; `ratio` defaults to
+`0.25` and must be strictly between `0` and `0.5`. The response carries
+`{ revision, drawing, entity }`.
+
+| Code | Cause |
+| :--- | :--- |
+| `polyline/unsupported-entity` | The id names an entity that is not a polyline. |
+| `polyline/degenerate` | The chain has fewer than three vertices. |
+| `polyline/invalid-iterations` | `iterations` is outside `1..=8`. |
+| `polyline/invalid-ratio` | `ratio` is not finite or outside the open interval `(0, 0.5)`. |
+| `polyline/vertex-limit` | A pass would exceed 100,000 vertices. |
+| `object/not-found` | The id does not name an entity. |
+| `drawing/layer-locked` | The polyline layer is locked. |
+| `drawing/layer-frozen` | The polyline layer is frozen. |
+
+The model tests cover the open chain (`smooth_polyline_rounds_an_open_chain_and_keeps_its_identity`),
+the closed chain without a duplicated vertex
+(`smooth_polyline_keeps_a_closed_chain_closed_without_duplicating_the_first_vertex`),
+every refusal (`smooth_polyline_rejects_bad_requests_and_protected_layers`) and
+the single undoable history step (`smooth_polyline_is_one_undoable_history_step`).
+
+## Drawing diff
+
+`diff(left, right)` reads two `.ocad` projects without opening a handle and
+compares them by entity id and layer id. Added entries exist only in the right
+project, removed entries only in the left, and changed entries carry the
+differing `fields` plus both versions. Drawing-level `metadata` covers the
+title, the unit and the declared properties. Each list stays in document order,
+so the report is deterministic.
+
+The report carries `{ identical, left, right, summary, entities, layers,
+metadata }`, where `summary` counts entity, layer and metadata differences and
+`left`/`right` describe each file. `identical` is true when every count is zero.
+Revisions, dimension and text styles, line types, groups, layouts, draw order
+and `nextEntity` are described per side but are not compared.
+
+| Code | Cause |
+| :--- | :--- |
+| `drawing/not-found` | A file does not exist. |
+| `drawing/io-error` | A file cannot be read. |
+| `format/invalid` | A file is not a version-1 OpenCAD project. |
+| `format/unsupported-version` | A file declares another version. |
+
+The model tests cover identical projects (`diff_reports_identical_projects`),
+added, removed, changed and metadata entries
+(`diff_lists_added_removed_changed_and_metadata_entries`) and the unreadable and
+malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -556,6 +614,13 @@ refusals (`title_block_rejects_bad_sheets_and_protected_layers`).
 - Title blocks are plain line and text entities. They carry no attributes,
   fields, automatic date updates or reusable block definition, and they are not
   linked to the drawing properties after creation.
+- Polyline smoothing is Chaikin corner cutting on a straight-segment polyline.
+  It does not convert a polyline into a spline, fit a curve through the original
+  vertices, simplify a chain, close an open chain or smooth arcs, ellipses,
+  splines or hatches.
+- Drawing diff matches entities and layers by their stable id only. It does not
+  compare geometry by tolerance, styles, line types, groups, layouts, draw order
+  or revisions, and it does not write a merged drawing.
 - Valid colours are `#rrggbb`; lineweights are `0`–`10` mm; the line-type
   pattern holds at most 12 finite positive entries.
 - The model does not enforce arbitrary user metadata; only the declared

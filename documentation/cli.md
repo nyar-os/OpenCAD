@@ -17,6 +17,7 @@ standard output; a domain failure prints its stable error code and exits `1`
 | `create` | `--out <file>` (required), `--title <text>`, `--units mm\|inch`, `--template <name>`, `--overwrite` | Saves a new drawing. `--template` is accepted but no template is loaded. Refuses an existing file unless `--overwrite`. |
 | `open <file>` | — | Prints id, revision, entity count, unit, title and layer names. |
 | `inspect <file>` | `--checks <a,b,...>` | Runs the selected checks; defaults to `units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour`. Exits `1` when any error is found. |
+| `diff <left> <right>` | — | Compares two project files by entity and layer id and prints the counts and side-by-side differences. Exits `1` when the drawings differ. |
 | `export <file>` | `--format dxf\|dxf-r12\|obj\|step\|stl\|svg\|pdf` (required), `--out <file>` (required) | Writes the format and prints its losses. |
 | `undo <file>` | — | Restores the previous snapshot; persists through the sidecar history. |
 | `redo <file>` | — | Reapplies the next snapshot. |
@@ -65,11 +66,13 @@ or start point.
 | `polyline insert-vertex` | `--id <id>`, `--index n`, `--at x,y` |
 | `polyline remove-vertex` | `--id <id>`, `--index n` |
 | `polyline move-vertex` | `--id <id>`, `--index n`, `--at x,y` |
+| `polyline smooth` | `--id <id>`, `--iterations n` (default 2, 1-8), `--ratio n` (default 0.25, between 0 and 0.5) |
 
 ```bash
 open-cad polyline insert-vertex plan.ocad --id entity-7 --index 2 --at 240,120
 open-cad polyline move-vertex plan.ocad --id entity-7 --index 0 --at 0,0
 open-cad polyline remove-vertex plan.ocad --id entity-7 --index 3
+open-cad polyline smooth plan.ocad --id entity-7 --iterations 3
 ```
 
 ## Edit, copy and transform
@@ -196,6 +199,33 @@ open-cad title-block plan.ocad --title "Pump skid" --number A-101 --revision C -
 open-cad title-block plan.ocad --layer Sheet --width 200 --height 150 --margin 8
 ```
 
+`polyline smooth` rounds the corners of one polyline with Chaikin corner
+cutting and saves the file in place. Each pass replaces every segment with the
+two points at `--ratio` and `1 - ratio` along it, so an open chain keeps its
+endpoints and a closed chain keeps its closed flag. The entity keeps its id and
+layer. `--iterations` defaults to `2` and accepts `1`-`8`; `--ratio` defaults to
+`0.25` and must lie strictly between `0` and `0.5`. A non-polyline reports
+`polyline/unsupported-entity`; a chain with fewer than three vertices reports
+`polyline/degenerate`; an out-of-range pass count or ratio reports
+`polyline/invalid-iterations` or `polyline/invalid-ratio`.
+
+## Comparing projects
+
+`diff <left> <right>` reads both project files without opening a handle and
+matches entities and layers by their stable id. It prints each side's path,
+revision and counts, then either `identical` or the number of added, removed and
+changed entities, changed layers and metadata fields. Entity changes list the
+differing `fields` (`layer`, `geometry`), layer changes list the differing
+style fields and metadata covers the title, unit and declared properties.
+Revisions, styles, line types, groups, layouts and draw order are not compared.
+The command exits `0` for identical drawings and `1` when anything differs;
+a missing or malformed file reports the same codes as `open`.
+
+```bash
+open-cad diff revision-a.ocad revision-b.ocad
+open-cad --json diff current.ocad baseline.ocad > diff.json
+```
+
 ## Measure and select
 
 | Command | Options |
@@ -279,4 +309,5 @@ open-cad text replace plan.ocad --pattern "TBD" --to "Studio"
 
 Domain errors print a stable code (for example `object/not-found`,
 `drawing/layer-locked`, `capability/not-implemented`). A missing file, flag or
-value exits `2`. A failed inspection exits `1`.
+value exits `2`. A failed inspection exits `1`, and so does `diff` when the two
+drawings differ.
