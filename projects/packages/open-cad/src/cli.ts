@@ -14,7 +14,7 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createCli, type CommandContext } from '@wae/commander';
+import { CliError, createCli, type CommandContext } from '@wae/commander';
 
 import { OpenCADError } from './errors.js';
 import { runGui } from './gui.js';
@@ -32,6 +32,7 @@ import type {
     DistributeAxis,
     DistributeResult,
     Drawing,
+    DrawingDiffResult,
     DrawingStats,
     Entity,
     EntityChange,
@@ -359,6 +360,16 @@ function describeTitleBlock(result: TitleBlockResult): string {
     return `title block added ${result.created.length} entities (${lines} lines) revision=${result.revision}`;
 }
 
+function describeDiff(result: DrawingDiffResult): string {
+    const side = (entry: DrawingDiffResult['left']): string =>
+        `${entry.path} (revision ${entry.revision}, ${entry.entities} entities, ${entry.layers} layers)`;
+    const summary = result.summary;
+    const changes = `+${summary.added} -${summary.removed} ~${summary.changed} entities, +${summary.layersAdded} -${summary.layersRemoved} ~${summary.layersChanged} layers, ${summary.metadata} metadata`;
+    return [`left: ${side(result.left)}`, `right: ${side(result.right)}`, result.identical ? 'identical' : `differences: ${changes}`].join(
+        '\n',
+    );
+}
+
 function describeLayerAssignment(result: EntityLayerChange): string {
     return result.moved
         ? `moved ${result.entity.id} from layer ${result.from} to ${result.to} revision=${result.revision}`
@@ -681,6 +692,19 @@ cli
             imported.close();
         }
     });
+
+cli.command('diff', 'cli.cmd.diff').actionCtx(async (options, _args, ctx) => {
+    const files = options._ ?? [];
+    const left = files[0];
+    const right = files[1];
+    if (left === undefined || right === undefined) {
+        ctx.stderr('`<left>` and `<right>` drawing files are required');
+        throw CliError.parseError('open-cad.cli.diff-arguments-required');
+    }
+    const result = await guard(ctx, () => app.diff({ left, right }));
+    ctx.emitResult(result, describeDiff(result));
+    return result.identical ? 0 : 1;
+});
 
 const entity = cli.command('entity', 'cli.cmd.entity');
 
@@ -1547,6 +1571,35 @@ polyline
         const opened = await guard(ctx, () => app.open({ path: file }));
         try {
             const entity = await guard(ctx, () => opened.updatePolyline({ entityId: id, moveAt: index, moveTo: at }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+polyline
+    .command('smooth', 'cli.cmd.polyline-smooth')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--iterations <number>', 'cli.opt.iterations')
+    .option('--ratio <number>', 'cli.opt.smooth-ratio')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.stderr('a drawing file is required');
+            throw CliError.parseError('open-cad.cli.file-required');
+        }
+        const id = text(options, 'id');
+        if (id === undefined) {
+            ctx.stderr('`--id <entity>` is required');
+            throw CliError.parseError('open-cad.cli.polyline-smooth-required');
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.smoothPolyline({ id, iterations: number(options, 'iterations'), ratio: number(options, 'ratio') }),
+            );
             const change = entityChange(opened, entity);
             ctx.emitResult(change, describeEdit(change, 'updated'));
             return 0;

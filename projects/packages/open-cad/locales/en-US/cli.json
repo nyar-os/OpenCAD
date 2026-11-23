@@ -10,6 +10,7 @@
             "inspect": "Run the declared checks on a drawing file",
             "export": "Project a drawing file into an exchange format",
             "import": "Create a new drawing from the ASCII DXF subset (LINE, ARC, ELLIPSE, POINT, INSERT, LWPOLYLINE, POLYLINE, SPLINE, LEADER, MLEADER, HATCH); approximations and skipped entities are reported as losses",
+            "diff": "Compare two project files at entity level and report added, removed and changed entities plus layer and metadata differences",
             "entity": "Edit the entities of an existing drawing file",
             "arc": "Add a circular arc to an existing drawing file",
             "arc-add": "Add a counter-clockwise arc and save the file in place",
@@ -21,6 +22,7 @@
             "polyline-insert": "Insert one vertex into a polyline and save the file",
             "polyline-remove": "Remove one vertex from a polyline and save the file",
         "polyline-move": "Move one vertex of a polyline and save the file",
+            "polyline-smooth": "Round polyline corners with Chaikin corner cutting and save the file",
             "transform": "Translate, rotate, scale or mirror a selection and save the file",
             "copy": "Duplicate entities with a cumulative offset and save the file",
             "array": "Duplicate entities into a rectangular or polar array and save the file",
@@ -241,11 +243,15 @@
             "revision": "Revision label; defaults to the drawing revision",
             "title-block-scale": "Scale label in the title block; defaults to 1:1",
             "date": "Date label; defaults to an empty cell",
-            "title-block-sheet": "Sheet label in the title block; defaults to 1"
+            "title-block-sheet": "Sheet label in the title block; defaults to 1",
+            "iterations": "Corner-cutting passes for polyline smoothing, 1-8; defaults to 2",
+            "smooth-ratio": "Fraction each smoothed corner is pulled toward a vertex, between 0 and 0.5; defaults to 0.25"
         },
         "error": {
             "hatch-pattern-required": "`--id <entity>` is required",
-            "title-block-invalid": "`--width`, `--height`, `--margin` and `--text-height` must be positive numbers"
+            "title-block-invalid": "`--width`, `--height`, `--margin` and `--text-height` must be positive numbers",
+            "diff-arguments-required": "`<left>` and `<right>` drawing files are required",
+            "polyline-smooth-required": "`--id <entity>` is required"
         }
     }
 }
