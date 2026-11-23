@@ -576,6 +576,46 @@ the closed chain without a duplicated vertex
 every refusal (`smooth_polyline_rejects_bad_requests_and_protected_layers`) and
 the single undoable history step (`smooth_polyline_is_one_undoable_history_step`).
 
+## Ellipse and spline editing
+
+`updateEllipse` and `updateSpline` edit one existing entity in place. The entity
+keeps its id and layer, the edit is one history step and the revision bumps
+exactly once.
+
+`updateEllipse` changes only the supplied fields of one `ellipse`: `rx`, `ry`,
+`rotation`, `startAngle` and `endAngle`. At least one field is required and every
+omitted field keeps its current value, so a full ellipse stays full unless the
+start or end parameter changes. `rx` and `ry` must be positive and finite and the
+angles finite; a full sweep is a start equal to the end or the default
+`0`-`360` pair, and the sweep always runs counter-clockwise from the start.
+
+`updateSpline` mirrors the polyline edit on the spline's fit points: a
+replacement `points` list, one `insertAt`/`insertPoint` pair, one `removeAt`
+index, one `moveAt`/`moveTo` pair or a new `closed` flag. Replacing the list
+cannot be combined with a single fit-point edit, one call edits at most one fit
+point, and `insertAt` accepts the current fit-point count to append. A spline
+always keeps at least two fit points, so a replacement list with fewer than two
+or a removal that would leave fewer is refused. The curve is the Catmull-Rom
+spline through its fit points, so inserting, moving or removing a fit point
+changes the drawn curve accordingly.
+
+Both operations report:
+
+| Code | Cause |
+| :--- | :--- |
+| `session/argument-invalid` | No field is supplied, `rx`/`ry` is not positive and finite, an angle is not finite, an index is outside the list, the insert and point (or move and point) arguments are unpaired, a replacement list has fewer than two fit points, or a removal would leave fewer. |
+| `object/unsupported` | The id names an entity that is not an ellipse (or not a spline). |
+| `object/not-found` | The id does not name an entity. |
+| `drawing/layer-locked` | The entity's layer is locked. |
+| `drawing/layer-frozen` | The entity's layer is frozen. |
+
+The model tests cover every ellipse field with untouched fields keeping their
+values, the spline closed flag, replacement lists, insertion, removal and moving
+at the boundaries, both wrong-kind refusals, unknown ids, locked and frozen
+layers, the single revision bump, the save/reopen round trip and determinism
+(`ellipse_fields_are_editable_in_place`,
+`spline_fit_points_and_closure_are_editable`).
+
 ## Drawing diff
 
 `diff(left, right)` reads two `.ocad` projects without opening a handle and

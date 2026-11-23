@@ -55,25 +55,48 @@ Coordinates are `x,y` in the drawing unit. Ids are comma-separated.
 answer `object/unsupported`. `entity move` applies to any entity with a centre
 or start point.
 
-## Arcs, ellipses and polylines
+## Arcs, ellipses, polylines and splines
 
 | Command | Options |
 | :--- | :--- |
 | `arc add` | `--center x,y`, `--radius n`, `--start deg`, `--end deg` (defaults to start + 360), `--layer` |
 | `arc update` | `--id <id>`, at least one of `--radius`, `--start`, `--end` |
 | `ellipse add` | `--center x,y`, `--rx n`, `--ry n`, `--rotation deg`, `--start deg`, `--end deg`, `--layer` |
+| `ellipse update` | `--id <id>`, at least one of `--rx`, `--ry`, `--rotation`, `--start`, `--end` |
 | `polyline update` | `--id <id>`, then `--points "x,y ..."` or `--closed on\|off` |
 | `polyline insert-vertex` | `--id <id>`, `--index n`, `--at x,y` |
 | `polyline remove-vertex` | `--id <id>`, `--index n` |
 | `polyline move-vertex` | `--id <id>`, `--index n`, `--at x,y` |
 | `polyline smooth` | `--id <id>`, `--iterations n` (default 2, 1-8), `--ratio n` (default 0.25, between 0 and 0.5) |
+| `spline update` | `--id <id>`, then `--points "x,y ..."` (at least two fit points) or `--closed on\|off` |
+| `spline insert-vertex` | `--id <id>`, `--index n`, `--at x,y` |
+| `spline remove-vertex` | `--id <id>`, `--index n` |
+| `spline move-vertex` | `--id <id>`, `--index n`, `--at x,y` |
 
 ```bash
 open-cad polyline insert-vertex plan.ocad --id entity-7 --index 2 --at 240,120
 open-cad polyline move-vertex plan.ocad --id entity-7 --index 0 --at 0,0
 open-cad polyline remove-vertex plan.ocad --id entity-7 --index 3
 open-cad polyline smooth plan.ocad --id entity-7 --iterations 3
+open-cad ellipse update plan.ocad --id entity-4 --rx 60 --rotation 15
+open-cad spline insert-vertex plan.ocad --id entity-9 --index 1 --at 40,25
 ```
+
+`ellipse update` changes only the supplied fields of one ellipse and saves the
+file. At least one of `--rx`, `--ry`, `--rotation`, `--start` and `--end` is
+required; omitted fields keep their value and the entity keeps its id and layer.
+A non-positive `--rx`/`--ry` or a non-finite value reports
+`session/argument-invalid`, and a non-ellipse reports `object/unsupported`.
+
+`spline update`, `spline insert-vertex`, `spline remove-vertex` and `spline
+move-vertex` edit the fit points of one spline exactly like their polyline
+counterparts and save the file. `--points` replaces the list, `--closed` sets the
+flag, `--index` is zero-based and insertion accepts the current fit-point count
+to append. A spline always keeps at least two fit points: a replacement list with
+fewer, or a removal that would leave fewer, reports `session/argument-invalid`.
+A non-spline reports `object/unsupported`; an unknown id reports
+`object/not-found`; a locked or frozen layer reports `drawing/layer-locked` or
+`drawing/layer-frozen`.
 
 ## Edit, copy and transform
 
