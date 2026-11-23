@@ -117,7 +117,7 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
-/// overkill, hatch-pattern and measure); constraint solving and a
+/// overkill, hatch-pattern, title-block and measure); constraint solving and a
 /// 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
@@ -207,13 +207,14 @@ pub fn capabilities() -> Value {
                 "linetype",
                 "ucs",
                 "hatch-pattern",
+                "title-block",
                 "constraints",
                 "kernel3d",
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
                 | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
-                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" => "supported",
+                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -6781,6 +6782,167 @@ pub fn hatch_pattern(handle: u64, request: HatchPatternRequest) -> Result<Value,
         let mut created = Vec::with_capacity(spans.len());
         for (from, to) in spans {
             let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind: EntityKind::Line { from, to } };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok(created)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": created,
+        })
+    })
+}
+
+/// Arguments of [`add_title_block`].
+#[derive(Debug, Clone, Default)]
+pub struct TitleBlockRequest {
+    /// Layer that carries the frame and block; created when missing.
+    pub layer: Option<String>,
+    /// Sheet width; defaults to the A3 landscape width.
+    pub width: Option<f64>,
+    /// Sheet height; defaults to the A3 landscape height.
+    pub height: Option<f64>,
+    /// Distance from the sheet edge to the drawing frame; defaults to `10`.
+    pub margin: Option<f64>,
+    /// Height of the block text; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Title override; defaults to the drawing title.
+    pub title: Option<String>,
+    /// Drawing number override; defaults to the drawing id.
+    pub number: Option<String>,
+    /// Revision label override; defaults to the drawing revision.
+    pub revision: Option<String>,
+    /// Scale label; defaults to `1:1`.
+    pub scale: Option<String>,
+    /// Date label; defaults to an empty cell.
+    pub date: Option<String>,
+    /// Author override; defaults to the drawing author.
+    pub author: Option<String>,
+    /// Sheet label; defaults to `1`.
+    pub sheet: Option<String>,
+}
+
+/// Default layer the generated title block is drawn on.
+const TITLE_BLOCK_LAYER: &str = "titleblock";
+
+/// Rows the generated block carries, top to bottom.
+const TITLE_BLOCK_ROWS: [&str; 7] = ["Title", "Number", "Revision", "Scale", "Date", "Author", "Sheet"];
+
+/// Adds a sheet frame and a title block filled from the drawing properties.
+///
+/// The sheet is a rectangle at the origin with the given `width` and `height`
+/// (A3 landscape by default). The operation draws an outer border, an inner
+/// frame inset by `margin`, and a seven-row block (Title, Number, Revision,
+/// Scale, Date, Author, Sheet) in the bottom-right corner of the frame. Field
+/// values default to the drawing title, id, revision, `1:1`, an empty date and
+/// the drawing author; an override wins, and an empty override renders a blank
+/// cell. Empty values emit no text entity, so only the grid stays. Everything
+/// lands on `layer`, created with a neutral colour when missing, as `line` and
+/// `text` entities with fresh deterministic ids. The edit is one history step
+/// and one revision, and the response carries `{ revision, drawing, created }`.
+///
+/// Non-finite, zero or negative sheet dimensions report
+/// `session/argument-invalid`; a sheet too small for the frame and block
+/// reports `titleblock/invalid-sheet`; an override longer than the property
+/// limit reports `session/argument-invalid`; a locked or frozen target layer
+/// reports `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn add_title_block(handle: u64, request: TitleBlockRequest) -> Result<Value, ServiceError> {
+    let width = request.width.unwrap_or(DEFAULT_LAYOUT_WIDTH);
+    let height = request.height.unwrap_or(DEFAULT_LAYOUT_HEIGHT);
+    let margin = request.margin.unwrap_or(10.0);
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !width.is_finite() || !height.is_finite() || !margin.is_finite() || !text_height.is_finite() {
+        return Err(argument("`width`, `height`, `margin` and `textHeight` must be finite"));
+    }
+    if width <= 0.0 || height <= 0.0 || margin <= 0.0 || text_height <= 0.0 {
+        return Err(argument("`width`, `height`, `margin` and `textHeight` must be positive"));
+    }
+    let overrides = [
+        request.title.map(|raw| property_value(&raw, "title")).transpose()?,
+        request.number.map(|raw| property_value(&raw, "number")).transpose()?,
+        request.revision.map(|raw| property_value(&raw, "revision")).transpose()?,
+        request.scale.map(|raw| property_value(&raw, "scale")).transpose()?,
+        request.date.map(|raw| property_value(&raw, "date")).transpose()?,
+        request.author.map(|raw| property_value(&raw, "author")).transpose()?,
+        request.sheet.map(|raw| property_value(&raw, "sheet")).transpose()?,
+    ];
+    let layer_name = request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
+    let row_height = text_height * 2.5;
+    let block_height = row_height * TITLE_BLOCK_ROWS.len() as f64;
+    let block_width = (width * 0.5).min(180.0);
+    let label_width = block_width * 0.3;
+    if block_width > width - 2.0 * margin || block_height > height - 2.0 * margin {
+        return Err(ServiceError::new("titleblock/invalid-sheet", "the sheet is too small for the frame and title block"));
+    }
+    let created = store::edit(handle, |drawing| {
+        let defaults = [
+            drawing.title.clone().unwrap_or_default(),
+            drawing.id.clone(),
+            drawing.revision.to_string(),
+            "1:1".to_string(),
+            String::new(),
+            drawing.properties.author.clone(),
+            "1".to_string(),
+        ];
+        let values: Vec<String> =
+            defaults.into_iter().zip(overrides).map(|(default, override_value)| override_value.unwrap_or(default)).collect();
+        let layer = layer_name.clone().unwrap_or_else(|| TITLE_BLOCK_LAYER.to_string());
+        if drawing.layer(&layer).is_none() {
+            drawing.layers.push(Layer {
+                id: layer.clone(),
+                name: layer.clone(),
+                color: "#d0d7de".to_string(),
+                visible: true,
+                locked: false,
+                frozen: false,
+                plottable: true,
+                linetype: CONTINUOUS_LINETYPE.to_string(),
+                lineweight: 0.0,
+            });
+        }
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        let mut kinds: Vec<EntityKind> = Vec::new();
+        kinds.extend_from_slice(&[
+            EntityKind::Line { from: [0.0, 0.0], to: [width, 0.0] },
+            EntityKind::Line { from: [width, 0.0], to: [width, height] },
+            EntityKind::Line { from: [width, height], to: [0.0, height] },
+            EntityKind::Line { from: [0.0, height], to: [0.0, 0.0] },
+            EntityKind::Line { from: [margin, margin], to: [width - margin, margin] },
+            EntityKind::Line { from: [width - margin, margin], to: [width - margin, height - margin] },
+            EntityKind::Line { from: [width - margin, height - margin], to: [margin, height - margin] },
+            EntityKind::Line { from: [margin, height - margin], to: [margin, margin] },
+        ]);
+        let bx0 = width - margin - block_width;
+        let bx1 = width - margin;
+        let by1 = margin + block_height;
+        kinds.extend_from_slice(&[
+            EntityKind::Line { from: [bx0, margin], to: [bx1, margin] },
+            EntityKind::Line { from: [bx1, margin], to: [bx1, by1] },
+            EntityKind::Line { from: [bx1, by1], to: [bx0, by1] },
+            EntityKind::Line { from: [bx0, by1], to: [bx0, margin] },
+        ]);
+        for row in 1..TITLE_BLOCK_ROWS.len() {
+            let y = by1 - row as f64 * row_height;
+            kinds.push(EntityKind::Line { from: [bx0, y], to: [bx1, y] });
+        }
+        kinds.push(EntityKind::Line { from: [bx0 + label_width, margin], to: [bx0 + label_width, by1] });
+        let inset = text_height * 0.5;
+        for (row, (label, value)) in TITLE_BLOCK_ROWS.iter().zip(&values).enumerate() {
+            let y = by1 - row as f64 * row_height + (row_height - text_height) / 2.0;
+            kinds.push(EntityKind::Text { at: [bx0 + inset, y], height: text_height, content: (*label).to_string() });
+            if !value.is_empty() {
+                kinds.push(EntityKind::Text { at: [bx0 + label_width + inset, y], height: text_height, content: value.clone() });
+            }
+        }
+        let mut created = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind };
             drawing.entities.push(entity.clone());
             created.push(entity);
         }

@@ -80,6 +80,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "select",
         "ucs",
         "hatch-pattern",
+        "title-block",
     ] {
         assert_eq!(matrix["operations"][operation], json!("supported"), "operation `{operation}`");
     }
@@ -5498,3 +5499,96 @@ fn hatch_pattern_rejects_bad_requests_and_protected_layers() {
     close(handle).expect("close");
 }
 
+#[test]
+fn title_block_generates_a_framed_sheet_with_defaults() {
+    let created = create(CreateRequest { title: Some("Site plan".to_string()), ..CreateRequest::default() }).expect("create");
+    let handle = handle_of(&created);
+    update_properties(handle, PropertiesUpdate { author: Some("Ada".to_string()), ..PropertiesUpdate::default() }).expect("author");
+
+    let result = add_title_block(handle, TitleBlockRequest::default()).expect("title block");
+    assert_eq!(result["revision"], json!(3), "one block is one revision");
+    let created = result["created"].as_array().expect("created");
+    assert_eq!(created.len(), 32, "19 grid lines and 13 default texts");
+    let lines = created.iter().filter(|entity| entity["kind"]["type"] == json!("line")).count();
+    assert_eq!(lines, 19, "outer border, inner frame, block frame, six row separators and one label divider");
+    let texts = created_text(&result["created"]);
+    for expected in ["Title", "Number", "Revision", "Scale", "Date", "Author", "Sheet", "Site plan", "drawing-1", "1:1", "Ada"] {
+        assert!(texts.contains(&expected.to_string()), "missing `{expected}` in {texts:?}");
+    }
+    let drawing = drawing_of(handle);
+    let layer = drawing.layer("titleblock").expect("titleblock layer");
+    assert_eq!(layer.color, "#d0d7de");
+    assert_eq!(drawing.entities.iter().filter(|entity| entity.layer == "titleblock").count(), created.len());
+    let sheet = add_title_block(handle, TitleBlockRequest::default()).expect("second block");
+    assert_eq!(sheet["created"].as_array().map(Vec::len), Some(created.len()), "the default sheet is deterministic");
+    close(handle).expect("close");
+}
+
+#[test]
+fn title_block_honours_overrides_and_a_custom_sheet() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let result = add_title_block(
+        handle,
+        TitleBlockRequest {
+            layer: Some("Sheet".to_string()),
+            width: Some(200.0),
+            height: Some(150.0),
+            margin: Some(8.0),
+            text_height: Some(2.5),
+            title: Some("Pump skid".to_string()),
+            number: Some("A-101".to_string()),
+            revision: Some("C".to_string()),
+            scale: Some("1:50".to_string()),
+            date: Some("2026-11-23".to_string()),
+            author: Some("Lin".to_string()),
+            sheet: Some("2".to_string()),
+        },
+    )
+    .expect("custom block");
+    let texts = created_text(&result["created"]);
+    for expected in ["Pump skid", "A-101", "C", "1:50", "2026-11-23", "Lin", "2"] {
+        assert!(texts.contains(&expected.to_string()), "missing `{expected}` in {texts:?}");
+    }
+    let drawing = drawing_of(handle);
+    assert!(drawing.layer("Sheet").is_some());
+    assert!(drawing.entities.iter().all(|entity| entity.layer == "Sheet"));
+    close(handle).expect("close");
+}
+
+#[test]
+fn title_block_rejects_bad_sheets_and_protected_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(
+        add_title_block(handle, TitleBlockRequest { width: Some(0.0), ..TitleBlockRequest::default() }).expect_err("zero width").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        add_title_block(handle, TitleBlockRequest { text_height: Some(f64::NAN), ..TitleBlockRequest::default() }).expect_err("nan text").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        add_title_block(
+            handle,
+            TitleBlockRequest { width: Some(100.0), height: Some(60.0), text_height: Some(10.0), ..TitleBlockRequest::default() }
+        )
+        .expect_err("tiny sheet")
+        .code,
+        "titleblock/invalid-sheet"
+    );
+    assert_eq!(
+        add_title_block(handle, TitleBlockRequest { title: Some("x".repeat(PROPERTY_VALUE_LIMIT + 1)), ..TitleBlockRequest::default() })
+            .expect_err("long title")
+            .code,
+        "session/argument-invalid"
+    );
+
+    add_layer(handle, "titleblock", Some("#ffffff")).expect("layer");
+    update_layer(handle, "titleblock", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(add_title_block(handle, TitleBlockRequest::default()).expect_err("locked layer").code, "drawing/layer-locked");
+    update_layer(handle, "titleblock", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(add_title_block(handle, TitleBlockRequest::default()).expect_err("frozen layer").code, "drawing/layer-frozen");
+    assert_eq!(drawing_of(handle).entities.len(), 0, "refused requests never add entities");
+    close(handle).expect("close");
+}
