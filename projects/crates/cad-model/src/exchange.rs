@@ -234,6 +234,37 @@ fn color_of(value: &str) -> Color {
     Color::rgb(channel(0..2), channel(2..4), channel(4..6))
 }
 
+/// Rec. 709 luma of a colour over its gamma-encoded channels on a `0..=1`
+/// scale, a cheap stand-in for perceived lightness on a white sheet.
+fn luma(color: Color) -> f64 {
+    (0.2126 * f64::from(color.red()) + 0.7152 * f64::from(color.green()) + 0.0722 * f64::from(color.blue())) / 255.0
+}
+
+/// Dark ink that light layer colours are blended toward on export.
+const EXPORT_INK: Color = Color::rgb(31, 41, 51);
+/// Layer colours brighter than this are too faint to read on a white sheet.
+const LIGHT_INK_LIMIT: f64 = 0.7;
+/// Luma that normalised light colours are blended down to.
+const LEGIBLE_INK_LUMA: f64 = 0.35;
+
+/// Normalises one export colour for legibility on the white SVG and PDF sheet.
+///
+/// Layer colours are authored for the dark viewport, so a light default such
+/// as `#d0d7de` is nearly invisible once exported onto white. Colours already
+/// dark enough are kept untouched; lighter ones are blended channel-wise
+/// toward [`EXPORT_INK`] until they reach [`LEGIBLE_INK_LUMA`], which keeps
+/// the original hue direction.
+fn export_color(color: Color) -> Color {
+    let lightness = luma(color);
+    if lightness <= LIGHT_INK_LIMIT {
+        return color;
+    }
+    let ink = luma(EXPORT_INK);
+    let mix = (lightness - LEGIBLE_INK_LUMA) / (lightness - ink);
+    let blend = |value: u8, target: u8| (f64::from(value) + (f64::from(target) - f64::from(value)) * mix).round().clamp(0.0, 255.0) as u8;
+    Color::rgb(blend(color.red(), EXPORT_INK.red()), blend(color.green(), EXPORT_INK.green()), blend(color.blue(), EXPORT_INK.blue()))
+}
+
 /// How model coordinates become flat-drawing coordinates.
 struct Projection<'a> {
     map: &'a dyn Fn([f64; 2]) -> FlatPoint,
@@ -298,7 +329,7 @@ fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>)
         if !layer.visible || layer.frozen || !layer.plottable || !entity.is_finite() {
             continue;
         }
-        let color = color_of(&layer.color);
+        let color = export_color(color_of(&layer.color));
         let (width, dash) = layer_stroke(drawing, layer, projection);
         let mut stroke_style = Style::stroke(color, width);
         stroke_style.dash = dash;
@@ -1544,3 +1575,7 @@ pub(crate) fn step(drawing: &Drawing, thickness: f64) -> StepReport {
 
     StepReport { content, faces, losses }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/exchange.rs"]
+mod tests;
