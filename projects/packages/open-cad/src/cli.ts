@@ -1469,6 +1469,172 @@ ellipse
         }
     });
 
+ellipse
+    .command('update', 'cli.cmd.ellipse-update')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--rx <number>', 'cli.opt.rx')
+    .option('--ry <number>', 'cli.opt.ry')
+    .option('--rotation <degrees>', 'cli.opt.rotation')
+    .option('--start <degrees>', 'cli.opt.start-angle')
+    .option('--end <degrees>', 'cli.opt.end-angle')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const rx = number(options, 'rx');
+        const ry = number(options, 'ry');
+        const rotation = number(options, 'rotation');
+        const startAngle = number(options, 'start');
+        const endAngle = number(options, 'end');
+        if (
+            id === undefined
+            || (rx === undefined && ry === undefined && rotation === undefined && startAngle === undefined && endAngle === undefined)
+        ) {
+            ctx.fail('open-cad.cli.ellipse-update-required', {
+                message: '`--id <entity>` and at least one of `--rx`, `--ry`, `--rotation`, `--start` or `--end` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () =>
+                opened.updateEllipse({ entityId: id, rx, ry, rotation, startAngle, endAngle }),
+            );
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+const spline = cli.command('spline', 'cli.cmd.spline');
+
+spline
+    .command('update', 'cli.cmd.spline-update')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--points <list>', 'cli.opt.spline-points')
+    .option('--closed <on|off>', 'cli.opt.closed-state', { enum: ['on', 'off'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const parsed = points(options, 'points');
+        const closed = toggle(options, 'closed');
+        if (id === undefined || (parsed === undefined && closed === undefined)) {
+            ctx.fail('open-cad.cli.spline-update-required', {
+                message: '`--id <entity>` and `--points "x,y ..."` or `--closed on|off` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updateSpline({ entityId: id, points: parsed, closed }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+spline
+    .command('insert-vertex', 'cli.cmd.spline-insert')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--index <number>', 'cli.opt.vertex-index')
+    .option('--at <x,y>', 'cli.opt.vertex-at')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const index = number(options, 'index');
+        const at = point(options, 'at');
+        if (id === undefined || index === undefined || !Number.isInteger(index) || index < 0 || at === undefined) {
+            ctx.fail('open-cad.cli.spline-insert-required', {
+                message: '`--id <entity>`, `--index <number>` and `--at x,y` are required, with a non-negative integer index',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updateSpline({ entityId: id, insertAt: index, insertPoint: at }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+spline
+    .command('remove-vertex', 'cli.cmd.spline-remove')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--index <number>', 'cli.opt.vertex-index')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const index = number(options, 'index');
+        if (id === undefined || index === undefined || !Number.isInteger(index) || index < 0) {
+            ctx.fail('open-cad.cli.spline-remove-required', {
+                message: '`--id <entity>` and a non-negative integer `--index <number>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updateSpline({ entityId: id, removeAt: index }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+spline
+    .command('move-vertex', 'cli.cmd.spline-move')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--index <number>', 'cli.opt.vertex-index')
+    .option('--at <x,y>', 'cli.opt.vertex-move-at')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const index = number(options, 'index');
+        const at = point(options, 'at');
+        if (id === undefined || index === undefined || !Number.isInteger(index) || index < 0 || at === undefined) {
+            ctx.fail('open-cad.cli.spline-move-required', {
+                message: '`--id <entity>`, `--index <number>` and `--at x,y` are required, with a non-negative integer index',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updateSpline({ entityId: id, moveAt: index, moveTo: at }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 const polyline = cli.command('polyline', 'cli.cmd.polyline');
 
 polyline
