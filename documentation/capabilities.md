@@ -35,9 +35,9 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
-`distribute`, `measure`, `measure-entity`, `measure-points`, `stats`,
-`dimension-style`, `text-style`, `text-search`, `group`, `select`,
-`properties`, `snap`, `linetype`, `ucs`.
+`distribute`, `overkill`, `hatch-pattern`, `title-block`, `measure`,
+`measure-entity`, `measure-points`, `stats`, `dimension-style`, `text-style`,
+`text-search`, `group`, `select`, `properties`, `snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
 
 ## DXF import subset
@@ -112,8 +112,9 @@ ACI 7.
 Reported losses: `dxf/r12-units`, `dxf/r12-lineweight`, `dxf/r12-plottable`,
 `dxf/r12-ellipse`, `dxf/r12-spline`, `dxf/dimension-lines`,
 `dxf/hatch-boundary`, `dxf/r12-hatch`, `dxf/hatch-pattern`, and
-`dxf/layer-color` only for an invalid colour. Hatch pattern geometry is never
-written, only its name.
+`dxf/layer-color` only for an invalid colour. A hatch entity writes its pattern
+name only, never its pattern geometry; line entities created by `hatchPattern`
+are ordinary `LINE` records and are written in full.
 
 Not written: `DWG`, blocks, `XREF`, images, layouts and paper space, proprietary
 or proxy objects, text styles beyond the declared table fields, and any
@@ -124,7 +125,8 @@ or proxy objects, text styles beyond the declared table fields, and any
 Both formats skip hidden, frozen and non-plottable layers. They stroke every
 visible layer at its lineweight — zero lineweight uses the SVG/PDF default — and
 reduce the line type to one dash/gap pair so a dashed layer reads as dashed. They
-draw hatch boundary polygons, not hatch patterns.
+draw hatch boundary polygons, not the pattern definition; the line entities
+`hatchPattern` creates are ordinary visible entities and are drawn normally.
 
 SVG is the only renderer. PDF is A4 landscape with one uniform fit to the page.
 PDF approximates arcs and ellipses with cubic Bezier segments and reports
@@ -439,6 +441,73 @@ single history steps with undo/redo
 (`align_and_distribute_survive_save_and_reopen`) and repeatability
 (`align_is_deterministic`).
 
+## Hatch patterns
+
+`hatchPattern(request)` fills one `hatch` entity with real `line` entities
+clipped to its boundary. The hatch keeps its boundary polygon and pattern name;
+the generated lines sit on the hatch's layer, so every exporter carries the
+fill. The scanline algorithm rotates the boundary by `-angle` so the pattern
+lines become horizontal, crosses the rotated edges under a half-open rule that
+counts a shared vertex once, sorts the crossings with a total order and pairs
+them by the even-odd rule. Crossings are anchored to the world origin at
+`v = k * spacing`, and levels within `1e-9` of the boundary are skipped so the
+boundary is not traced a second time and a cardinal angle's rotation error
+cannot add a coincident line. `cross` adds a second family at `angle + 90`.
+
+`angle` defaults to `0`, `spacing` to `5` and `cross` to `false`. The
+response carries `{ revision, drawing, created }`, where `created` holds the new
+line entities in deterministic id order. The edit is one history step and one
+revision, and a request that adds no line (a boundary thinner than `spacing`)
+still increments the revision.
+
+| Code | Cause |
+| :--- | :--- |
+| `hatch/invalid-angle` | `angle` is not finite. |
+| `hatch/invalid-spacing` | `spacing` is not positive and finite. |
+| `hatch/spacing-too-fine` | One family would need more than 100,000 scanlines. |
+| `hatch/unsupported-entity` | The id names an entity that is not a hatch. |
+| `hatch/solid-pattern` | The hatch is a `SOLID` fill with no pattern to expand. |
+| `hatch/degenerate-boundary` | The boundary has zero area. |
+| `object/not-found` | The id does not name an entity. |
+| `drawing/layer-locked` | The hatch layer is locked. |
+| `drawing/layer-frozen` | The hatch layer is frozen. |
+
+The model tests cover the default fill and layer inheritance
+(`hatch_pattern_fills_a_closed_boundary_with_lines`), explicit angle, spacing
+and `cross` (`hatch_pattern_honours_angle_spacing_and_cross`), and every refusal
+including locked and frozen layers
+(`hatch_pattern_rejects_bad_requests_and_protected_layers`).
+
+## Title block
+
+`titleBlock(request)` draws a sheet frame and a title block on one layer. The
+sheet is a rectangle at the origin (`width` × `height`, A3 landscape by
+default); the operation writes an outer border, an inner frame inset by
+`margin`, a block frame in the bottom-right corner and one row per field:
+Title, Number, Revision, Scale, Date, Author and Sheet. A label column and one
+value column sit inside the block. Values default to the drawing title, id,
+revision, `1:1`, an empty date, the drawing author and `1`; an override wins and
+an empty override renders a blank cell, so only the grid remains. Everything is
+a real `line` or `text` entity with a fresh deterministic id on `layer`
+(default `titleblock`, created with a neutral colour when missing).
+
+`width`, `height`, `margin` and `textHeight` default to the A3 landscape size,
+`10` and `3.5`. The response carries `{ revision, drawing, created }`. The edit
+is one history step and one revision.
+
+| Code | Cause |
+| :--- | :--- |
+| `session/argument-invalid` | A dimension is not finite or not positive, or an override exceeds the property limit. |
+| `titleblock/invalid-sheet` | The sheet is too small for the frame and block. |
+| `drawing/layer-locked` | The target layer is locked. |
+| `drawing/layer-frozen` | The target layer is frozen. |
+
+The model tests cover the default A3 sheet, layer creation and default values
+(`title_block_generates_a_framed_sheet_with_defaults`), custom dimensions and
+overrides on a custom layer (`title_block_honours_overrides_and_a_custom_sheet`)
+and the invalid-dimension, invalid-sheet, long-override, locked and frozen
+refusals (`title_block_rejects_bad_sheets_and_protected_layers`).
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -480,6 +549,13 @@ single history steps with undo/redo
 - Offset covers lines, straight-segment polylines, circles and arcs only. It
   does not clip self-intersections, miter arc or bulge segments (polylines have
   none) or offset ellipses, splines, points, text, hatches and dimensions.
+- Hatch patterns expand into straight line entities clipped to one polygonal
+  boundary. There are no named pattern definitions, no island detection, no
+  curved boundary clipping and no associative regeneration when the boundary
+  later moves.
+- Title blocks are plain line and text entities. They carry no attributes,
+  fields, automatic date updates or reusable block definition, and they are not
+  linked to the drawing properties after creation.
 - Valid colours are `#rrggbb`; lineweights are `0`–`10` mm; the line-type
   pattern holds at most 12 finite positive entries.
 - The model does not enforce arbitrary user metadata; only the declared

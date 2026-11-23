@@ -36,6 +36,7 @@ Coordinates are `x,y` in the drawing unit. Ids are comma-separated.
 | `entity add-polyline` | `--points "x,y x,y ..."`, `--closed`, `--layer` |
 | `entity add-spline` | `--points "x,y x,y ..."` (at least two fit points), `--closed`, `--layer` |
 | `entity add-hatch` | `--points "x,y ..."`, `--pattern <name>`, `--layer` |
+| `entity hatch-pattern` | `--id <entity>`, `--angle deg`, `--spacing n`, `--cross on\|off` |
 | `entity add-rectangle` | `--from x,y`, `--to x,y`, `--layer` |
 | `entity add-polygon` | `--center x,y`, `--radius n`, `--sides n`, `--rotation deg`, `--layer` |
 | `entity add-text` | `--at x,y`, `--height n`, `--text <text>`, `--layer` |
@@ -169,6 +170,31 @@ so the gaps match. Fewer than three distinct ids report
 `object/not-found`, locked or frozen layers with `drawing/layer-locked` or
 `drawing/layer-frozen`, and entities without finite bounds with
 `object/degenerate`.
+
+## Hatch patterns and title blocks
+
+`entity hatch-pattern` fills one hatch with real line entities clipped to its
+boundary and saves the file. `--angle` (default `0`) sets the direction,
+`--spacing` (default `5`) the distance between lines and `--cross on` adds a
+second family perpendicular to the first. The lines land on the hatch layer, so
+every exporter carries the fill. A solid fill reports
+`hatch/solid-pattern`; a non-hatch id reports `hatch/unsupported-entity`; a
+zero-area boundary reports `hatch/degenerate-boundary`; a non-positive
+`--spacing` reports `hatch/invalid-spacing`.
+
+`title-block` adds a sheet frame and a title block to a drawing and saves the
+file. The sheet defaults to A3 landscape, the frame to a 10-unit margin and the
+block to the `titleblock` layer, which is created when missing. The block
+carries Title, Number, Revision, Scale, Date, Author and Sheet; each can be
+overridden and an empty override leaves the cell blank. A sheet too small for
+the frame reports `titleblock/invalid-sheet`.
+
+```bash
+open-cad entity hatch-pattern plan.ocad --id entity-7 --angle 45 --spacing 4
+open-cad entity hatch-pattern plan.ocad --id entity-7 --spacing 6 --cross on
+open-cad title-block plan.ocad --title "Pump skid" --number A-101 --revision C --scale 1:50 --date 2026-11-23
+open-cad title-block plan.ocad --layer Sheet --width 200 --height 150 --margin 8
+```
 
 ## Measure and select
 
