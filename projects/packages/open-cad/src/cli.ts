@@ -1788,6 +1788,33 @@ polyline
         }
     });
 
+polyline
+    .command('chamfer', 'cli.cmd.polyline-chamfer')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--distance <number>', 'cli.opt.polyline-chamfer-distance')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.stderr('a drawing file is required');
+            throw CliError.parseError('open-cad.cli.file-required');
+        }
+        const id = text(options, 'id');
+        const distance = number(options, 'distance');
+        if (id === undefined || distance === undefined) {
+            ctx.stderr('`--id <entity>` and `--distance <number>` are required');
+            throw CliError.parseError('open-cad.cli.polyline-chamfer-required');
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.polylineChamfer({ id, distance }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 cli
     .command('transform', 'cli.cmd.transform')
     .option('--ids <list>', 'cli.opt.ids')

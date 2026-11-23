@@ -24,6 +24,7 @@
             "polyline-remove": "Remove one vertex from a polyline and save the file",
         "polyline-move": "Move one vertex of a polyline and save the file",
             "polyline-smooth": "Round polyline corners with Chaikin corner cutting and save the file",
+            "polyline-chamfer": "Bevel every corner of a polyline by trimming both adjacent segments and save the file",
             "spline": "Edit the fit points of a spline in an existing drawing file",
             "spline-update": "Replace spline fit points or set its closed flag and save the file",
             "spline-insert": "Insert one fit point into a spline and save the file",
@@ -253,6 +254,7 @@
             "title-block-sheet": "Sheet label in the title block; defaults to 1",
             "iterations": "Corner-cutting passes for polyline smoothing, 1-8; defaults to 2",
             "smooth-ratio": "Fraction each smoothed corner is pulled toward a vertex, between 0 and 0.5; defaults to 0.25",
+            "polyline-chamfer-distance": "Distance trimmed from each side of every polyline corner; every segment must be longer than twice it",
             "stats-group-by": "Grouping for the statistics: layer (default), type, color or linetype",
             "quantity-layer": "Target layer for the quantity table; defaults to quantity",
             "origin-point": "Bottom-left corner of the table as x,y; defaults to 0,0",
@@ -264,6 +266,7 @@
             "title-block-invalid": "`--width`, `--height`, `--margin` and `--text-height` must be positive numbers",
             "diff-arguments-required": "`<left>` and `<right>` drawing files are required",
             "polyline-smooth-required": "`--id <entity>` is required",
+            "polyline-chamfer-required": "`--id <entity>` and `--distance <number>` are required",
             "origin-invalid": "`--origin x,y` needs two numbers"
         }
     }
