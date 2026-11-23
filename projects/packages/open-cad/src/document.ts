@@ -33,6 +33,8 @@ import type {
     AddSplineRequest,
     AddTextRequest,
     AddTextStyleRequest,
+    AlignRequest,
+    AlignResult,
     ArrayRequest,
     ArrayResult,
     AssignEntityLayerRequest,
@@ -44,6 +46,8 @@ import type {
     CreateLayoutRequest,
     DimensionStyle,
     DimensionStyleDeletion,
+    DistributeRequest,
+    DistributeResult,
     Drawing,
     DrawingProperties,
     DrawOrderAction,
@@ -808,6 +812,33 @@ export class DrawingDocument {
      */
     joinEntities(a: EntityId, b: EntityId): JoinResult {
         return this.edit((handle) => service.joinEntities(handle, a, b), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Aligns a selection of entities to one bounding-box edge or centreline.
+     * `left`, `right`, `bottom` and `top` pull the extreme edges of every box
+     * onto the smallest or largest edge of the selection; `center` and `middle`
+     * pull the box centres onto the midpoint of the selection's span. Entities
+     * move by translation only; fewer than two distinct ids report
+     * `align/insufficient-entities`.
+     */
+    align(request: AlignRequest): AlignResult {
+        return this.edit((handle) => service.align(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Spreads a selection of entities with equal gaps between their bounding
+     * boxes along `axis`. Entities are ordered by box centre; the first and
+     * last stay put and every interior entity is translated so consecutive gaps
+     * match. Fewer than three distinct ids report
+     * `distribute/insufficient-entities`.
+     */
+    distribute(request: DistributeRequest): DistributeResult {
+        return this.edit((handle) => service.distribute(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

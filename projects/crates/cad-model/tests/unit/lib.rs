@@ -69,6 +69,8 @@ fn capability_matrix_matches_the_implemented_surface() {
         "join",
         "fillet",
         "chamfer",
+        "align",
+        "distribute",
         "measure",
         "measure-points",
         "stats",
@@ -4622,6 +4624,366 @@ fn join_is_deterministic() {
     assert_eq!(first["created"], second["created"]);
     assert_eq!(first["removed"], second["removed"]);
     assert_eq!(first["revision"], second["revision"]);
+}
+
+#[test]
+fn align_left_edges_share_the_smallest_min_x() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("long line");
+    add_line(handle, DEFAULT_LAYER, [5.0, 5.0], [9.0, 5.0]).expect("short line");
+    add_circle(handle, DEFAULT_LAYER, [20.0, 0.0], 2.0).expect("circle");
+
+    let result = align(
+        handle,
+        AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], mode: AlignMode::Left },
+    )
+    .expect("align left");
+    assert_eq!(result["mode"], json!("left"));
+    assert_eq!(result["affected"], json!(3));
+    assert_eq!(result["revision"], json!(5), "an align is one revision bump");
+    assert_eq!(result["bounds"]["minX"], json!(0.0));
+    assert_eq!(result["bounds"]["maxX"], json!(10.0));
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [0.0, 5.0], to: [4.0, 5.0] }, "the short line moves to minX 0");
+    assert_eq!(drawing.entities[2].kind, EntityKind::Circle { center: [2.0, 0.0], radius: 2.0 }, "the circle moves to minX 0");
+    assert_eq!(drawing.revision, 5);
+    close(handle).expect("close");
+}
+
+#[test]
+fn align_center_and_middle_use_the_selection_midpoints() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("wide line");
+    add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [22.0, 0.0]).expect("narrow line");
+
+    let centered = align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Center })
+        .expect("align center");
+    assert_eq!(centered["revision"], json!(4));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [6.0, 0.0], to: [16.0, 0.0] }, "centres meet at x 11");
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [10.0, 0.0], to: [12.0, 0.0] });
+
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 1.0).expect("small circle");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 8.0], 3.0).expect("large circle");
+    let middled = align(handle, AlignRequest { ids: vec!["entity-3".to_string(), "entity-4".to_string()], mode: AlignMode::Middle })
+        .expect("align middle");
+    assert_eq!(middled["mode"], json!("middle"));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[2].kind, EntityKind::Circle { center: [0.0, 5.0], radius: 1.0 }, "centres meet at y 5");
+    assert_eq!(drawing.entities[3].kind, EntityKind::Circle { center: [0.0, 5.0], radius: 3.0 });
+    close(handle).expect("close");
+}
+
+#[test]
+fn align_top_and_bottom_edges_share_the_extremes() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("flat line");
+    add_line(handle, DEFAULT_LAYER, [0.0, 4.0], [5.0, 8.0]).expect("tall line");
+
+    let bottom = align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Bottom })
+        .expect("align bottom");
+    assert_eq!(bottom["mode"], json!("bottom"));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [0.0, 0.0], to: [5.0, 4.0] }, "bottom edges meet at y 0");
+
+    let top =
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Top }).expect("align top");
+    assert_eq!(top["mode"], json!("top"));
+    assert_eq!(top["revision"], json!(5), "the top align is the fifth revision");
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 4.0], to: [5.0, 4.0] }, "top edges meet at y 4");
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [0.0, 0.0], to: [5.0, 4.0] }, "the tall line already ends at y 4");
+    close(handle).expect("close");
+}
+
+#[test]
+fn align_rejects_fewer_than_two_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+
+    assert_eq!(
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string()], mode: AlignMode::Left }).expect_err("one entity").code,
+        "align/insufficient-entities"
+    );
+    assert_eq!(
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-1".to_string()], mode: AlignMode::Left })
+            .expect_err("repeated id")
+            .code,
+        "align/insufficient-entities",
+        "repeated ids deduplicate before the count"
+    );
+    assert_eq!(align(handle, AlignRequest { ids: vec![], mode: AlignMode::Left }).expect_err("empty ids").code, "session/argument-invalid");
+    assert_eq!(
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-404".to_string()], mode: AlignMode::Left })
+            .expect_err("missing id")
+            .code,
+        "object/not-found"
+    );
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.revision, 2, "a rejected align does not bump the revision");
+    close(handle).expect("close");
+}
+
+#[test]
+fn align_refuses_locked_and_frozen_layers_and_degenerate_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [5.0, 0.0]).expect("locked line");
+    add_line(handle, DEFAULT_LAYER, [0.0, 10.0], [9.0, 10.0]).expect("line");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Right })
+            .expect_err("locked align")
+            .code,
+        "drawing/layer-locked"
+    );
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Right })
+            .expect_err("frozen align")
+            .code,
+        "drawing/layer-frozen"
+    );
+
+    update_layer(handle, "Structure", LayerUpdate { frozen: Some(false), ..LayerUpdate::default() }).expect("unfreeze");
+    store::edit(handle, |drawing| {
+        drawing.entities[0].kind = EntityKind::Line { from: [f64::NAN, f64::NAN], to: [f64::NAN, f64::NAN] };
+        Ok(())
+    })
+    .expect("force a non-finite line");
+    assert_eq!(
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Right })
+            .expect_err("degenerate align")
+            .code,
+        "object/degenerate"
+    );
+    assert_eq!(drawing_of(handle).revision, 7, "a rejected align does not bump the revision");
+    close(handle).expect("close");
+}
+
+#[test]
+fn distribute_equalizes_gaps_along_x() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [2.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [9.0, 0.0]).expect("middle");
+    add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [24.0, 0.0]).expect("last");
+
+    let result = distribute(
+        handle,
+        DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], axis: DistributeAxis::X },
+    )
+    .expect("distribute x");
+    assert_eq!(result["axis"], json!("x"));
+    assert_eq!(result["affected"], json!(3));
+    assert_eq!(result["revision"], json!(5), "a distribute is one revision bump");
+    assert_eq!(result["bounds"]["maxX"], json!(24.0), "the last entity stays put");
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [2.0, 0.0] }, "the first entity stays put");
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [8.0, 0.0], to: [14.0, 0.0] }, "gaps of 6 between the boxes");
+    assert_eq!(drawing.entities[2].kind, EntityKind::Line { from: [20.0, 0.0], to: [24.0, 0.0] });
+    close(handle).expect("close");
+}
+
+#[test]
+fn distribute_along_y_orders_by_box_center() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [0.0, 2.0]).expect("bottom");
+    add_line(handle, DEFAULT_LAYER, [0.0, 3.0], [0.0, 5.0]).expect("middle");
+    add_line(handle, DEFAULT_LAYER, [0.0, 10.0], [0.0, 14.0]).expect("top");
+
+    let result = distribute(
+        handle,
+        DistributeRequest { ids: vec!["entity-3".to_string(), "entity-1".to_string(), "entity-2".to_string()], axis: DistributeAxis::Y },
+    )
+    .expect("distribute y");
+    assert_eq!(result["axis"], json!("y"));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [0.0, 2.0] }, "the lowest box stays put");
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [0.0, 5.0], to: [0.0, 7.0] }, "equal gaps of 3");
+    assert_eq!(drawing.entities[2].kind, EntityKind::Line { from: [0.0, 10.0], to: [0.0, 14.0] }, "the highest box stays put");
+    close(handle).expect("close");
+}
+
+#[test]
+fn distribute_rejects_fewer_than_three_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [2.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [9.0, 0.0]).expect("second");
+
+    assert_eq!(
+        distribute(handle, DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], axis: DistributeAxis::X })
+            .expect_err("two entities")
+            .code,
+        "distribute/insufficient-entities"
+    );
+    assert_eq!(
+        distribute(
+            handle,
+            DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-2".to_string()], axis: DistributeAxis::X }
+        )
+        .expect_err("deduplicated to two")
+        .code,
+        "distribute/insufficient-entities",
+        "repeated ids deduplicate before the count"
+    );
+    assert_eq!(
+        distribute(handle, DistributeRequest { ids: vec![], axis: DistributeAxis::X }).expect_err("empty ids").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        distribute(
+            handle,
+            DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-404".to_string()], axis: DistributeAxis::X }
+        )
+        .expect_err("missing id")
+        .code,
+        "object/not-found"
+    );
+    assert_eq!(
+        distribute(
+            handle,
+            DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], axis: DistributeAxis::X }
+        )
+        .expect_err("missing third id")
+        .code,
+        "object/not-found"
+    );
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.revision, 3, "a rejected distribute does not bump the revision");
+    close(handle).expect("close");
+}
+
+#[test]
+fn distribute_refuses_locked_layers_and_degenerate_entities() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [2.0, 0.0]).expect("locked line");
+    add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [9.0, 0.0]).expect("middle");
+    add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [24.0, 0.0]).expect("last");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        distribute(
+            handle,
+            DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], axis: DistributeAxis::X }
+        )
+        .expect_err("locked distribute")
+        .code,
+        "drawing/layer-locked"
+    );
+
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(false), ..LayerUpdate::default() }).expect("unlock");
+    store::edit(handle, |drawing| {
+        drawing.entities[2].kind = EntityKind::Line { from: [f64::NAN, f64::NAN], to: [f64::NAN, f64::NAN] };
+        Ok(())
+    })
+    .expect("force a non-finite line");
+    assert_eq!(
+        distribute(
+            handle,
+            DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], axis: DistributeAxis::X }
+        )
+        .expect_err("degenerate distribute")
+        .code,
+        "object/degenerate"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn align_and_distribute_are_single_history_steps() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [5.0, 5.0], [9.0, 5.0]).expect("second");
+
+    let aligned =
+        align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Left }).expect("align");
+    assert_eq!(aligned["revision"], json!(4));
+    let undone = undo(handle).expect("undo the align");
+    assert_eq!(undone["revision"], json!(5));
+    assert_eq!(drawing_of(handle).entities[1].kind, EntityKind::Line { from: [5.0, 5.0], to: [9.0, 5.0] }, "undo restores the position");
+
+    let redone = redo(handle).expect("redo the align");
+    assert_eq!(redone["revision"], json!(6));
+    assert_eq!(drawing_of(handle).entities[1].kind, EntityKind::Line { from: [0.0, 5.0], to: [4.0, 5.0] }, "redo reapplies the align");
+
+    add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [24.0, 0.0]).expect("third");
+    let distributed = distribute(
+        handle,
+        DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], axis: DistributeAxis::X },
+    )
+    .expect("distribute");
+    assert_eq!(distributed["revision"], json!(8));
+    let undone = undo(handle).expect("undo the distribute");
+    assert_eq!(undone["revision"], json!(9));
+    assert_eq!(
+        drawing_of(handle).entities[1].kind,
+        EntityKind::Line { from: [0.0, 5.0], to: [4.0, 5.0] },
+        "one undo reverses the whole distribute"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn align_and_distribute_survive_save_and_reopen() {
+    let dir = TempDir::new("align-distribute-round-trip");
+    let path = dir.path.join("plan.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [2.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [9.0, 0.0]).expect("middle");
+    add_line(handle, DEFAULT_LAYER, [20.0, 0.0], [24.0, 0.0]).expect("last");
+
+    align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string()], mode: AlignMode::Left }).expect("align");
+    distribute(
+        handle,
+        DistributeRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], axis: DistributeAxis::X },
+    )
+    .expect("distribute");
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [2.0, 0.0] });
+    assert_eq!(drawing.entities[1].kind, EntityKind::Line { from: [8.0, 0.0], to: [14.0, 0.0] }, "the distributed gap survives the round trip");
+    assert_eq!(drawing.entities[2].kind, EntityKind::Line { from: [20.0, 0.0], to: [24.0, 0.0] });
+    close(reopened).expect("close reopened");
+}
+
+#[test]
+fn align_is_deterministic() {
+    let run = |mode: AlignMode| {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("first");
+        add_line(handle, DEFAULT_LAYER, [5.0, 5.0], [9.0, 5.0]).expect("second");
+        add_circle(handle, DEFAULT_LAYER, [20.0, 0.0], 2.0).expect("third");
+        let result = align(handle, AlignRequest { ids: vec!["entity-1".to_string(), "entity-2".to_string(), "entity-3".to_string()], mode })
+            .expect("align");
+        close(handle).expect("close");
+        result
+    };
+
+    for mode in [AlignMode::Left, AlignMode::Center, AlignMode::Right, AlignMode::Top, AlignMode::Middle, AlignMode::Bottom] {
+        let first = run(mode);
+        let second = run(mode);
+        assert_eq!(first["bounds"], second["bounds"], "mode {mode:?}");
+        assert_eq!(first["revision"], second["revision"], "mode {mode:?}");
+        assert_eq!(first["affected"], second["affected"], "mode {mode:?}");
+    }
 }
 
 #[test]

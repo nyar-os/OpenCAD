@@ -810,6 +810,42 @@ test('extend lengthens a line to its nearest boundary', { skip: withAddon }, asy
     }
 });
 
+test('align and distribute move entities by bounding boxes', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Align' });
+        const first = document.addLine({ layer: '0', from: [0, 0], to: [2, 0] });
+        const second = document.addLine({ layer: '0', from: [3, 0], to: [9, 0] });
+        const third = document.addLine({ layer: '0', from: [20, 0], to: [24, 0] });
+
+        const aligned = document.align({ ids: [first.id, second.id], mode: 'left' });
+        assert.equal(aligned.mode, 'left');
+        assert.equal(aligned.affected, 2);
+        assert.equal(aligned.bounds.minX, 0);
+
+        const distributed = document.distribute({ ids: [first.id, second.id, third.id], axis: 'x' });
+        assert.equal(distributed.axis, 'x');
+        assert.equal(distributed.affected, 3);
+        assert.equal(distributed.bounds.maxX, 24);
+        const [movedFirst, movedSecond, movedThird] = document.listEntities();
+        assert.deepEqual(movedFirst?.kind, { type: 'line', from: [0, 0], to: [2, 0] });
+        assert.deepEqual(movedSecond?.kind, { type: 'line', from: [8, 0], to: [14, 0] });
+        assert.deepEqual(movedThird?.kind, { type: 'line', from: [20, 0], to: [24, 0] });
+
+        assert.throws(
+            () => document.align({ ids: [first.id], mode: 'left' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'align/insufficient-entities',
+        );
+        assert.throws(
+            () => document.distribute({ ids: [first.id, second.id], axis: 'x' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'distribute/insufficient-entities',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('entity measurement reports area and perimeter', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

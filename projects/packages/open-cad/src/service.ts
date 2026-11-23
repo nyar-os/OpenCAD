@@ -29,6 +29,8 @@ import type {
     AddSplineRequest,
     AddTextRequest,
     AddTextStyleRequest,
+    AlignRequest,
+    AlignResult,
     ArrayRequest,
     ArrayResult,
     AssignEntityLayerRequest,
@@ -42,6 +44,8 @@ import type {
     DimensionStyleChange,
     DimensionStyleDeletion,
     DimensionStyleList,
+    DistributeRequest,
+    DistributeResult,
     Drawing,
     DrawingPropertiesChange,
     DrawingPropertiesResult,
@@ -917,6 +921,20 @@ export function breakEntity(handle: number, id: string, at: Point): BreakResult 
 /** Merges two collinear lines that share an endpoint into one line. */
 export function joinEntities(handle: number, a: string, b: string): JoinResult {
     return decode<JoinResult>(() => binding('drawing.join').drawing_join(handle, JSON.stringify({ a, b })));
+}
+
+/** Aligns a selection of entities to one bounding-box edge or centreline. */
+export function align(handle: number, request: AlignRequest): AlignResult {
+    return decode<AlignResult>(() =>
+        binding('drawing.align').drawing_align(handle, JSON.stringify({ ids: request.ids, mode: request.mode })),
+    );
+}
+
+/** Spreads a selection of entities with equal gaps between bounding boxes. */
+export function distribute(handle: number, request: DistributeRequest): DistributeResult {
+    return decode<DistributeResult>(() =>
+        binding('drawing.distribute').drawing_distribute(handle, JSON.stringify({ ids: request.ids, axis: request.axis })),
+    );
 }
 
 /** Measures bounds, path length and enclosed area. */

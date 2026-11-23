@@ -62,6 +62,8 @@ export type OperationName =
     | 'extend'
     | 'break'
     | 'join'
+    | 'align'
+    | 'distribute'
     | 'measure'
     | 'measure-entity'
     | 'stats'
@@ -870,6 +872,42 @@ export interface TransformRequest {
 export interface TransformResult {
     readonly revision: number;
     readonly drawing: Drawing;
+    readonly affected: number;
+    readonly bounds: Bounds;
+}
+
+/** Bounding-box edge or centreline an `align()` applies to. */
+export type AlignMode = 'left' | 'center' | 'right' | 'bottom' | 'middle' | 'top';
+
+/** Axis a `distribute()` spreads entities along. */
+export type DistributeAxis = 'x' | 'y';
+
+/** Arguments of `align()`. Repeated ids are applied once. */
+export interface AlignRequest {
+    readonly ids: readonly EntityId[];
+    readonly mode: AlignMode;
+}
+
+/** Result of `align()`. `bounds` covers the whole drawing after the edit. */
+export interface AlignResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly mode: AlignMode;
+    readonly affected: number;
+    readonly bounds: Bounds;
+}
+
+/** Arguments of `distribute()`. Repeated ids are applied once. */
+export interface DistributeRequest {
+    readonly ids: readonly EntityId[];
+    readonly axis: DistributeAxis;
+}
+
+/** Result of `distribute()`. `bounds` covers the whole drawing after the edit. */
+export interface DistributeResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly axis: DistributeAxis;
     readonly affected: number;
     readonly bounds: Bounds;
 }

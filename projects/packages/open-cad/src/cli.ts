@@ -21,12 +21,16 @@ import { runGui } from './gui.js';
 import { OpenCAD } from './open-cad.js';
 import type { DrawingDocument } from './document.js';
 import type {
+    AlignMode,
+    AlignResult,
     ArrayPlacement,
     ArrayResult,
     BreakResult,
     CopyResult,
     DimensionStyle,
     DimensionStyleChange,
+    DistributeAxis,
+    DistributeResult,
     Drawing,
     DrawingStats,
     Entity,
@@ -327,6 +331,14 @@ function describeBreak(result: BreakResult): string {
 
 function describeJoin(result: JoinResult): string {
     return `joined ${result.removed.join(',')} into ${result.created.map((entity) => entity.id).join(',')} revision=${result.revision}`;
+}
+
+function describeAlign(result: AlignResult): string {
+    return `aligned ${result.affected} entities mode=${result.mode} revision=${result.revision}`;
+}
+
+function describeDistribute(result: DistributeResult): string {
+    return `distributed ${result.affected} entities axis=${result.axis} revision=${result.revision}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1826,6 +1838,58 @@ cli
         try {
             const result = await guard(ctx, () => opened.joinEntities(a, b));
             ctx.emitResult(result, describeJoin(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('align', 'cli.cmd.align')
+    .option('--ids <list>', 'cli.opt.ids')
+    .option('--mode <mode>', 'cli.opt.align-mode', { enum: ['left', 'center', 'right', 'bottom', 'middle', 'top'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const ids = idList(options, 'ids');
+        const mode = text(options, 'mode') as AlignMode | undefined;
+        if (ids === undefined || ids.length === 0 || mode === undefined) {
+            ctx.fail('open-cad.cli.align-required', { message: '`--ids entity-1,entity-2` and `--mode <mode>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.align({ ids, mode }));
+            ctx.emitResult(result, describeAlign(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('distribute', 'cli.cmd.distribute')
+    .option('--ids <list>', 'cli.opt.ids')
+    .option('--axis <axis>', 'cli.opt.distribute-axis', { enum: ['x', 'y'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const ids = idList(options, 'ids');
+        const axis = text(options, 'axis') as DistributeAxis | undefined;
+        if (ids === undefined || ids.length === 0 || axis === undefined) {
+            ctx.fail('open-cad.cli.distribute-required', { message: '`--ids entity-1,entity-2,entity-3` and `--axis x|y` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.distribute({ ids, axis }));
+            ctx.emitResult(result, describeDistribute(result));
             return 0;
         } finally {
             opened.close();

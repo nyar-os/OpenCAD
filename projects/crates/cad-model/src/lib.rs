@@ -116,8 +116,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
-/// offset, trim, extend, break, join, fillet, chamfer and measure); constraint
-/// solving and a 3D kernel stay unsupported.
+/// offset, trim, extend, break, join, fillet, chamfer, align, distribute and
+/// measure); constraint solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -189,6 +189,8 @@ pub fn capabilities() -> Value {
                 "join",
                 "fillet",
                 "chamfer",
+                "align",
+                "distribute",
                 "measure",
                 "measure-entity",
                 "measure-points",
@@ -206,9 +208,9 @@ pub fn capabilities() -> Value {
                 "kernel3d",
             ],
             |name| match name {
-                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer"
-                | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search" | "group"
-                | "select" | "properties" | "snap" | "linetype" | "ucs" => "supported",
+                "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
+                | "distribute" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
+                | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
             },
         ),
@@ -3424,6 +3426,270 @@ pub fn join_entities(handle: u64, request: JoinRequest) -> Result<Value, Service
             "drawing": session.summary(),
             "removed": [a, b],
             "created": [created],
+        })
+    })
+}
+
+/// Edge or centreline an [`align`] applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignMode {
+    /// Align left edges to the smallest `minX` of the selection.
+    Left,
+    /// Align horizontal centres to the midpoint of the selection's X span.
+    Center,
+    /// Align right edges to the largest `maxX` of the selection.
+    Right,
+    /// Align bottom edges to the smallest `minY` of the selection.
+    Bottom,
+    /// Align vertical centres to the midpoint of the selection's Y span.
+    Middle,
+    /// Align top edges to the largest `maxY` of the selection.
+    Top,
+}
+
+impl AlignMode {
+    /// Parses `left`, `center`, `right`, `bottom`, `middle` or `top`, ignoring
+    /// case and surrounding whitespace.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "left" => Some(Self::Left),
+            "center" => Some(Self::Center),
+            "right" => Some(Self::Right),
+            "bottom" => Some(Self::Bottom),
+            "middle" => Some(Self::Middle),
+            "top" => Some(Self::Top),
+            _ => None,
+        }
+    }
+
+    /// Name used in JSON responses and the CLI.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+            Self::Bottom => "bottom",
+            Self::Middle => "middle",
+            Self::Top => "top",
+        }
+    }
+}
+
+/// Arguments of [`align`].
+#[derive(Debug, Clone)]
+pub struct AlignRequest {
+    /// Entity ids to align; repeated ids are applied once.
+    pub ids: Vec<String>,
+    /// Edge or centreline to align to.
+    pub mode: AlignMode,
+}
+
+/// Axis a [`distribute`] spreads entities along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistributeAxis {
+    /// Spread along X by the horizontal edges of the bounding boxes.
+    X,
+    /// Spread along Y by the vertical edges of the bounding boxes.
+    Y,
+}
+
+impl DistributeAxis {
+    /// Parses `x` or `y`, ignoring case and surrounding whitespace.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "x" => Some(Self::X),
+            "y" => Some(Self::Y),
+            _ => None,
+        }
+    }
+
+    /// Name used in JSON responses and the CLI.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+        }
+    }
+}
+
+/// Arguments of [`distribute`].
+#[derive(Debug, Clone)]
+pub struct DistributeRequest {
+    /// Entity ids to distribute; repeated ids are applied once.
+    pub ids: Vec<String>,
+    /// Axis to spread along.
+    pub axis: DistributeAxis,
+}
+
+/// Resolves ids to sorted, deduplicated entity indices.
+fn selection_indices(drawing: &Drawing, ids: &[String]) -> Result<Vec<usize>, ServiceError> {
+    let mut indices = Vec::with_capacity(ids.len());
+    for id in ids {
+        indices.push(entity_index(drawing, id)?);
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    Ok(indices)
+}
+
+/// Axis-aligned bounding box of one entity from its finite bounds points.
+fn entity_box(entity: &Entity) -> Option<([f64; 2], [f64; 2])> {
+    let mut box_: Option<([f64; 2], [f64; 2])> = None;
+    for point in entity.bounds_points() {
+        if !finite_point(point) {
+            continue;
+        }
+        box_ = Some(match box_ {
+            None => ([point[0], point[1]], [point[0], point[1]]),
+            Some((min, max)) => ([min[0].min(point[0]), min[1].min(point[1])], [max[0].max(point[0]), max[1].max(point[1])]),
+        });
+    }
+    box_
+}
+
+/// Aligns a selection of entities to one bounding-box edge or centreline.
+///
+/// Each entity's box comes from the same sampled outline [`measure`] reports.
+/// `left`, `right` and `bottom`/`top` align the extreme edges of every box to
+/// the smallest or largest edge of the selection; `center` and `middle` align
+/// the box centres to the midpoint of the selection's span, so the entity with
+/// the widest box on each side stays put. Entities move by translation only;
+/// ids, layers and geometry are otherwise untouched. Fewer than two distinct
+/// ids report `align/insufficient-entities`; an unknown id reports
+/// `object/not-found`; a locked or frozen layer reports `drawing/layer-locked`
+/// or `drawing/layer-frozen`; an entity without finite bounds reports
+/// `object/degenerate`. The edit is one history step and one revision, and the
+/// response carries `{ revision, drawing, mode, affected, bounds }`.
+pub fn align(handle: u64, request: AlignRequest) -> Result<Value, ServiceError> {
+    if request.ids.is_empty() {
+        return Err(argument("`ids` is empty"));
+    }
+    let mode = request.mode;
+    let affected = store::edit(handle, |drawing| {
+        let indices = selection_indices(drawing, &request.ids)?;
+        if indices.len() < 2 {
+            return Err(ServiceError::new("align/insufficient-entities", "aligning needs at least two distinct entities"));
+        }
+        for &index in &indices {
+            if let Some(error) = locked_layer(drawing, &drawing.entities[index].layer) {
+                return Err(error);
+            }
+        }
+        let boxes = indices
+            .iter()
+            .map(|&index| {
+                entity_box(&drawing.entities[index]).ok_or_else(|| {
+                    ServiceError::new("object/degenerate", format!("entity `{}` has no finite bounds", drawing.entities[index].id))
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+        let min_x = boxes.iter().map(|(min, _)| min[0]).fold(f64::INFINITY, f64::min);
+        let max_x = boxes.iter().map(|(_, max)| max[0]).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = boxes.iter().map(|(min, _)| min[1]).fold(f64::INFINITY, f64::min);
+        let max_y = boxes.iter().map(|(_, max)| max[1]).fold(f64::NEG_INFINITY, f64::max);
+        for (index, (min, max)) in indices.iter().zip(&boxes) {
+            let delta = match mode {
+                AlignMode::Left => [min_x - min[0], 0.0],
+                AlignMode::Right => [max_x - max[0], 0.0],
+                AlignMode::Center => [(min_x + max_x) / 2.0 - (min[0] + max[0]) / 2.0, 0.0],
+                AlignMode::Bottom => [0.0, min_y - min[1]],
+                AlignMode::Top => [0.0, max_y - max[1]],
+                AlignMode::Middle => [0.0, (min_y + max_y) / 2.0 - (min[1] + max[1]) / 2.0],
+            };
+            drawing.entities[*index].translate(delta);
+        }
+        drawing.revision += 1;
+        Ok(indices.len())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "mode": mode.as_str(),
+            "affected": affected,
+            "bounds": bounds_json(&session.drawing),
+        })
+    })
+}
+
+/// Spreads a selection of entities with equal gaps between bounding boxes.
+///
+/// Entities are ordered by the centre of their box along `axis`, ties keep
+/// document order. The first and last entities stay put and every interior
+/// entity is translated so the gap between consecutive boxes along the axis is
+/// the same; the gap is `(span - total size) / (count - 1)` and may be negative
+/// when the boxes overlap. Fewer than three distinct ids report
+/// `distribute/insufficient-entities`; an unknown id reports
+/// `object/not-found`; a locked or frozen layer reports `drawing/layer-locked`
+/// or `drawing/layer-frozen`; an entity without finite bounds reports
+/// `object/degenerate`. The edit is one history step and one revision, and the
+/// response carries `{ revision, drawing, axis, affected, bounds }`.
+pub fn distribute(handle: u64, request: DistributeRequest) -> Result<Value, ServiceError> {
+    if request.ids.is_empty() {
+        return Err(argument("`ids` is empty"));
+    }
+    let axis = request.axis;
+    let affected = store::edit(handle, |drawing| {
+        let indices = selection_indices(drawing, &request.ids)?;
+        if indices.len() < 3 {
+            return Err(ServiceError::new("distribute/insufficient-entities", "distributing needs at least three distinct entities"));
+        }
+        for &index in &indices {
+            if let Some(error) = locked_layer(drawing, &drawing.entities[index].layer) {
+                return Err(error);
+            }
+        }
+        let boxes = indices
+            .iter()
+            .map(|&index| {
+                entity_box(&drawing.entities[index]).ok_or_else(|| {
+                    ServiceError::new("object/degenerate", format!("entity `{}` has no finite bounds", drawing.entities[index].id))
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+        let coordinate = |(min, max): ([f64; 2], [f64; 2])| match axis {
+            DistributeAxis::X => (min[0], max[0]),
+            DistributeAxis::Y => (min[1], max[1]),
+        };
+        let mut order: Vec<usize> = (0..boxes.len()).collect();
+        order.sort_by(|left, right| {
+            let (a_min, a_max) = coordinate(boxes[*left]);
+            let (b_min, b_max) = coordinate(boxes[*right]);
+            let a_center = a_min + (a_max - a_min) / 2.0;
+            let b_center = b_min + (b_max - b_min) / 2.0;
+            a_center.partial_cmp(&b_center).unwrap_or(std::cmp::Ordering::Equal).then(left.cmp(right))
+        });
+        let (first_min, _) = coordinate(boxes[order[0]]);
+        let (_, last_max) = coordinate(boxes[order[order.len() - 1]]);
+        let total_size: f64 = order
+            .iter()
+            .map(|&position| {
+                let (min, max) = coordinate(boxes[position]);
+                max - min
+            })
+            .sum();
+        let gap = (last_max - first_min - total_size) / f64::from(indices.len() as u32 - 1);
+        let mut cursor = first_min;
+        for position in order {
+            let index = indices[position];
+            let (min, max) = coordinate(boxes[position]);
+            let delta = match axis {
+                DistributeAxis::X => [cursor - min, 0.0],
+                DistributeAxis::Y => [0.0, cursor - min],
+            };
+            drawing.entities[index].translate(delta);
+            cursor += max - min + gap;
+        }
+        drawing.revision += 1;
+        Ok(indices.len())
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "axis": axis.as_str(),
+            "affected": affected,
+            "bounds": bounds_json(&session.drawing),
         })
     })
 }

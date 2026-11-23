@@ -87,6 +87,8 @@ exactly one transform.
 | `extend` | `--id <line\|arc>`, `--to <entity>` (a line, circle or arc), optional `--side end\|start` (default `end`) |
 | `break` | `--id <line\|arc>`, `--at x,y` (strictly inside the segment or arc sweep) |
 | `join` | `--a <line>`, `--b <line>` (collinear and sharing one endpoint) |
+| `align` | `--ids a,b`, `--mode left\|center\|right\|bottom\|middle\|top` |
+| `distribute` | `--ids a,b,c`, `--axis x\|y` |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -101,6 +103,8 @@ open-cad extend plan.ocad --id entity-3 --to entity-4
 open-cad extend plan.ocad --id entity-3 --to entity-4 --side start
 open-cad break plan.ocad --id entity-3 --at 50,0
 open-cad join plan.ocad --a entity-3 --b entity-4
+open-cad align plan.ocad --ids entity-3,entity-4,entity-5 --mode left
+open-cad distribute plan.ocad --ids entity-3,entity-4,entity-5 --axis x
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
 
@@ -149,6 +153,22 @@ replaced by one line from `a`'s free endpoint to `b`'s free endpoint with a fres
 id. Endpoints that do not meet, lines that are not collinear, and a folded-back
 overlap report `join/not-adjacent`; a non-line or a cross-layer pair reports
 `object/unsupported`.
+
+`align` moves the `--ids` entities onto one bounding-box edge or centreline
+chosen by `--mode` and saves the file. `left`, `right`, `bottom` and `top` pull
+the extreme edges of every box onto the smallest or largest edge of the
+selection; `center` and `middle` pull the horizontal or vertical box centres
+onto the midpoint of the selection's span. Entities move by translation only;
+fewer than two distinct ids report `align/insufficient-entities`.
+
+`distribute` spreads the `--ids` entities along `--axis x|y` with equal gaps
+between consecutive bounding boxes and saves the file. Entities are ordered by
+box centre; the first and last stay put and every interior entity is translated
+so the gaps match. Fewer than three distinct ids report
+`distribute/insufficient-entities`. Both commands refuse unknown ids with
+`object/not-found`, locked or frozen layers with `drawing/layer-locked` or
+`drawing/layer-frozen`, and entities without finite bounds with
+`object/degenerate`.
 
 ## Measure and select
 

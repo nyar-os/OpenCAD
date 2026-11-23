@@ -27,8 +27,9 @@ use std::{
 };
 
 use open_cad_drawing::{
-    ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DrawOrderAction, ExtendSide, JoinRequest, LayoutRequest, LayoutUpdate,
-    MirrorAxis, OffsetSide, OrdinateAxis, ServiceError, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
+    DrawOrderAction, ExtendSide, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis, ServiceError, TransformOp,
+    TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -885,6 +886,30 @@ fn drawing_join(ctx: CallContext) -> Result<JsValue> {
         return Err(Error::new("session/argument-invalid: `a` and `b` entity ids are required"));
     }
     let result = open_cad_drawing::join_entities(handle, JoinRequest { a, b }).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Aligns a selection of entities to one bounding-box edge or centreline.
+#[function]
+fn drawing_align(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let ids = request_ids(&request, "ids").map_err(Error::new)?;
+    let mode = AlignMode::parse(request.get("mode").and_then(Value::as_str).unwrap_or_default())
+        .ok_or_else(|| Error::new("session/argument-invalid: `mode` must be left, center, right, bottom, middle or top"))?;
+    let result = open_cad_drawing::align(handle, AlignRequest { ids, mode }).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Spreads a selection of entities with equal gaps between bounding boxes.
+#[function]
+fn drawing_distribute(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let ids = request_ids(&request, "ids").map_err(Error::new)?;
+    let axis = DistributeAxis::parse(request.get("axis").and_then(Value::as_str).unwrap_or_default())
+        .ok_or_else(|| Error::new("session/argument-invalid: `axis` must be x or y"))?;
+    let result = open_cad_drawing::distribute(handle, DistributeRequest { ids, axis }).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2439,6 +2464,8 @@ register_module![
     drawing_extend,
     drawing_break,
     drawing_join,
+    drawing_align,
+    drawing_distribute,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

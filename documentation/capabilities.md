@@ -34,9 +34,10 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 `ordinate-dimension`, `angular-dimension`, `hatch`.
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
-`offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `measure`,
-`measure-entity`, `measure-points`, `stats`, `dimension-style`, `text-style`,
-`text-search`, `group`, `select`, `properties`, `snap`, `linetype`, `ucs`.
+`offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
+`distribute`, `measure`, `measure-entity`, `measure-points`, `stats`,
+`dimension-style`, `text-style`, `text-search`, `group`, `select`,
+`properties`, `snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
 
 ## DXF import subset
@@ -392,6 +393,52 @@ reversed endpoints (`join_accepts_a_reversed_second_line`), rejected pairs
 cross-layer refusals (`join_rejects_non_lines_and_cross_layer_pairs`), locked
 layers (`join_refuses_a_locked_layer`) and repeatability (`join_is_deterministic`).
 
+## Align and distribute
+
+`align(request)` moves a selection of entities onto one bounding-box edge or
+centreline. Each entity's box comes from the same sampled outline `measure`
+reports. `left`, `right`, `bottom` and `top` pull the extreme edges of every
+box onto the smallest or largest edge of the selection; `center` and `middle`
+pull the horizontal or vertical box centres onto the midpoint of the
+selection's span, so the widest and tallest boxes stay put. Entities move by
+translation only; ids, layers and geometry are otherwise untouched.
+
+`distribute(request)` spreads a selection along `x` or `y` with equal gaps
+between consecutive bounding boxes. Entities are ordered by box centre along
+the axis, ties keeping document order; the first and last entities stay put and
+every interior entity is translated so the gap matches
+`(span - total size) / (count - 1)`. The gap may be negative when the boxes
+overlap, which still yields a deterministic equal-spacing layout.
+
+The align response carries `{ revision, drawing, mode, affected, bounds }` and
+the distribute response carries `{ revision, drawing, axis, affected, bounds }`
+with `bounds` covering the whole drawing after the edit. Each call is one
+history step and one revision; repeated ids are applied once.
+
+| Code | Cause |
+| :--- | :--- |
+| `align/insufficient-entities` | Fewer than two distinct entity ids after deduplication. |
+| `distribute/insufficient-entities` | Fewer than three distinct entity ids after deduplication. |
+| `object/not-found` | An id does not name an entity. |
+| `object/degenerate` | An entity has no finite bounds. |
+| `drawing/layer-locked` | A selected entity sits on a locked layer. |
+| `drawing/layer-frozen` | A selected entity sits on a frozen layer. |
+| `session/argument-invalid` | The id list is empty, or the mode/axis string is not one of the accepted names. |
+
+The model tests cover every mode (`align_left_edges_share_the_smallest_min_x`,
+`align_center_and_middle_use_the_selection_midpoints`,
+`align_top_and_bottom_edges_share_the_extremes`), the insufficient-entity,
+unknown-id and empty-list refusals
+(`align_rejects_fewer_than_two_entities`,
+`distribute_rejects_fewer_than_three_entities`), locked, frozen and degenerate
+refusals (`align_refuses_locked_and_frozen_layers_and_degenerate_entities`,
+`distribute_refuses_locked_layers_and_degenerate_entities`), the gap layout
+(`distribute_equalizes_gaps_along_x`, `distribute_along_y_orders_by_box_center`),
+single history steps with undo/redo
+(`align_and_distribute_are_single_history_steps`), the save/reopen round trip
+(`align_and_distribute_survive_save_and_reopen`) and repeatability
+(`align_is_deterministic`).
+
 ## Boundaries that stay unsupported
 
 - No DWG, IGES, PNG or JPG reading or writing.
@@ -427,6 +474,9 @@ layers (`join_refuses_a_locked_layer`) and repeatability (`join_is_deterministic
   endpoint and sit on the same layer. It does not join polylines, arcs, circles,
   ellipses, splines or chains of more than two lines, does not close a gap
   between separate endpoints, and does not move geometry.
+- Align and distribute translate whole entities by their sampled bounding
+  boxes; they never rotate, scale or resize an entity and do not refuse
+  results whose boxes overlap.
 - Offset covers lines, straight-segment polylines, circles and arcs only. It
   does not clip self-intersections, miter arc or bulge segments (polylines have
   none) or offset ellipses, splines, points, text, hatches and dimensions.
