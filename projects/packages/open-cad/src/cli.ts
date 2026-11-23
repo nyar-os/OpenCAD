@@ -64,10 +64,12 @@ import type {
     OverkillResult,
     Point,
     PointMeasurement,
+    QuantityTableResult,
     SaveReport,
     SelectionResult,
     SnapMode,
     SnapResult,
+    StatsGroupBy,
     TextStyle,
     TextStyleChange,
     TextMatchResult,
@@ -411,13 +413,25 @@ function describePointMeasure(result: PointMeasurement): string {
 }
 
 function describeStats(result: DrawingStats): string {
-    const layers = result.layers.map(
-        (layer) => `  ${layer.id}: entities=${layer.entityCount} length=${layer.length} area=${layer.area}`,
+    const groups = result.groups.map(
+        (group) => `  ${group.label}: entities=${group.entityCount} length=${group.length} area=${group.area}`,
     );
     return [
-        `statistics revision=${result.revision} units=${result.units}`,
-        ...layers,
+        `statistics revision=${result.revision} units=${result.units} groupBy=${result.groupBy}`,
+        ...groups,
         `  total: entities=${result.totals.entities} length=${result.totals.length} area=${result.totals.area}`,
+    ].join('\n');
+}
+
+function describeQuantityTable(result: QuantityTableResult): string {
+    const rows = result.rows.map(
+        (row) => `  ${row.label}: entities=${row.entityCount} length=${row.length} area=${row.area}`,
+    );
+    return [
+        `quantity table revision=${result.revision} groupBy=${result.groupBy} rows=${result.rows.length}`,
+        ...rows,
+        `  total: entities=${result.totals.entities} length=${result.totals.length} area=${result.totals.area}`,
+        `  created: ${result.created.length} entities`,
     ].join('\n');
 }
 
@@ -2187,16 +2201,54 @@ cli
 
 cli
     .command('stats', 'cli.cmd.stats')
+    .option('--group-by <group>', 'cli.opt.stats-group-by', { enum: ['layer', 'type', 'color', 'linetype'] })
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
         if (file === undefined) {
             ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
             return 2;
         }
+        const groupBy = (text(options, 'group-by') ?? 'layer') as StatsGroupBy;
         const opened = await guard(ctx, () => app.open({ path: file }));
         try {
-            const result = await guard(ctx, () => opened.stats());
+            const result = await guard(ctx, () => opened.stats(groupBy));
             ctx.emitResult(result, describeStats(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('quantity-table', 'cli.cmd.quantity-table')
+    .option('--layer <layer>', 'cli.opt.quantity-layer')
+    .option('--group-by <group>', 'cli.opt.stats-group-by', { enum: ['layer', 'type', 'color', 'linetype'] })
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--text-height <number>', 'cli.opt.quantity-text-height')
+    .option('--title <text>', 'cli.opt.quantity-title')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.quantityTable({
+                    layer: text(options, 'layer'),
+                    groupBy: (text(options, 'group-by') ?? 'layer') as StatsGroupBy,
+                    origin,
+                    textHeight: number(options, 'text-height'),
+                    title: text(options, 'title'),
+                }),
+            );
+            ctx.emitResult(result, describeQuantityTable(result));
             return 0;
         } finally {
             opened.close();

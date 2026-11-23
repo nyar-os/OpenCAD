@@ -40,7 +40,8 @@
             "chamfer": "Chamfer two lines with a bevel, trimming both, and save the file",
             "measure": "Measure bounds, path length and enclosed area of a drawing file; pass --ids to measure single entities",
             "measure-points": "Measure the distance between two points or the angle at three points",
-            "stats": "Report entity count, path length and enclosed area per layer",
+            "stats": "Report entity count, path length and enclosed area grouped by layer, type, colour or line type",
+            "quantity-table": "Draw a framed quantity take-off table of the drawing aggregates and save the file",
             "select": "Select entities inside or crossing a rectangular window without changing the drawing",
             "snap": "Compute endpoint, midpoint, centre and line-intersection snap points without changing the drawing",
             "ucs": "Convert points and entities between world and user coordinates and save the file",
@@ -245,13 +246,19 @@
             "date": "Date label; defaults to an empty cell",
             "title-block-sheet": "Sheet label in the title block; defaults to 1",
             "iterations": "Corner-cutting passes for polyline smoothing, 1-8; defaults to 2",
-            "smooth-ratio": "Fraction each smoothed corner is pulled toward a vertex, between 0 and 0.5; defaults to 0.25"
+            "smooth-ratio": "Fraction each smoothed corner is pulled toward a vertex, between 0 and 0.5; defaults to 0.25",
+            "stats-group-by": "Grouping for the statistics: layer (default), type, color or linetype",
+            "quantity-layer": "Target layer for the quantity table; defaults to quantity",
+            "origin-point": "Bottom-left corner of the table as x,y; defaults to 0,0",
+            "quantity-text-height": "Height of the table text; defaults to 3.5",
+            "quantity-title": "Caption above the table header; an empty value omits the caption row"
         },
         "error": {
             "hatch-pattern-required": "`--id <entity>` is required",
             "title-block-invalid": "`--width`, `--height`, `--margin` and `--text-height` must be positive numbers",
             "diff-arguments-required": "`<left>` and `<right>` drawing files are required",
-            "polyline-smooth-required": "`--id <entity>` is required"
+            "polyline-smooth-required": "`--id <entity>` is required",
+            "origin-invalid": "`--origin x,y` needs two numbers"
         }
     }
 }
