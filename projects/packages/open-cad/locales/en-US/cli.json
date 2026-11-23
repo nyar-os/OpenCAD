@@ -66,6 +66,8 @@
             "add-radial-dimension": "Add a radial or diameter dimension and save the file in place",
             "add-ordinate-dimension": "Add an ordinate dimension and save the file in place",
             "add-angular-dimension": "Add an angular dimension swept counter-clockwise from the first ray to the second and save the file in place",
+            "dimension": "Edit the linear dimensions of an existing drawing file",
+            "dimension-update": "Update a linear dimension's measured points, offset or style and save the file",
             "delete": "Delete one entity by id and save the file in place",
             "list": "List the entities of a drawing file",
             "move": "Move one entity by an offset or to an absolute point and save the file",
@@ -223,6 +225,7 @@
             "linetype-description": "Human-readable line type description",
             "linetype-pattern": "Comma-separated dash lengths in drawing units; omit for a solid line",
             "style-name": "Dimension style name, which also acts as the style id",
+            "dimension-style": "Dimension style id applied to a linear dimension",
             "scale": "Overall scale applied to the dimension style's lengths",
             "arrow-size": "Arrowhead size in drawing units",
             "text-height": "Dimension text height in drawing units",
@@ -267,6 +270,7 @@
             "diff-arguments-required": "`<left>` and `<right>` drawing files are required",
             "polyline-smooth-required": "`--id <entity>` is required",
             "polyline-chamfer-required": "`--id <entity>` and `--distance <number>` are required",
+            "dimension-update-required": "`--id <entity>` and at least one of `--from`, `--to`, `--offset` or `--style` are required",
             "origin-invalid": "`--origin x,y` needs two numbers"
         }
     }

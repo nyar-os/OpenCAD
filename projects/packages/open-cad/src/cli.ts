@@ -1218,6 +1218,43 @@ entity
         }
     });
 
+const dimension = cli.command('dimension', 'cli.cmd.dimension');
+
+dimension
+    .command('update', 'cli.cmd.dimension-update')
+    .option('--id <entity>', 'cli.opt.id')
+    .option('--from <x,y>', 'cli.opt.from')
+    .option('--to <x,y>', 'cli.opt.to')
+    .option('--offset <number>', 'cli.opt.offset')
+    .option('--style <id>', 'cli.opt.dimension-style')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const id = text(options, 'id');
+        const from = point(options, 'from');
+        const to = point(options, 'to');
+        const offset = number(options, 'offset');
+        const style = text(options, 'style');
+        if (id === undefined || (from === undefined && to === undefined && offset === undefined && style === undefined)) {
+            ctx.fail('open-cad.cli.dimension-update-required', {
+                message: '`--id <entity>` and at least one of `--from x,y`, `--to x,y`, `--offset <number>` or `--style <id>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const entity = await guard(ctx, () => opened.updateDimension({ entityId: id, from, to, offset, style }));
+            const change = entityChange(opened, entity);
+            ctx.emitResult(change, describeEdit(change, 'updated'));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
 entity
     .command('delete', 'cli.cmd.delete')
     .option('--id <entity>', 'cli.opt.id')
