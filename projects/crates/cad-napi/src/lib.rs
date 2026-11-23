@@ -28,8 +28,8 @@ use std::{
 
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
-    DrawOrderAction, ExtendSide, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis, ServiceError, TransformOp,
-    TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    DrawOrderAction, ExtendSide, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis, OverkillRequest, ServiceError,
+    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -910,6 +910,16 @@ fn drawing_distribute(ctx: CallContext) -> Result<JsValue> {
     let axis = DistributeAxis::parse(request.get("axis").and_then(Value::as_str).unwrap_or_default())
         .ok_or_else(|| Error::new("session/argument-invalid: `axis` must be x or y"))?;
     let result = open_cad_drawing::distribute(handle, DistributeRequest { ids, axis }).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Removes exact duplicate entities and optionally merges collinear overlapping lines.
+#[function]
+fn drawing_overkill(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: OverkillRequest = serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::overkill(handle, request).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2466,6 +2476,7 @@ register_module![
     drawing_join,
     drawing_align,
     drawing_distribute,
+    drawing_overkill,
     drawing_fillet,
     drawing_chamfer,
     drawing_measure,

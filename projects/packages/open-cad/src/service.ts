@@ -91,6 +91,8 @@ import type {
     OffsetBySideRequest,
     OffsetBySideResult,
     OpenCADCapabilities,
+    OverkillRequest,
+    OverkillResult,
     Point,
     PointMeasurement,
     ReplaceTextRequest,
@@ -934,6 +936,16 @@ export function align(handle: number, request: AlignRequest): AlignResult {
 export function distribute(handle: number, request: DistributeRequest): DistributeResult {
     return decode<DistributeResult>(() =>
         binding('drawing.distribute').drawing_distribute(handle, JSON.stringify({ ids: request.ids, axis: request.axis })),
+    );
+}
+
+/** Removes exact duplicate entities and optionally merges collinear overlapping lines. */
+export function overkill(handle: number, request: OverkillRequest): OverkillResult {
+    return decode<OverkillResult>(() =>
+        binding('drawing.overkill').drawing_overkill(
+            handle,
+            JSON.stringify({ tolerance: request.tolerance, mergeOverlapping: request.mergeOverlapping }),
+        ),
     );
 }
 

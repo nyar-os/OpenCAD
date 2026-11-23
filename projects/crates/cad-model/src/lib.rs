@@ -116,8 +116,8 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
-/// offset, trim, extend, break, join, fillet, chamfer, align, distribute and
-/// measure); constraint solving and a 3D kernel stay unsupported.
+/// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
+/// overkill and measure); constraint solving and a 3D kernel stay unsupported.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -191,6 +191,7 @@ pub fn capabilities() -> Value {
                 "chamfer",
                 "align",
                 "distribute",
+                "overkill",
                 "measure",
                 "measure-entity",
                 "measure-points",
@@ -209,7 +210,7 @@ pub fn capabilities() -> Value {
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
-                | "distribute" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
+                | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
                 | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" => "supported",
                 _ => "unsupported",
             },
@@ -3690,6 +3691,292 @@ pub fn distribute(handle: u64, request: DistributeRequest) -> Result<Value, Serv
             "axis": axis.as_str(),
             "affected": affected,
             "bounds": bounds_json(&session.drawing),
+        })
+    })
+}
+
+/// Arguments of [`overkill`].
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OverkillRequest {
+    /// Geometric tolerance in drawing units; defaults to `1e-9`.
+    pub tolerance: Option<f64>,
+    /// Whether collinear, overlapping or touching lines on one layer merge
+    /// into their union; defaults to `false`.
+    pub merge_overlapping: Option<bool>,
+}
+
+/// Whether [`overkill`] can compare one kind for exact duplication.
+fn overkill_comparable(kind: &EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::Line { .. }
+            | EntityKind::Circle { .. }
+            | EntityKind::Arc { .. }
+            | EntityKind::Ellipse { .. }
+            | EntityKind::Point { .. }
+            | EntityKind::Polyline { .. }
+            | EntityKind::Spline { .. }
+    )
+}
+
+fn points_close(first: [f64; 2], second: [f64; 2], tolerance: f64) -> bool {
+    distance(first, second) <= tolerance
+}
+
+fn numbers_close(first: f64, second: f64, tolerance: f64) -> bool {
+    (first - second).abs() <= tolerance
+}
+
+/// Angular equality in degrees, tolerant of the `0`/`360` wrap.
+fn angles_close(first: f64, second: f64, tolerance: f64) -> bool {
+    let delta = (normalize_angle(first) - normalize_angle(second)).abs();
+    delta <= tolerance || 360.0 - delta <= tolerance
+}
+
+/// Whether two same-kind entities describe the same geometry within
+/// `tolerance`; a line also matches its reversed twin.
+fn kinds_duplicate(first: &EntityKind, second: &EntityKind, tolerance: f64) -> bool {
+    match (first, second) {
+        (EntityKind::Line { from: a_from, to: a_to }, EntityKind::Line { from: b_from, to: b_to }) => {
+            (points_close(*a_from, *b_from, tolerance) && points_close(*a_to, *b_to, tolerance))
+                || (points_close(*a_from, *b_to, tolerance) && points_close(*a_to, *b_from, tolerance))
+        }
+        (EntityKind::Circle { center: a_center, radius: a_radius }, EntityKind::Circle { center: b_center, radius: b_radius }) => {
+            points_close(*a_center, *b_center, tolerance) && numbers_close(*a_radius, *b_radius, tolerance)
+        }
+        (
+            EntityKind::Arc { center: a_center, radius: a_radius, start_angle: a_start, end_angle: a_end },
+            EntityKind::Arc { center: b_center, radius: b_radius, start_angle: b_start, end_angle: b_end },
+        ) => {
+            points_close(*a_center, *b_center, tolerance)
+                && numbers_close(*a_radius, *b_radius, tolerance)
+                && angles_close(*a_start, *b_start, tolerance)
+                && angles_close(*a_end, *b_end, tolerance)
+        }
+        (
+            EntityKind::Ellipse { center: a_center, rx: a_rx, ry: a_ry, rotation: a_rotation, start_angle: a_start, end_angle: a_end },
+            EntityKind::Ellipse { center: b_center, rx: b_rx, ry: b_ry, rotation: b_rotation, start_angle: b_start, end_angle: b_end },
+        ) => {
+            points_close(*a_center, *b_center, tolerance)
+                && numbers_close(*a_rx, *b_rx, tolerance)
+                && numbers_close(*a_ry, *b_ry, tolerance)
+                && angles_close(*a_rotation, *b_rotation, tolerance)
+                && angles_close(*a_start, *b_start, tolerance)
+                && angles_close(*a_end, *b_end, tolerance)
+        }
+        (EntityKind::Point { at: a_at }, EntityKind::Point { at: b_at }) => points_close(*a_at, *b_at, tolerance),
+        (EntityKind::Polyline { points: a_points, closed: a_closed }, EntityKind::Polyline { points: b_points, closed: b_closed })
+        | (EntityKind::Spline { points: a_points, closed: a_closed }, EntityKind::Spline { points: b_points, closed: b_closed }) => {
+            a_closed == b_closed
+                && a_points.len() == b_points.len()
+                && std::iter::zip(a_points.iter(), b_points.iter()).all(|(a, b)| points_close(*a, *b, tolerance))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `point` lies on the infinite line through `anchor` with unit
+/// `direction`, within `tolerance` — the same cross-product test
+/// [`join_entities`] applies to its two free endpoints.
+fn on_line(anchor: [f64; 2], direction: [f64; 2], point: [f64; 2], tolerance: f64) -> bool {
+    cross(direction, [point[0] - anchor[0], point[1] - anchor[1]]).abs() <= tolerance
+}
+
+/// One planned merge: source ids in document order and the union endpoints.
+struct OverkillMerge {
+    sources: Vec<String>,
+    from: [f64; 2],
+    to: [f64; 2],
+}
+
+/// What one [`overkill`] call would change, computed before the edit.
+struct OverkillPlan {
+    removed: Vec<String>,
+    merges: Vec<OverkillMerge>,
+    skipped: usize,
+    before: usize,
+}
+
+/// Computes the duplicate removals and, when asked, the collinear line merges.
+fn plan_overkill(drawing: &Drawing, tolerance: f64, merge_overlapping: bool) -> Result<OverkillPlan, ServiceError> {
+    let mut plan = OverkillPlan { removed: Vec::new(), merges: Vec::new(), skipped: 0, before: drawing.entities.len() };
+    let mut kept: Vec<usize> = Vec::new();
+    for (index, entity) in drawing.entities.iter().enumerate() {
+        if !overkill_comparable(&entity.kind) {
+            plan.skipped += 1;
+            continue;
+        }
+        let duplicate = kept.iter().any(|&other| {
+            let candidate = &drawing.entities[other];
+            candidate.layer == entity.layer && kinds_duplicate(&candidate.kind, &entity.kind, tolerance)
+        });
+        if duplicate {
+            if let Some(error) = locked_layer(drawing, &entity.layer) {
+                return Err(error);
+            }
+            plan.removed.push(entity.id.clone());
+        }
+        else {
+            kept.push(index);
+        }
+    }
+    if !merge_overlapping {
+        return Ok(plan);
+    }
+    let mut used = vec![false; drawing.entities.len()];
+    for &first in &kept {
+        if used[first] {
+            continue;
+        }
+        let Some((from, first_to)) = line_endpoints(&drawing.entities[first].kind)
+        else {
+            continue;
+        };
+        let Some(direction) = unit_direction(from, first_to)
+        else {
+            continue;
+        };
+        let layer = drawing.entities[first].layer.clone();
+        let mut group = vec![first];
+        used[first] = true;
+        for &other in &kept {
+            if used[other] {
+                continue;
+            }
+            let candidate = &drawing.entities[other];
+            if candidate.layer != layer {
+                continue;
+            }
+            let Some((c_from, c_to)) = line_endpoints(&candidate.kind)
+            else {
+                continue;
+            };
+            if on_line(from, direction, c_from, tolerance) && on_line(from, direction, c_to, tolerance) {
+                group.push(other);
+                used[other] = true;
+            }
+        }
+        if group.len() < 2 {
+            continue;
+        }
+        let mut spans: Vec<(f64, f64, usize)> = group
+            .iter()
+            .map(|&index| {
+                let (a, b) = line_endpoints(&drawing.entities[index].kind).expect("group members are lines");
+                let first_t = (a[0] - from[0]) * direction[0] + (a[1] - from[1]) * direction[1];
+                let last_t = (b[0] - from[0]) * direction[0] + (b[1] - from[1]) * direction[1];
+                (first_t.min(last_t), first_t.max(last_t), index)
+            })
+            .collect();
+        spans.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal).then(left.2.cmp(&right.2)));
+        let mut runs: Vec<(f64, f64, Vec<usize>)> = Vec::new();
+        for (low, high, index) in spans {
+            match runs.last_mut() {
+                Some(run) if low <= run.1 + tolerance => {
+                    run.1 = run.1.max(high);
+                    run.2.push(index);
+                }
+                _ => runs.push((low, high, vec![index])),
+            }
+        }
+        for (low, high, indices) in runs {
+            if indices.len() < 2 {
+                continue;
+            }
+            if let Some(error) = locked_layer(drawing, &layer) {
+                return Err(error);
+            }
+            let mut ids: Vec<(usize, String)> = indices.iter().map(|&index| (index, drawing.entities[index].id.clone())).collect();
+            ids.sort();
+            plan.merges.push(OverkillMerge {
+                sources: ids.into_iter().map(|(_, id)| id).collect(),
+                from: clean_point([from[0] + direction[0] * low, from[1] + direction[1] * low]),
+                to: clean_point([from[0] + direction[0] * high, from[1] + direction[1] * high]),
+            });
+        }
+    }
+    Ok(plan)
+}
+
+/// Applies one [`plan_overkill`] result and returns each merge as sources to
+/// the fresh id of its union line.
+fn apply_overkill(drawing: &mut Drawing, plan: &OverkillPlan) -> Result<Vec<(Vec<String>, String)>, ServiceError> {
+    for id in &plan.removed {
+        let index = entity_index(drawing, id)?;
+        drawing.entities.remove(index);
+        drawing.forget_draw_order(id);
+        detach_entity_from_groups(drawing, id);
+    }
+    let mut groups = Vec::with_capacity(plan.merges.len());
+    for merge in &plan.merges {
+        let layer = drawing.entities[entity_index(drawing, &merge.sources[0])?].layer.clone();
+        let id = drawing.take_entity_id();
+        let merged = Entity { id: id.clone(), layer, kind: EntityKind::Line { from: merge.from, to: merge.to } };
+        let mut positions: Vec<usize> = Vec::with_capacity(merge.sources.len());
+        for source in &merge.sources {
+            positions.push(entity_index(drawing, source)?);
+        }
+        positions.sort_unstable();
+        for &position in positions.iter().rev() {
+            drawing.entities.remove(position);
+        }
+        drawing.entities.insert(positions[0], merged);
+        if let Some(slot) = drawing.draw_order.iter().position(|candidate| merge.sources.iter().any(|source| source == candidate)) {
+            drawing.draw_order.remove(slot);
+            drawing.draw_order.insert(slot, id.clone());
+        }
+        for source in &merge.sources {
+            drawing.forget_draw_order(source);
+            detach_entity_from_groups(drawing, source);
+        }
+        groups.push((merge.sources.clone(), id));
+    }
+    drawing.revision += 1;
+    Ok(groups)
+}
+
+/// Removes exact duplicate entities and optionally merges collinear lines.
+///
+/// An entity duplicates an earlier one when both sit on the same layer and
+/// carry the same geometry within `tolerance` (default `1e-9` drawing units);
+/// a line also matches its reversed twin. Only line, circle, arc, ellipse,
+/// point, polyline and spline entities are compared; text, dimensions and
+/// hatches are counted in `skipped` and never touched. When
+/// `merge_overlapping` is set, lines on one layer that are collinear within
+/// the same tolerance and whose spans overlap or touch merge into one union
+/// line with a fresh deterministic id, reusing the collinearity test of
+/// [`join_entities`].
+///
+/// The response carries `{ revision, drawing, removed, merged, skipped, before, after }`,
+/// where `removed` lists the dropped duplicate ids, `merged` lists every group
+/// as `{ sources, created }` and `before`/`after` count the entities around the
+/// cleanup. A drawing with nothing to clean leaves the revision untouched. A
+/// cleaning with changes is one history step and one revision, and a single
+/// undo reverses the whole report. A non-finite or negative `tolerance`
+/// reports `session/argument-invalid`; a duplicate or merge on a locked or
+/// frozen layer reports `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn overkill(handle: u64, request: OverkillRequest) -> Result<Value, ServiceError> {
+    let tolerance = request.tolerance.unwrap_or(1e-9);
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(argument("`tolerance` must be a finite non-negative number"));
+    }
+    let plan = store::read(handle, |session| plan_overkill(&session.drawing, tolerance, request.merge_overlapping.unwrap_or(false)))??;
+    let groups = if plan.removed.is_empty() && plan.merges.is_empty() {
+        Vec::new()
+    }
+    else {
+        store::edit(handle, |drawing| apply_overkill(drawing, &plan))?
+    };
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "removed": plan.removed,
+            "merged": groups.iter().map(|(sources, id)| json!({ "sources": sources, "created": id })).collect::<Vec<_>>(),
+            "skipped": plan.skipped,
+            "before": plan.before,
+            "after": session.drawing.entities.len(),
         })
     })
 }

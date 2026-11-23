@@ -59,6 +59,7 @@ import type {
     OffsetResult,
     OffsetSide,
     OpenCADCapabilities,
+    OverkillResult,
     Point,
     PointMeasurement,
     SaveReport,
@@ -339,6 +340,12 @@ function describeAlign(result: AlignResult): string {
 
 function describeDistribute(result: DistributeResult): string {
     return `distributed ${result.affected} entities axis=${result.axis} revision=${result.revision}`;
+}
+
+function describeOverkill(result: OverkillResult): string {
+    const merges = result.merged.map((group) => `${group.sources.join('+')}=>${group.created}`).join(',');
+    const tail = merges === '' ? '' : ` ${merges}`;
+    return `overkill removed ${result.removed.length} duplicates merged ${result.merged.length} groups skipped=${result.skipped} revision=${result.revision}${tail}`;
 }
 
 function describeLayerAssignment(result: EntityLayerChange): string {
@@ -1890,6 +1897,28 @@ cli
         try {
             const result = await guard(ctx, () => opened.distribute({ ids, axis }));
             ctx.emitResult(result, describeDistribute(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('overkill', 'cli.cmd.overkill')
+    .option('--tolerance <number>', 'cli.opt.overkill-tolerance')
+    .option('--merge-overlapping <state>', 'cli.opt.merge-overlapping', { enum: ['on', 'off'] })
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.overkill({ tolerance: number(options, 'tolerance'), mergeOverlapping: toggle(options, 'merge-overlapping') }),
+            );
+            ctx.emitResult(result, describeOverkill(result));
             return 0;
         } finally {
             opened.close();

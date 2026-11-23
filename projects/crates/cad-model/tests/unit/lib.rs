@@ -71,6 +71,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "chamfer",
         "align",
         "distribute",
+        "overkill",
         "measure",
         "measure-points",
         "stats",
@@ -4984,6 +4985,172 @@ fn align_is_deterministic() {
         assert_eq!(first["revision"], second["revision"], "mode {mode:?}");
         assert_eq!(first["affected"], second["affected"], "mode {mode:?}");
     }
+}
+
+#[test]
+fn overkill_removes_exact_duplicates_and_counts_skipped() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [5.0, 0.0], [0.0, 0.0]).expect("reversed twin");
+    add_circle(handle, DEFAULT_LAYER, [10.0, 0.0], 2.0).expect("circle");
+    add_circle(handle, DEFAULT_LAYER, [10.0, 0.0], 2.0).expect("circle twin");
+    add_text(handle, DEFAULT_LAYER, [1.0, 1.0], 2.0, "note").expect("text");
+    add_text(handle, DEFAULT_LAYER, [1.0, 1.0], 2.0, "note").expect("text twin");
+
+    let result = overkill(handle, OverkillRequest::default()).expect("overkill");
+    assert_eq!(result["removed"], json!(["entity-2", "entity-4"]), "a reversed line and a circle twin are duplicates");
+    assert_eq!(result["merged"], json!([]));
+    assert_eq!(result["skipped"], json!(2), "the texts are counted and never touched");
+    assert_eq!(result["before"], json!(6));
+    assert_eq!(result["after"], json!(4));
+    assert_eq!(result["revision"], json!(8), "one cleanup is one revision bump");
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities.len(), 4);
+    assert!(drawing.entities.iter().any(|entity| matches!(entity.kind, EntityKind::Text { .. })), "the texts survive");
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_merges_overlapping_and_touching_lines() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [10.0, 0.0]).expect("overlapping");
+    add_line(handle, DEFAULT_LAYER, [10.0, 0.0], [14.0, 0.0]).expect("touching");
+    add_line(handle, DEFAULT_LAYER, [0.0, 5.0], [5.0, 5.0]).expect("parallel");
+
+    let result = overkill(handle, OverkillRequest { tolerance: None, merge_overlapping: Some(true) }).expect("overkill merge");
+    assert_eq!(result["removed"], json!([]));
+    let merged = result["merged"].as_array().expect("merged").clone();
+    assert_eq!(merged.len(), 1, "the three collinear spans form one union");
+    assert_eq!(merged[0]["sources"], json!(["entity-1", "entity-2", "entity-3"]));
+    assert_eq!(merged[0]["created"], json!("entity-5"));
+    assert_eq!(result["before"], json!(4));
+    assert_eq!(result["after"], json!(2));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].id, "entity-5");
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [14.0, 0.0] }, "the union keeps the outer endpoints");
+    assert_eq!(drawing.entities[1].id, "entity-4", "the parallel line stays");
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_leaves_a_clean_drawing_untouched() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [6.0, 0.0], [10.0, 0.0]).expect("second");
+
+    let result = overkill(handle, OverkillRequest { tolerance: None, merge_overlapping: Some(true) }).expect("clean overkill");
+    assert_eq!(result["removed"], json!([]));
+    assert_eq!(result["merged"], json!([]));
+    assert_eq!(result["before"], json!(2));
+    assert_eq!(result["after"], json!(2));
+    assert_eq!(result["revision"], json!(3), "a no-op cleanup does not bump the revision");
+    undo(handle).expect("undo the second line");
+    undo(handle).expect("undo the first line");
+    assert_eq!(undo(handle).expect_err("nothing to undo").code, "drawing/nothing-to-undo", "a no-op records no history step");
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_honours_layers_and_tolerance() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 2.0).expect("circle");
+    add_circle(handle, "Structure", [0.0, 0.0], 2.0).expect("cross-layer twin");
+    add_line(handle, DEFAULT_LAYER, [0.0, 5.0], [5.0, 5.0]).expect("line");
+    add_line(handle, DEFAULT_LAYER, [0.05, 5.0], [5.0, 5.0]).expect("near twin");
+
+    let strict = overkill(handle, OverkillRequest { tolerance: Some(0.001), merge_overlapping: None }).expect("strict");
+    assert_eq!(strict["removed"], json!([]), "cross-layer twins and near twins survive a tight tolerance");
+    assert_eq!(strict["revision"], json!(6), "the strict pass is a no-op");
+
+    let loose = overkill(handle, OverkillRequest { tolerance: Some(0.1), merge_overlapping: None }).expect("loose");
+    assert_eq!(loose["removed"], json!(["entity-4"]), "the near twin falls inside the loose tolerance");
+    assert_eq!(loose["after"], json!(3));
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_refuses_locked_layers() {
+    let duplicates = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&duplicates);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, "Structure", [0.0, 0.0], [5.0, 0.0]).expect("twin");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(overkill(handle, OverkillRequest::default()).expect_err("locked duplicate").code, "drawing/layer-locked");
+    assert_eq!(drawing_of(handle).entities.len(), 2, "a refused cleanup leaves the drawing untouched");
+    close(handle).expect("close");
+
+    let overlaps = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&overlaps);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, "Structure", [3.0, 0.0], [10.0, 0.0]).expect("overlap");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        overkill(handle, OverkillRequest { tolerance: None, merge_overlapping: Some(true) }).expect_err("locked merge").code,
+        "drawing/layer-locked"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_rejects_a_bad_tolerance() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    assert_eq!(
+        overkill(handle, OverkillRequest { tolerance: Some(-1.0), merge_overlapping: None }).expect_err("negative").code,
+        "session/argument-invalid"
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_is_a_single_history_step() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+    add_line(handle, DEFAULT_LAYER, [5.0, 0.0], [0.0, 0.0]).expect("duplicate twin");
+    add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [10.0, 0.0]).expect("overlap");
+
+    let result = overkill(handle, OverkillRequest { tolerance: None, merge_overlapping: Some(true) }).expect("overkill");
+    assert_eq!(result["removed"], json!(["entity-2"]));
+    assert_eq!(result["merged"][0]["created"], json!("entity-4"));
+    assert_eq!(result["revision"], json!(5));
+
+    let undone = undo(handle).expect("undo the cleanup");
+    assert_eq!(undone["revision"], json!(6));
+    assert_eq!(drawing_of(handle).entities.len(), 3, "one undo restores the duplicate and both sources");
+
+    let redone = redo(handle).expect("redo the cleanup");
+    assert_eq!(redone["revision"], json!(7));
+    assert_eq!(drawing_of(handle).entities.len(), 1, "the duplicate is gone and the overlap is one union line");
+    close(handle).expect("close");
+}
+
+#[test]
+fn overkill_is_deterministic() {
+    let run = || {
+        let created = create(CreateRequest::default()).expect("create");
+        let handle = handle_of(&created);
+        add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [5.0, 0.0]).expect("first");
+        add_line(handle, DEFAULT_LAYER, [5.0, 0.0], [0.0, 0.0]).expect("twin");
+        add_line(handle, DEFAULT_LAYER, [3.0, 0.0], [10.0, 0.0]).expect("overlap");
+        let result = overkill(handle, OverkillRequest { tolerance: None, merge_overlapping: Some(true) }).expect("overkill");
+        close(handle).expect("close");
+        result
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(first["removed"], second["removed"]);
+    assert_eq!(first["merged"], second["merged"]);
+    assert_eq!(first["revision"], second["revision"]);
 }
 
 #[test]

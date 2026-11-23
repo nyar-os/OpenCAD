@@ -64,6 +64,7 @@ export type OperationName =
     | 'join'
     | 'align'
     | 'distribute'
+    | 'overkill'
     | 'measure'
     | 'measure-entity'
     | 'stats'
@@ -910,6 +911,36 @@ export interface DistributeResult {
     readonly axis: DistributeAxis;
     readonly affected: number;
     readonly bounds: Bounds;
+}
+
+/** Arguments of `overkill()`. */
+export interface OverkillRequest {
+    /** Geometric tolerance in drawing units; defaults to 1e-9. */
+    readonly tolerance?: number;
+    /** Merge collinear overlapping or touching line segments; defaults to false. */
+    readonly mergeOverlapping?: boolean;
+}
+
+/** One merged group: the source ids replaced by one new union line. */
+export interface OverkillMerge {
+    readonly sources: readonly EntityId[];
+    readonly created: EntityId;
+}
+
+/** Result of `overkill()`. `skipped` counts entities overkill never compares. */
+export interface OverkillResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    /** Ids of the duplicate entities that were removed. */
+    readonly removed: readonly EntityId[];
+    /** Collinear line groups merged into a fresh union line. */
+    readonly merged: readonly OverkillMerge[];
+    /** Entities of a kind that is never compared (text, dimensions, hatches). */
+    readonly skipped: number;
+    /** Entity count before the cleanup. */
+    readonly before: number;
+    /** Entity count after the cleanup. */
+    readonly after: number;
 }
 
 /** Arguments of `copy()`. */

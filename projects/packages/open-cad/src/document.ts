@@ -86,6 +86,8 @@ import type {
     OffsetBySideRequest,
     OffsetBySideResult,
     MeasureResult,
+    OverkillRequest,
+    OverkillResult,
     Point,
     PointMeasurement,
     MergeLayerRequest,
@@ -839,6 +841,19 @@ export class DrawingDocument {
      */
     distribute(request: DistributeRequest): DistributeResult {
         return this.edit((handle) => service.distribute(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Removes exact duplicate entities on one layer within `tolerance` and,
+     * when `mergeOverlapping` is set, merges collinear overlapping or touching
+     * lines into union lines. Text, dimensions and hatches are never compared
+     * and are reported in `skipped`. A cleanup with changes is one history
+     * step; a clean drawing is left untouched.
+     */
+    overkill(request: OverkillRequest = {}): OverkillResult {
+        return this.edit((handle) => service.overkill(handle, request), (result) => {
             this.state = result.drawing;
         });
     }
