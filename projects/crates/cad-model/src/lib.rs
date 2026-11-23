@@ -1207,6 +1207,128 @@ pub fn update_polyline(handle: u64, entity: &str, update: PolylineUpdate) -> Res
     })
 }
 
+/// One edit applied by [`update_spline`].
+///
+/// A caller either replaces the fit-point list or edits one fit point; the
+/// closed flag can accompany any edit. `insert_at` accepts the current fit-point
+/// count to append.
+#[derive(Debug, Clone, Default)]
+pub struct SplineUpdate {
+    /// Replacement fit points; omit to keep the current list.
+    pub points: Option<Vec<[f64; 2]>>,
+    /// New closed flag; omit to keep the current flag.
+    pub closed: Option<bool>,
+    /// Zero-based index the inserted fit point takes.
+    pub insert_at: Option<usize>,
+    /// New fit point, required together with `insert_at`.
+    pub insert_point: Option<[f64; 2]>,
+    /// Zero-based index of the fit point to remove.
+    pub remove_at: Option<usize>,
+    /// Zero-based index of the fit point to move.
+    pub move_at: Option<usize>,
+    /// New position of the moved fit point, required together with `move_at`.
+    pub move_to: Option<[f64; 2]>,
+}
+
+/// Edits the fit points or the closed flag of one spline.
+///
+/// The caller passes a replacement `points` list, an `insert_at`/`insert_point`
+/// pair, a `remove_at` index, a `move_at`/`move_to` pair or a new `closed` flag.
+/// Replacing the list cannot be combined with a single-vertex edit and one call
+/// edits at most one fit point. A spline always keeps at least two fit points, so
+/// a replacement list or a removal that would leave fewer reports
+/// `session/argument-invalid`, as does an index outside the current list. A
+/// non-spline reports `object/unsupported` and a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`. The response carries
+/// `{ revision, drawing, entity }`.
+pub fn update_spline(handle: u64, entity: &str, update: SplineUpdate) -> Result<Value, ServiceError> {
+    let replacing = update.points.is_some();
+    let inserting = update.insert_at.is_some();
+    let removing = update.remove_at.is_some();
+    let moving = update.move_at.is_some();
+    if !replacing && update.closed.is_none() && !inserting && !removing && !moving {
+        return Err(argument("pass at least one of `points`, `closed`, `insertAt`, `removeAt` or `moveAt`"));
+    }
+    if replacing && (inserting || removing || moving) {
+        return Err(argument("replace the fit-point list or edit one fit point, not both"));
+    }
+    if [inserting, removing, moving].into_iter().filter(|edit| *edit).count() > 1 {
+        return Err(argument("insert, remove and move edit one fit point at a time"));
+    }
+    if inserting != update.insert_point.is_some() {
+        return Err(argument("`insertAt` and `insertPoint` must be passed together"));
+    }
+    if moving != update.move_to.is_some() {
+        return Err(argument("`moveAt` and `moveTo` must be passed together"));
+    }
+    if let Some(points) = &update.points {
+        require_finite(points, "points")?;
+        if points.len() < 2 {
+            return Err(argument("a spline needs at least 2 fit points"));
+        }
+    }
+    if let Some(point) = update.insert_point {
+        require_finite(&[point], "insertPoint")?;
+    }
+    if let Some(point) = update.move_to {
+        require_finite(&[point], "moveTo")?;
+    }
+    store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        let layer = drawing.entities[index].layer.clone();
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if !matches!(&drawing.entities[index].kind, EntityKind::Spline { .. }) {
+            return Err(ServiceError::new(
+                "object/unsupported",
+                format!("entity `{entity}` is a {}, not a spline", kind_name(&drawing.entities[index].kind)),
+            ));
+        }
+        let EntityKind::Spline { points, closed } = &mut drawing.entities[index].kind
+        else {
+            unreachable!("the entity kind was checked above");
+        };
+        if let Some(replacement) = update.points.clone() {
+            *points = replacement;
+        }
+        if let Some(value) = update.closed {
+            *closed = value;
+        }
+        if let Some(at) = update.insert_at {
+            if at > points.len() {
+                return Err(argument(format!("`insertAt` {at} is beyond the spline's {} fit points", points.len())));
+            }
+            points.insert(at, update.insert_point.expect("the insert point is validated above"));
+        }
+        if let Some(at) = update.remove_at {
+            if at >= points.len() {
+                return Err(argument(format!("`removeAt` {at} is outside the spline's {} fit points", points.len())));
+            }
+            if points.len() <= 2 {
+                return Err(argument("a spline needs at least 2 fit points"));
+            }
+            points.remove(at);
+        }
+        if let Some(at) = update.move_at {
+            if at >= points.len() {
+                return Err(argument(format!("`moveAt` {at} is outside the spline's {} fit points", points.len())));
+            }
+            points[at] = update.move_to.expect("the moved point is validated above");
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity).cloned();
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
 /// Updates the radius or sweep angles of one arc.
 ///
 /// At least one of `radius`, `start_angle` or `end_angle` is required. Angles
@@ -1263,6 +1385,96 @@ pub fn update_arc(
         }
         if let Some(value) = end_angle {
             *current_end = value;
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity).cloned();
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
+/// One edit applied by [`update_ellipse`].
+///
+/// Every field is optional; an omitted field keeps its current value and at
+/// least one field is required.
+#[derive(Debug, Clone, Default)]
+pub struct EllipseUpdate {
+    /// New radius along the major (local X) axis.
+    pub rx: Option<f64>,
+    /// New radius along the minor (local Y) axis.
+    pub ry: Option<f64>,
+    /// New major-axis rotation in degrees.
+    pub rotation: Option<f64>,
+    /// New start parameter in degrees, measured from the major axis.
+    pub start_angle: Option<f64>,
+    /// New end parameter in degrees, swept counter-clockwise from the start.
+    pub end_angle: Option<f64>,
+}
+
+/// Updates the radii, rotation or sweep parameters of one ellipse.
+///
+/// At least one of `rx`, `ry`, `rotation`, `start_angle` or `end_angle` is
+/// required and every supplied field replaces only that value. `rx`/`ry` must be
+/// positive and finite and the angles finite; otherwise the call reports
+/// `session/argument-invalid`. A non-ellipse reports `object/unsupported`, an
+/// unknown id reports `object/not-found`, and a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`. The entity keeps its id and
+/// layer, the revision bumps once and the response carries
+/// `{ revision, drawing, entity }`.
+pub fn update_ellipse(handle: u64, entity: &str, update: EllipseUpdate) -> Result<Value, ServiceError> {
+    if update.rx.is_none() && update.ry.is_none() && update.rotation.is_none() && update.start_angle.is_none() && update.end_angle.is_none() {
+        return Err(argument("pass at least one of `rx`, `ry`, `rotation`, `startAngle` or `endAngle`"));
+    }
+    for (name, value) in [("rx", update.rx), ("ry", update.ry)] {
+        if let Some(value) = value
+            && (!value.is_finite() || value <= 0.0)
+        {
+            return Err(argument(format!("`{name}` must be a positive finite number")));
+        }
+    }
+    for (name, value) in [("rotation", update.rotation), ("startAngle", update.start_angle), ("endAngle", update.end_angle)] {
+        if let Some(value) = value
+            && !value.is_finite()
+        {
+            return Err(argument(format!("`{name}` must be finite")));
+        }
+    }
+    store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        let layer = drawing.entities[index].layer.clone();
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if !matches!(&drawing.entities[index].kind, EntityKind::Ellipse { .. }) {
+            return Err(ServiceError::new(
+                "object/unsupported",
+                format!("entity `{entity}` is a {}, not an ellipse", kind_name(&drawing.entities[index].kind)),
+            ));
+        }
+        let EntityKind::Ellipse { rx, ry, rotation, start_angle, end_angle, .. } = &mut drawing.entities[index].kind
+        else {
+            unreachable!("the entity kind was checked above");
+        };
+        if let Some(value) = update.rx {
+            *rx = value;
+        }
+        if let Some(value) = update.ry {
+            *ry = value;
+        }
+        if let Some(value) = update.rotation {
+            *rotation = value;
+        }
+        if let Some(value) = update.start_angle {
+            *start_angle = value;
+        }
+        if let Some(value) = update.end_angle {
+            *end_angle = value;
         }
         drawing.revision += 1;
         Ok(())

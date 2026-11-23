@@ -1768,6 +1768,232 @@ fn arc_radius_and_sweep_angles_are_editable() {
 }
 
 #[test]
+fn ellipse_fields_are_editable_in_place() {
+    let dir = TempDir::new("ellipse-edit-round-trip");
+    let path = dir.path.join("ellipse.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_ellipse(handle, DEFAULT_LAYER, [10.0, 5.0], 20.0, 10.0, 0.0, 0.0, 360.0).expect("ellipse");
+
+    let rx = update_ellipse(handle, "entity-1", EllipseUpdate { rx: Some(25.0), ..EllipseUpdate::default() }).expect("update rx");
+    assert_eq!(rx["entity"]["kind"]["rx"], json!(25.0));
+    assert_eq!(rx["entity"]["kind"]["ry"], json!(10.0), "untouched ry keeps its value");
+    assert_eq!(rx["entity"]["kind"]["center"], json!([10.0, 5.0]));
+    assert_eq!(rx["entity"]["id"], json!("entity-1"));
+    assert_eq!(rx["entity"]["layer"], json!(DEFAULT_LAYER));
+    assert_eq!(rx["revision"], json!(3), "one edit bumps the revision once");
+
+    let ry = update_ellipse(handle, "entity-1", EllipseUpdate { ry: Some(4.0), ..EllipseUpdate::default() }).expect("update ry");
+    assert_eq!(ry["entity"]["kind"]["ry"], json!(4.0));
+    assert_eq!(ry["entity"]["kind"]["rx"], json!(25.0));
+
+    let rotation =
+        update_ellipse(handle, "entity-1", EllipseUpdate { rotation: Some(30.0), ..EllipseUpdate::default() }).expect("update rotation");
+    assert_eq!(rotation["entity"]["kind"]["rotation"], json!(30.0));
+    assert_eq!(rotation["entity"]["kind"]["start_angle"], json!(0.0));
+
+    let sweep =
+        update_ellipse(handle, "entity-1", EllipseUpdate { start_angle: Some(45.0), end_angle: Some(180.0), ..EllipseUpdate::default() })
+            .expect("update the sweep");
+    assert_eq!(sweep["entity"]["kind"]["start_angle"], json!(45.0));
+    assert_eq!(sweep["entity"]["kind"]["end_angle"], json!(180.0));
+    assert_eq!(sweep["entity"]["kind"]["rotation"], json!(30.0), "untouched rotation keeps its value");
+
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    assert_eq!(
+        update_ellipse(handle, "entity-2", EllipseUpdate { rx: Some(2.0), ..EllipseUpdate::default() })
+            .expect_err("a line is not an ellipse")
+            .code,
+        "object/unsupported"
+    );
+    assert_eq!(update_ellipse(handle, "entity-1", EllipseUpdate::default()).expect_err("no edit").code, "session/argument-invalid");
+    assert_eq!(
+        update_ellipse(handle, "entity-1", EllipseUpdate { rx: Some(0.0), ..EllipseUpdate::default() }).expect_err("zero rx").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_ellipse(handle, "entity-1", EllipseUpdate { ry: Some(-1.0), ..EllipseUpdate::default() }).expect_err("negative ry").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_ellipse(handle, "entity-1", EllipseUpdate { rx: Some(f64::NAN), ..EllipseUpdate::default() }).expect_err("non-finite rx").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_ellipse(handle, "entity-1", EllipseUpdate { rotation: Some(f64::INFINITY), ..EllipseUpdate::default() })
+            .expect_err("non-finite rotation")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_ellipse(handle, "entity-1", EllipseUpdate { end_angle: Some(f64::NAN), ..EllipseUpdate::default() })
+            .expect_err("non-finite end angle")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_ellipse(handle, "entity-404", EllipseUpdate { rx: Some(2.0), ..EllipseUpdate::default() }).expect_err("missing entity").code,
+        "object/not-found"
+    );
+
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    assert_eq!(
+        drawing.entities[0].kind,
+        EntityKind::Ellipse { center: [10.0, 5.0], rx: 25.0, ry: 4.0, rotation: 30.0, start_angle: 45.0, end_angle: 180.0 }
+    );
+    update_layer(reopened, DEFAULT_LAYER, LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(
+        update_ellipse(reopened, "entity-1", EllipseUpdate { rx: Some(2.0), ..EllipseUpdate::default() }).expect_err("frozen layer").code,
+        "drawing/layer-frozen"
+    );
+    update_layer(reopened, DEFAULT_LAYER, LayerUpdate { frozen: Some(false), locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        update_ellipse(reopened, "entity-1", EllipseUpdate { rx: Some(2.0), ..EllipseUpdate::default() }).expect_err("locked layer").code,
+        "drawing/layer-locked"
+    );
+    close(reopened).expect("close reopened");
+
+    let again = create(CreateRequest::default()).expect("create again");
+    let again_handle = handle_of(&again);
+    add_ellipse(again_handle, DEFAULT_LAYER, [10.0, 5.0], 20.0, 10.0, 0.0, 0.0, 360.0).expect("ellipse again");
+    let repeated = update_ellipse(again_handle, "entity-1", EllipseUpdate { rx: Some(25.0), ..EllipseUpdate::default() }).expect("rx again");
+    assert_eq!(repeated["entity"]["kind"], rx["entity"]["kind"], "the same input yields the same geometry");
+    close(again_handle).expect("close again");
+}
+
+#[test]
+fn spline_fit_points_and_closure_are_editable() {
+    let dir = TempDir::new("spline-edit-round-trip");
+    let path = dir.path.join("spline.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 5.0], [20.0, 0.0]], false).expect("spline");
+
+    let closed = update_spline(handle, "entity-1", SplineUpdate { closed: Some(true), ..SplineUpdate::default() }).expect("close the spline");
+    assert_eq!(closed["entity"]["kind"]["closed"], json!(true));
+    assert_eq!(closed["entity"]["id"], json!("entity-1"));
+    assert_eq!(closed["entity"]["layer"], json!(DEFAULT_LAYER));
+    assert_eq!(closed["revision"], json!(3), "one edit bumps the revision once");
+
+    let inserted =
+        update_spline(handle, "entity-1", SplineUpdate { insert_at: Some(1), insert_point: Some([5.0, 6.0]), ..SplineUpdate::default() })
+            .expect("insert a fit point");
+    assert_eq!(inserted["entity"]["kind"]["points"], json!([[0.0, 0.0], [5.0, 6.0], [10.0, 5.0], [20.0, 0.0]]));
+
+    let appended =
+        update_spline(handle, "entity-1", SplineUpdate { insert_at: Some(4), insert_point: Some([30.0, 5.0]), ..SplineUpdate::default() })
+            .expect("append a fit point");
+    assert_eq!(appended["entity"]["kind"]["points"].as_array().map(Vec::len), Some(5));
+
+    let removed =
+        update_spline(handle, "entity-1", SplineUpdate { remove_at: Some(1), ..SplineUpdate::default() }).expect("remove a fit point");
+    assert_eq!(removed["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
+
+    let moved = update_spline(handle, "entity-1", SplineUpdate { move_at: Some(1), move_to: Some([12.0, 8.0]), ..SplineUpdate::default() })
+        .expect("move a fit point");
+    assert_eq!(moved["entity"]["kind"]["points"][1], json!([12.0, 8.0]));
+    assert_eq!(moved["entity"]["kind"]["points"].as_array().map(Vec::len), Some(4));
+
+    let replaced = update_spline(
+        handle,
+        "entity-1",
+        SplineUpdate { points: Some(vec![[0.0, 0.0], [5.0, 5.0], [10.0, 0.0]]), closed: Some(false), ..SplineUpdate::default() },
+    )
+    .expect("replace the fit points");
+    assert_eq!(replaced["entity"]["kind"]["points"], json!([[0.0, 0.0], [5.0, 5.0], [10.0, 0.0]]));
+    assert_eq!(replaced["entity"]["kind"]["closed"], json!(false));
+
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [1.0, 1.0]], false).expect("two-point spline");
+    assert_eq!(
+        update_spline(handle, "entity-2", SplineUpdate { closed: Some(true), ..SplineUpdate::default() })
+            .expect_err("a line is not a spline")
+            .code,
+        "object/unsupported"
+    );
+    assert_eq!(update_spline(handle, "entity-1", SplineUpdate::default()).expect_err("no edit").code, "session/argument-invalid");
+    assert_eq!(
+        update_spline(handle, "entity-1", SplineUpdate { insert_at: Some(0), ..SplineUpdate::default() })
+            .expect_err("insert without a point")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(handle, "entity-1", SplineUpdate { insert_at: Some(99), insert_point: Some([0.0, 0.0]), ..SplineUpdate::default() })
+            .expect_err("index beyond the list")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(handle, "entity-1", SplineUpdate { move_at: Some(0), ..SplineUpdate::default() }).expect_err("move without a point").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(handle, "entity-1", SplineUpdate { move_at: Some(99), move_to: Some([1.0, 1.0]), ..SplineUpdate::default() })
+            .expect_err("move index beyond the list")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(
+            handle,
+            "entity-1",
+            SplineUpdate { remove_at: Some(0), move_at: Some(0), move_to: Some([1.0, 1.0]), ..SplineUpdate::default() }
+        )
+        .expect_err("one fit-point edit per call")
+        .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(handle, "entity-1", SplineUpdate { points: Some(vec![[0.0, 0.0]]), ..SplineUpdate::default() })
+            .expect_err("too few fit points")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(handle, "entity-3", SplineUpdate { remove_at: Some(0), ..SplineUpdate::default() })
+            .expect_err("removing leaves one fit point")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_spline(handle, "entity-404", SplineUpdate { closed: Some(true), ..SplineUpdate::default() }).expect_err("missing entity").code,
+        "object/not-found"
+    );
+
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Spline { points: vec![[0.0, 0.0], [5.0, 5.0], [10.0, 0.0]], closed: false });
+    update_layer(reopened, DEFAULT_LAYER, LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(
+        update_spline(reopened, "entity-1", SplineUpdate { closed: Some(true), ..SplineUpdate::default() }).expect_err("frozen layer").code,
+        "drawing/layer-frozen"
+    );
+    update_layer(reopened, DEFAULT_LAYER, LayerUpdate { frozen: Some(false), locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        update_spline(reopened, "entity-1", SplineUpdate { closed: Some(true), ..SplineUpdate::default() }).expect_err("locked layer").code,
+        "drawing/layer-locked"
+    );
+    close(reopened).expect("close reopened");
+
+    let again = create(CreateRequest::default()).expect("create again");
+    let again_handle = handle_of(&again);
+    add_spline(again_handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 5.0], [20.0, 0.0]], false).expect("spline again");
+    let repeated =
+        update_spline(again_handle, "entity-1", SplineUpdate { insert_at: Some(1), insert_point: Some([5.0, 6.0]), ..SplineUpdate::default() })
+            .expect("insert again");
+    assert_eq!(repeated["entity"]["kind"]["points"], inserted["entity"]["kind"]["points"], "the same input yields the same fit points");
+    close(again_handle).expect("close again");
+}
+
+#[test]
 fn entity_layer_assignment_preserves_geometry_and_respects_locks() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);
