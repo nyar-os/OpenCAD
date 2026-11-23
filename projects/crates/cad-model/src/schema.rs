@@ -506,6 +506,9 @@ pub enum EntityKind {
         /// Optional label; the measured distance is used when absent.
         #[serde(default)]
         text: Option<String>,
+        /// Optional dimension style id; a missing value uses the drawing default.
+        #[serde(default)]
+        style: Option<String>,
     },
     /// A radial or diameter dimension of a circle or arc.
     RadialDimension {

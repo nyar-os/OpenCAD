@@ -1065,7 +1065,7 @@ impl Reader {
                                     0.0
                                 }
                             };
-                            self.push(layer, EntityKind::Dimension { from, to, offset, text });
+                            self.push(layer, EntityKind::Dimension { from, to, offset, text, style: None });
                         }
                         // Diameter (3) and radius (4) references carry the centre
                         // in 15/25 and a point on the circle in 10/20.

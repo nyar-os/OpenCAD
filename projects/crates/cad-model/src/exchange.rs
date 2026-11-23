@@ -397,7 +397,7 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
                 text_style.clone(),
             ));
         }
-        EntityKind::Dimension { from, to, offset, text } => {
+        EntityKind::Dimension { from, to, offset, text, .. } => {
             let (p1, p2) = offset_points(*from, *to, *offset);
             for (start, end) in [(*from, p1), (*to, p2), (p1, p2)] {
                 flat.push(Element::new(Shape::Line { from: map(start), to: map(end) }, stroke_style.clone()));
@@ -871,7 +871,7 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
                 }
                 dxf_spline(&mut out, &entity.layer, points, *closed);
             }
-            EntityKind::Dimension { from, to, offset, text } => {
+            EntityKind::Dimension { from, to, offset, text, .. } => {
                 let (p1, p2) = offset_points(*from, *to, *offset);
                 dxf_line(&mut out, &entity.layer, *from, p1);
                 dxf_line(&mut out, &entity.layer, *to, p2);

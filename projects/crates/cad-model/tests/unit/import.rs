@@ -309,7 +309,7 @@ fn dimension_import_reads_aligned_and_rotated_references() {
 
     assert_eq!(drawing.entities.len(), 2);
     assert_eq!(drawing.entities[0].layer, "DIMENSIONS");
-    let EntityKind::Dimension { from, to, offset, text } = &drawing.entities[0].kind
+    let EntityKind::Dimension { from, to, offset, text, .. } = &drawing.entities[0].kind
     else {
         panic!("expected a dimension, got {:?}", drawing.entities[0].kind);
     };

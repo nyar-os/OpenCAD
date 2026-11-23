@@ -1994,6 +1994,151 @@ fn spline_fit_points_and_closure_are_editable() {
 }
 
 #[test]
+fn linear_dimension_fields_and_style_are_editable_in_place() {
+    let dir = TempDir::new("dimension-edit-round-trip");
+    let path = dir.path.join("dimension.ocad");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, Some("nominal".to_string())).expect("dimension");
+
+    let moved = update_dimension(handle, "entity-1", DimensionUpdate { to: Some([120.0, 0.0]), ..DimensionUpdate::default() })
+        .expect("move the second measured point");
+    assert_eq!(moved["entity"]["kind"]["from"], json!([0.0, 0.0]));
+    assert_eq!(moved["entity"]["kind"]["to"], json!([120.0, 0.0]));
+    assert_eq!(moved["entity"]["kind"]["offset"], json!(10.0), "untouched offset keeps its value");
+    assert_eq!(moved["entity"]["kind"]["text"], json!("nominal"), "the text override is kept");
+    assert_eq!(moved["entity"]["id"], json!("entity-1"));
+    assert_eq!(moved["entity"]["layer"], json!(DIMENSION_LAYER));
+    assert_eq!(moved["revision"], json!(3), "one edit bumps the revision once");
+
+    let offset =
+        update_dimension(handle, "entity-1", DimensionUpdate { offset: Some(25.0), ..DimensionUpdate::default() }).expect("update the offset");
+    assert_eq!(offset["entity"]["kind"]["offset"], json!(25.0));
+    assert_eq!(offset["entity"]["kind"]["to"], json!([120.0, 0.0]), "untouched measured points keep their values");
+
+    add_dim_style(handle, DimensionStyleRequest { name: "arch".to_string(), ..DimensionStyleRequest::default() })
+        .expect("add a dimension style");
+    let styled = update_dimension(handle, "entity-1", DimensionUpdate { style: Some("arch".to_string()), ..DimensionUpdate::default() })
+        .expect("assign a dimension style");
+    assert_eq!(styled["entity"]["kind"]["style"], json!("arch"));
+    assert_eq!(styled["entity"]["kind"]["from"], json!([0.0, 0.0]));
+    assert_eq!(styled["entity"]["kind"]["to"], json!([120.0, 0.0]));
+
+    let revision = styled["revision"].as_u64().expect("revision");
+    assert_eq!(update_dimension(handle, "entity-1", DimensionUpdate::default()).expect_err("no edit").code, "session/argument-invalid");
+    assert_eq!(
+        update_dimension(handle, "entity-1", DimensionUpdate { from: Some([f64::NAN, 0.0]), ..DimensionUpdate::default() })
+            .expect_err("non-finite point")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_dimension(handle, "entity-1", DimensionUpdate { offset: Some(f64::INFINITY), ..DimensionUpdate::default() })
+            .expect_err("non-finite offset")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_dimension(handle, "entity-1", DimensionUpdate { from: Some([120.0, 0.0]), ..DimensionUpdate::default() })
+            .expect_err("zero-length span")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_dimension(handle, "entity-1", DimensionUpdate { style: Some(" ".to_string()), ..DimensionUpdate::default() })
+            .expect_err("empty style")
+            .code,
+        "session/argument-invalid"
+    );
+    assert_eq!(
+        update_dimension(handle, "entity-1", DimensionUpdate { style: Some("missing".to_string()), ..DimensionUpdate::default() })
+            .expect_err("unknown style")
+            .code,
+        "object/not-found"
+    );
+    assert_eq!(
+        update_dimension(handle, "entity-404", DimensionUpdate { offset: Some(1.0), ..DimensionUpdate::default() })
+            .expect_err("missing entity")
+            .code,
+        "object/not-found"
+    );
+    let unchanged = drawing_of(handle);
+    assert_eq!(unchanged.revision, revision, "a rejected edit leaves the revision untouched");
+    assert_eq!(
+        unchanged.entities[0].kind,
+        EntityKind::Dimension {
+            from: [0.0, 0.0],
+            to: [120.0, 0.0],
+            offset: 25.0,
+            text: Some("nominal".to_string()),
+            style: Some("arch".to_string()),
+        },
+        "a rejected edit leaves the entity untouched"
+    );
+
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [1.0, 0.0]).expect("line");
+    assert_eq!(
+        update_dimension(handle, "entity-2", DimensionUpdate { offset: Some(1.0), ..DimensionUpdate::default() })
+            .expect_err("a line is not a linear dimension")
+            .code,
+        "dimension/unsupported-entity"
+    );
+    add_radial_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], 10.0, 0.0, 0.0, false, None).expect("radial dimension");
+    assert_eq!(
+        update_dimension(handle, "entity-3", DimensionUpdate { offset: Some(1.0), ..DimensionUpdate::default() })
+            .expect_err("a radial dimension is not linear")
+            .code,
+        "dimension/unsupported-entity"
+    );
+    add_angular_dimension(handle, DIMENSION_LAYER, [0.0, 0.0], [10.0, 0.0], [0.0, 10.0], 5.0, None).expect("angular dimension");
+    assert_eq!(
+        update_dimension(handle, "entity-4", DimensionUpdate { offset: Some(1.0), ..DimensionUpdate::default() })
+            .expect_err("an angular dimension is not linear")
+            .code,
+        "dimension/unsupported-entity"
+    );
+
+    save(handle, &path, true).expect("save");
+    close(handle).expect("close");
+    let opened = open(&path).expect("open");
+    let reopened = handle_of(&opened);
+    let drawing = drawing_of(reopened);
+    assert_eq!(
+        drawing.entities[0].kind,
+        EntityKind::Dimension {
+            from: [0.0, 0.0],
+            to: [120.0, 0.0],
+            offset: 25.0,
+            text: Some("nominal".to_string()),
+            style: Some("arch".to_string()),
+        }
+    );
+    update_layer(reopened, DIMENSION_LAYER, LayerUpdate { frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(
+        update_dimension(reopened, "entity-1", DimensionUpdate { offset: Some(2.0), ..DimensionUpdate::default() })
+            .expect_err("frozen layer")
+            .code,
+        "drawing/layer-frozen"
+    );
+    update_layer(reopened, DIMENSION_LAYER, LayerUpdate { frozen: Some(false), locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+    assert_eq!(
+        update_dimension(reopened, "entity-1", DimensionUpdate { offset: Some(2.0), ..DimensionUpdate::default() })
+            .expect_err("locked layer")
+            .code,
+        "drawing/layer-locked"
+    );
+    close(reopened).expect("close reopened");
+
+    let again = create(CreateRequest::default()).expect("create again");
+    let again_handle = handle_of(&again);
+    add_dimension(again_handle, DIMENSION_LAYER, [0.0, 0.0], [100.0, 0.0], 10.0, Some("nominal".to_string())).expect("dimension again");
+    let repeated = update_dimension(again_handle, "entity-1", DimensionUpdate { to: Some([120.0, 0.0]), ..DimensionUpdate::default() })
+        .expect("move the second measured point again");
+    assert_eq!(repeated["entity"]["kind"], moved["entity"]["kind"], "the same input yields the same geometry");
+    close(again_handle).expect("close again");
+}
+
+#[test]
 fn entity_layer_assignment_preserves_geometry_and_respects_locks() {
     let created = create(CreateRequest::default()).expect("create");
     let handle = handle_of(&created);
@@ -2374,7 +2519,7 @@ fn inspection_reports_layer_and_text_findings() {
     drawing.entities.push(Entity {
         id: "entity-3".to_string(),
         layer: DIMENSION_LAYER.to_string(),
-        kind: EntityKind::Dimension { from: [0.0, 0.0], to: [5.0, 0.0], offset: 1.0, text: Some(String::new()) },
+        kind: EntityKind::Dimension { from: [0.0, 0.0], to: [5.0, 0.0], offset: 1.0, text: Some(String::new()), style: None },
     });
 
     let report = inspection::run(&drawing, inspection::SUPPORTED_CHECKS).to_json();

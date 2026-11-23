@@ -789,7 +789,7 @@ pub fn add_dimension(handle: u64, layer: &str, from: [f64; 2], to: [f64; 2], off
     if !offset.is_finite() {
         return Err(argument("`offset` must be finite"));
     }
-    push_entity(handle, layer, EntityKind::Dimension { from, to, offset, text })
+    push_entity(handle, layer, EntityKind::Dimension { from, to, offset, text, style: None })
 }
 
 /// Adds a radial or diameter dimension to one layer.
@@ -1476,6 +1476,108 @@ pub fn update_ellipse(handle: u64, entity: &str, update: EllipseUpdate) -> Resul
         }
         if let Some(value) = update.end_angle {
             *end_angle = value;
+        }
+        drawing.revision += 1;
+        Ok(())
+    })?;
+    store::read(handle, |session| {
+        let entity = session.drawing.entities.iter().find(|candidate| candidate.id == entity).cloned();
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "entity": entity,
+        })
+    })
+}
+
+/// One edit applied by [`update_dimension`].
+///
+/// Every field is optional; an omitted field keeps its current value and at
+/// least one field is required.
+#[derive(Debug, Clone, Default)]
+pub struct DimensionUpdate {
+    /// New first measured point.
+    pub from: Option<[f64; 2]>,
+    /// New second measured point.
+    pub to: Option<[f64; 2]>,
+    /// New signed distance of the dimension line from the measured segment.
+    pub offset: Option<f64>,
+    /// New dimension style id; it must name a declared dimension style.
+    pub style: Option<String>,
+}
+
+/// Updates the measured points, offset or style of one linear dimension.
+///
+/// At least one of `from`, `to`, `offset` or `style` is required and every
+/// supplied field replaces only that value, so the id, layer, text override and
+/// untouched fields stay as they were. `from`/`to` must be finite, the resulting
+/// span must be non-zero and `offset` finite, otherwise the call reports
+/// `session/argument-invalid`. A `style` that is empty reports
+/// `session/argument-invalid`; one that names no declared dimension style reports
+/// `object/not-found`. Radial, diameter, ordinate and angular dimensions, and
+/// every other entity kind, report `dimension/unsupported-entity`. An unknown id
+/// reports `object/not-found` and a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`. The revision bumps once and
+/// the response carries `{ revision, drawing, entity }`.
+pub fn update_dimension(handle: u64, entity: &str, update: DimensionUpdate) -> Result<Value, ServiceError> {
+    if update.from.is_none() && update.to.is_none() && update.offset.is_none() && update.style.is_none() {
+        return Err(argument("pass at least one of `from`, `to`, `offset` or `style`"));
+    }
+    for (name, point) in [("from", update.from), ("to", update.to)] {
+        if let Some(point) = point {
+            require_finite(&[point], name)?;
+        }
+    }
+    if let Some(offset) = update.offset
+        && !offset.is_finite()
+    {
+        return Err(argument("`offset` must be finite"));
+    }
+    if let Some(style) = &update.style
+        && style.trim().is_empty()
+    {
+        return Err(argument("`style` must be a non-empty dimension style id"));
+    }
+    store::edit(handle, |drawing| {
+        let index = entity_index(drawing, entity)?;
+        if !matches!(&drawing.entities[index].kind, EntityKind::Dimension { .. }) {
+            return Err(ServiceError::new(
+                "dimension/unsupported-entity",
+                format!("entity `{entity}` is a {}, not a linear dimension", kind_name(&drawing.entities[index].kind)),
+            ));
+        }
+        let layer = drawing.entities[index].layer.clone();
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        let style = match &update.style {
+            Some(style) => {
+                let style = style.trim();
+                if !drawing.dim_styles.iter().any(|candidate| candidate.id == style) {
+                    return Err(ServiceError::new("object/not-found", format!("dimension style `{style}` does not exist")));
+                }
+                Some(style.to_string())
+            }
+            None => None,
+        };
+        let EntityKind::Dimension { from, to, offset, style: current_style, .. } = &mut drawing.entities[index].kind
+        else {
+            unreachable!("the entity kind was checked above");
+        };
+        if let Some(value) = update.from {
+            *from = value;
+        }
+        if let Some(value) = update.to {
+            *to = value;
+        }
+        if let Some(value) = update.offset {
+            *offset = value;
+        }
+        if style.is_some() {
+            *current_style = style;
+        }
+        if *from == *to {
+            return Err(argument("a linear dimension must measure a non-zero span"));
         }
         drawing.revision += 1;
         Ok(())
