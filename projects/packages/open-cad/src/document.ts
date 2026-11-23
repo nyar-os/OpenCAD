@@ -92,6 +92,8 @@ import type {
     OverkillResult,
     Point,
     PointMeasurement,
+    QuantityTableRequest,
+    QuantityTableResult,
     MergeLayerRequest,
     MoveEntityRequest,
     ReplaceTextRequest,
@@ -102,6 +104,7 @@ import type {
     SmoothPolylineRequest,
     SnapRequest,
     SnapResult,
+    StatsGroupBy,
     TextStyle,
     TextStyleDeletion,
     TextMatchResult,
@@ -938,10 +941,30 @@ export class DrawingDocument {
         });
     }
 
-    /** Summarises entity count, path length and enclosed area per layer. */
-    stats(): DrawingStats {
+    /**
+     * Summarises entity count, path length and enclosed area.
+     *
+     * `groupBy` defaults to `layer`, which keeps the layer order and includes
+     * empty layers. `type`, `color` and `linetype` list only keys that occur,
+     * sorted by key.
+     */
+    stats(groupBy: StatsGroupBy = 'layer'): DrawingStats {
         this.assertOpen();
-        return service.stats(this.handle);
+        return service.stats(this.handle, groupBy);
+    }
+
+    /**
+     * Draws a framed quantity take-off table of the drawing aggregates.
+     *
+     * One row per group of {@link stats}, then a total row, as real line and
+     * text entities on a `quantity` layer by default. The `origin` option sets
+     * the bottom-left corner; `textHeight` defaults to 3.5 and an empty `title`
+     * omits the caption row.
+     */
+    quantityTable(request: QuantityTableRequest = {}): QuantityTableResult {
+        return this.edit((handle) => service.quantityTable(handle, request), (result) => {
+            this.state = result.drawing;
+        });
     }
 
     /** Selects entities with a rectangular window or crossing box. */

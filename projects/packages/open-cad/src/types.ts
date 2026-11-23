@@ -76,6 +76,7 @@ export type OperationName =
     | 'properties'
     | 'snap'
     | 'linetype'
+    | 'quantity-table'
     | 'constraints'
     | 'kernel3d';
 
@@ -1375,6 +1376,25 @@ export interface LayerStats {
 }
 
 /**
+ * Dimension `stats()` groups its aggregates by.
+ *
+ * `layer` keeps the layer order and includes empty layers; `type`, `color` and
+ * `linetype` list only keys that occur, sorted by key.
+ */
+export type StatsGroupBy = 'layer' | 'type' | 'color' | 'linetype';
+
+/** One grouped share of a drawing's statistics. */
+export interface StatsGroup {
+    /** Grouping key: layer id, entity kind, `#rrggbb` colour or line type id. */
+    readonly key: string;
+    /** Display label; the layer name for a layer group. */
+    readonly label: string;
+    readonly entityCount: number;
+    readonly length: number;
+    readonly area: number;
+}
+
+/**
  * Result of `stats()`.
  *
  * Length and area follow the same rules as `measure()`: analytic lines, arcs
@@ -1384,12 +1404,44 @@ export interface LayerStats {
 export interface DrawingStats {
     readonly revision: number;
     readonly units: 'mm' | 'inch';
+    /** Grouping the `groups` list follows. */
+    readonly groupBy: StatsGroupBy;
     readonly layers: readonly LayerStats[];
+    readonly groups: readonly StatsGroup[];
     readonly totals: {
         readonly entities: number;
         readonly length: number;
         readonly area: number;
     };
+}
+
+/** Arguments of `quantityTable()`. */
+export interface QuantityTableRequest {
+    /** Layer that carries the table; defaults to `quantity`. */
+    readonly layer?: LayerId;
+    /** Grouping the rows summarise; defaults to `layer`. */
+    readonly groupBy?: StatsGroupBy;
+    /** Bottom-left corner of the table; defaults to the origin. */
+    readonly origin?: Point;
+    /** Height of the table text; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Caption written above the header; an empty value omits the caption row. */
+    readonly title?: string;
+}
+
+/** Result of `quantityTable()`. `created` holds the frame and text entities. */
+export interface QuantityTableResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly groupBy: StatsGroupBy;
+    readonly columns: readonly string[];
+    readonly rows: readonly StatsGroup[];
+    readonly totals: {
+        readonly entities: number;
+        readonly length: number;
+        readonly area: number;
+    };
+    readonly created: readonly Entity[];
 }
 
 /** Arguments of `moveEntity()`. Exactly one of the offset and `to` forms. */

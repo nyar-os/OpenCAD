@@ -1008,6 +1008,26 @@ test('stats and the empty-layer check summarise layers', { skip: withAddon }, as
     }
 });
 
+test('stats grouping and the quantity table draw aggregates', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Take-off' });
+        document.addLine({ layer: '0', from: [0, 0], to: [3, 0] });
+        document.addCircle({ layer: '0', center: [0, 0], radius: 1 });
+        const byType = document.stats('type');
+        assert.equal(byType.groupBy, 'type');
+        assert.deepEqual(byType.groups.map((group) => group.key), ['circle', 'line']);
+        const table = document.quantityTable({ origin: [10, 10], title: 'Bill' });
+        assert.equal(table.groupBy, 'layer');
+        assert.equal(table.totals.entities, 2);
+        assert.ok(table.created.length > 0);
+        assert.ok(table.created.every((entity) => entity.layer === 'quantity'));
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('polyline vertices and the closed flag are editable', { skip: withAddon }, async () => {
     const cad = new OpenCAD();
     try {

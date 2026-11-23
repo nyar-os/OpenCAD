@@ -99,6 +99,8 @@ import type {
     OverkillResult,
     Point,
     PointMeasurement,
+    QuantityTableRequest,
+    QuantityTableResult,
     ReplaceTextRequest,
     SaveReport,
     SelectionRequest,
@@ -106,6 +108,7 @@ import type {
     SmoothPolylineRequest,
     SnapRequest,
     SnapResult,
+    StatsGroupBy,
     TextStyleChange,
     TextStyleDeletion,
     TextStyleList,
@@ -1039,9 +1042,25 @@ export function ucs(handle: number, request: UcsRequest): UcsResult {
     );
 }
 
-/** Summarises entity count, path length and enclosed area per layer. */
-export function stats(handle: number): DrawingStats {
-    return decode<DrawingStats>(() => binding('drawing.stats').drawing_stats(handle));
+/** Summarises entity count, path length and enclosed area, grouped as requested. */
+export function stats(handle: number, groupBy: StatsGroupBy = 'layer'): DrawingStats {
+    return decode<DrawingStats>(() => binding('drawing.stats').drawing_stats(handle, groupBy));
+}
+
+/** Draws a framed quantity take-off table of the drawing aggregates. */
+export function quantityTable(handle: number, request: QuantityTableRequest): QuantityTableResult {
+    return decode<QuantityTableResult>(() =>
+        binding('drawing.quantityTable').drawing_quantity_table(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                groupBy: request.groupBy ?? 'layer',
+                origin: request.origin,
+                textHeight: request.textHeight,
+                title: request.title,
+            }),
+        ),
+    );
 }
 
 /** Imports the declared ASCII DXF subset into a new drawing handle. */

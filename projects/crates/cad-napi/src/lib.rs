@@ -29,8 +29,8 @@ use std::{
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
     DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
-    OverkillRequest, ServiceError, SmoothPolylineRequest, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection,
-    UcsRequest,
+    OverkillRequest, QuantityTableRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest, TransformOp, TransformRequest,
+    TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -994,11 +994,49 @@ fn drawing_diff(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
-/// Summarises entity count, path length and enclosed area per layer.
+/// Parses a statistics grouping name; an absent name defaults to `layer`.
+fn stats_group(raw: Option<String>) -> std::result::Result<StatsGroup, String> {
+    match raw.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+        None => Ok(StatsGroup::Layer),
+        Some(name) => StatsGroup::parse(name)
+            .ok_or_else(|| format!("session/argument-invalid: `{name}` is not a statistics grouping; use layer, type, color or linetype")),
+    }
+}
+
+/// Summarises entity count, path length and enclosed area, grouped as requested.
 #[function]
 fn drawing_stats(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
-    let result = open_cad_drawing::stats(handle).map_err(fail)?;
+    let group = match ctx.args().get(1) {
+        Some(value) => Some(value.as_string()?),
+        None => None,
+    };
+    let result = open_cad_drawing::stats(handle, stats_group(group).map_err(Error::new)?).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Draws a framed quantity take-off table of the drawing aggregates.
+#[function]
+fn drawing_quantity_table(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let origin = if request.get("origin").is_some_and(|value| !value.is_null()) {
+        Some(request_point(&request, "origin").map_err(Error::new)?)
+    }
+    else {
+        None
+    };
+    let result = open_cad_drawing::add_quantity_table(
+        handle,
+        QuantityTableRequest {
+            layer: optional_string(&request, "layer"),
+            group_by: stats_group(optional_string(&request, "groupBy")).map_err(Error::new)?,
+            origin,
+            text_height: optional_number(&request, "textHeight"),
+            title: optional_string(&request, "title"),
+        },
+    )
+    .map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2198,7 +2236,11 @@ impl IpcHandler for StudioIpcHandler {
                 else {
                     return failure(id, "statsError", "a stats request needs a drawing handle".to_string());
                 };
-                match open_cad_drawing::stats(handle) {
+                let group = match stats_group(value.get("groupBy").and_then(Value::as_str).map(str::to_string)) {
+                    Ok(group) => group,
+                    Err(message) => return failure(id, "statsError", message),
+                };
+                match open_cad_drawing::stats(handle, group) {
                     Ok(result) => reply(id, "statsResult", result),
                     Err(error) => failure(id, "statsError", service_failure(error)),
                 }
@@ -2563,6 +2605,7 @@ register_module![
     drawing_measure_points,
     drawing_ucs,
     drawing_stats,
+    drawing_quantity_table,
     drawing_import_dxf,
     open_gui,
     pump_events,
