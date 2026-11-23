@@ -45,13 +45,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     add_line(handle, "dimensions", [0.0, 60.0], [120.0, 60.0])?;
     add_line(handle, "dimensions", [60.0, 0.0], [60.0, 120.0])?;
 
-    // Diameter dimensions: plate, bore, bolt circle.
+    // Diameter dimensions: plate, bore, bolt circle. A full-chord diameter at
+    // angle A lies on the same line as A + 180, so the three angles must be
+    // distinct modulo 180 degrees or two dimension lines overlap.
     add_radial_dimension(handle, "dimensions", center, plate_radius, 45.0, 12.0, true, None)?;
     add_radial_dimension(handle, "dimensions", center, bore_radius, 135.0, 12.0, true, None)?;
-    add_radial_dimension(handle, "dimensions", center, bolt_circle_radius, 225.0, 12.0, true, None)?;
+    add_radial_dimension(handle, "dimensions", center, bolt_circle_radius, 150.0, 12.0, true, None)?;
 
-    // Title block text.
-    add_text(handle, "dimensions", [4.0, 130.0], 4.0, "FLANGE DIA 120 / 6 HOLES DIA 12 ON BOLT CIRCLE DIA 90")?;
+    // Title block text, sized to stay inside the drawing width.
+    add_text(handle, "dimensions", [4.0, 130.0], 3.0, "FLANGE DIA 120 / 6 HOLES DIA 12 ON BOLT CIRCLE DIA 90")?;
 
     for format in ["svg", "pdf"] {
         let target = out.join(format!("demo-flange.{format}"));
