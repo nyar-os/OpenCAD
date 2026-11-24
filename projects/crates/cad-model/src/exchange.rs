@@ -1313,10 +1313,15 @@ fn closed_profile(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
 /// Curve entities (polyline, spline, arc, ellipse, circle) return their sampled
 /// profile and whether it is closed; a full circle and a full-sweep ellipse are
 /// closed, an arc and an open polyline are not. Lines, text and dimensions
-/// return `None` and are never extruded. The STL, OBJ and STEP writers share
+/// return `None` and are never extruded. Entities on hidden or frozen layers
+/// return `None` too, matching the painting exporters, so construction
+/// geometry never leaks into the solid. The STL, OBJ and STEP writers share
 /// this selection so all three describe the same solid.
-fn extrude_profile(kind: &EntityKind) -> Option<(Vec<[f64; 2]>, bool)> {
-    match kind {
+fn extrude_profile(drawing: &Drawing, entity: &Entity) -> Option<(Vec<[f64; 2]>, bool)> {
+    if !drawing.layer(&entity.layer).is_some_and(|layer| layer.visible && !layer.frozen) {
+        return None;
+    }
+    match &entity.kind {
         EntityKind::Polyline { points, closed } => Some((closed_profile(points), *closed)),
         EntityKind::Spline { points, closed } => Some((closed_profile(&sample_spline(points, *closed)), *closed)),
         EntityKind::Arc { center, radius, start_angle, end_angle } => {
@@ -1476,7 +1481,7 @@ pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
     let mut losses = Vec::new();
 
     for entity in &drawing.entities {
-        let Some((profile, closed)) = extrude_profile(&entity.kind)
+        let Some((profile, closed)) = extrude_profile(drawing, entity)
         else {
             continue;
         };
@@ -1551,7 +1556,7 @@ pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
     let mut losses = Vec::new();
 
     for entity in &drawing.entities {
-        let Some((profile, closed)) = extrude_profile(&entity.kind)
+        let Some((profile, closed)) = extrude_profile(drawing, entity)
         else {
             continue;
         };
@@ -1744,7 +1749,7 @@ pub(crate) fn step(drawing: &Drawing, thickness: f64) -> StepReport {
     let shape_axis = builder.add(format!("AXIS2_PLACEMENT_3D('',#{origin},#{z_axis},#{x_axis})"));
 
     for entity in &drawing.entities {
-        let Some((profile, closed)) = extrude_profile(&entity.kind)
+        let Some((profile, closed)) = extrude_profile(drawing, entity)
         else {
             continue;
         };

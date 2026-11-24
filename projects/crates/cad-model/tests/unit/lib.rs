@@ -3168,6 +3168,32 @@ fn three_d_exports_extrude_a_full_circle() {
 }
 
 #[test]
+fn three_d_exports_skip_geometry_on_hidden_layers() {
+    let dir = TempDir::new("hidden-extrude");
+    let handle = handle_of(&create(CreateRequest::default()).expect("create"));
+    add_layer(handle, "construction", None).expect("layer");
+    update_layer(handle, "construction", LayerUpdate { visible: Some(false), ..LayerUpdate::default() }).expect("hide");
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("plate");
+    add_circle(handle, "construction", [0.0, 0.0], 45.0).expect("bolt circle");
+
+    let stl_path = dir.path.join("hidden.stl");
+    let stl = export(handle, "stl", &stl_path).expect("export stl");
+
+    let plain = handle_of(&create(CreateRequest::default()).expect("create plain"));
+    add_circle(plain, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("plate only");
+    let plain_path = dir.path.join("plain.stl");
+    let plain_report = export(plain, "stl", &plain_path).expect("export plain");
+
+    assert_eq!(
+        stl["triangles"].as_u64().expect("hidden triangles"),
+        plain_report["triangles"].as_u64().expect("plain triangles"),
+        "geometry on a hidden layer must not leak into the extruded solid"
+    );
+    close(handle).expect("close");
+    close(plain).expect("close plain");
+}
+
+#[test]
 fn arc_and_ellipse_round_trip_and_reject_invalid_values() {
     let dir = TempDir::new("arc-ellipse");
     let path = dir.path.join("curves.ocad");
