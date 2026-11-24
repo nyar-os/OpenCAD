@@ -481,7 +481,53 @@ fn svg_document(drawing: &Drawing, frame: Frame) -> String {
             num(frame.height)
         )
     });
-    decorate_svg(svg, drawing)
+    scale_svg_size(decorate_svg(svg, drawing), drawing.units)
+}
+
+/// Pixels per millimetre used for the rendered size of an exported SVG.
+const SVG_PX_PER_MILLIMETRE: f64 = 8.0;
+
+/// Scales the physical `width`/`height` of the SVG to readable pixels.
+///
+/// The shared writer emits `width`/`height` equal to the frame size in
+/// drawing units, so a 133 mm sheet would open as a 133 px stamp. The
+/// `viewBox` keeps the unit coordinates; only the rendered size changes,
+/// matching the pixel canvas the other Open* exporters produce.
+fn scale_svg_size(mut svg: String, units: Units) -> String {
+    let factor = match units {
+        Units::Mm => SVG_PX_PER_MILLIMETRE,
+        Units::Inch => SVG_PX_PER_MILLIMETRE * 25.4,
+    };
+    let Some(tag_start) = svg.find("<svg")
+    else {
+        return svg;
+    };
+    let Some(tag_offset) = svg[tag_start..].find('>')
+    else {
+        return svg;
+    };
+    let tag_end = tag_start + tag_offset;
+    let mut tag = svg[..tag_end].to_string();
+    for attribute in ["width", "height"] {
+        let needle = format!("{attribute}=\"");
+        let Some(start) = tag.find(&needle)
+        else {
+            continue;
+        };
+        let value_start = start + needle.len();
+        let Some(quote_offset) = tag[value_start..].find('"')
+        else {
+            continue;
+        };
+        if let Ok(number) = tag[value_start..value_start + quote_offset].parse::<f64>() {
+            if number.is_finite() && number > 0.0 {
+                let scaled = format!("{:.1}", number * factor);
+                tag.replace_range(value_start..value_start + quote_offset, &scaled);
+            }
+        }
+    }
+    tag.push_str(&svg[tag_end..]);
+    tag
 }
 
 /// Re-attaches the OpenCAD metadata the shared writer does not know about.
