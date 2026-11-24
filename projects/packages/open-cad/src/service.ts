@@ -110,6 +110,8 @@ import type {
     SnapRequest,
     SnapResult,
     StatsGroupBy,
+    StretchRequest,
+    StretchResult,
     TextStyleChange,
     TextStyleDeletion,
     TextStyleList,
@@ -1002,6 +1004,16 @@ export function align(handle: number, request: AlignRequest): AlignResult {
 export function distribute(handle: number, request: DistributeRequest): DistributeResult {
     return decode<DistributeResult>(() =>
         binding('drawing.distribute').drawing_distribute(handle, JSON.stringify({ ids: request.ids, axis: request.axis })),
+    );
+}
+
+/** Stretches the vertices inside a crossing window by a displacement. */
+export function stretch(handle: number, request: StretchRequest): StretchResult {
+    return decode<StretchResult>(() =>
+        binding('drawing.stretch').drawing_stretch(
+            handle,
+            JSON.stringify({ window: request.window, dx: request.dx, dy: request.dy }),
+        ),
     );
 }
 

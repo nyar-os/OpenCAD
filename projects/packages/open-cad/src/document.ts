@@ -106,6 +106,8 @@ import type {
     SnapRequest,
     SnapResult,
     StatsGroupBy,
+    StretchRequest,
+    StretchResult,
     TextStyle,
     TextStyleDeletion,
     TextMatchResult,
@@ -871,6 +873,22 @@ export class DrawingDocument {
      */
     distribute(request: DistributeRequest): DistributeResult {
         return this.edit((handle) => service.distribute(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Stretches the vertices and endpoints inside a crossing window by `dx`/
+     * `dy`, following the same crossing semantics as {@link select}. Line
+     * endpoints, polyline, spline and hatch points, points and the centre of a
+     * circle, arc or ellipse move when they lie inside the window (boundary
+     * included); text and dimension entities are skipped and counted in
+     * `skipped`, while a supported entity that crosses the window without a
+     * vertex inside stays unchanged. Ids, layers and draw order stay put, and
+     * the call is one revision and one history step.
+     */
+    stretch(request: StretchRequest): StretchResult {
+        return this.edit((handle) => service.stretch(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

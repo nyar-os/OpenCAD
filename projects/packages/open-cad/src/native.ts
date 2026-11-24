@@ -94,6 +94,7 @@ export interface NativeBinding {
     drawing_join(handle: number, requestJson: string): string;
     drawing_align(handle: number, requestJson: string): string;
     drawing_distribute(handle: number, requestJson: string): string;
+    drawing_stretch(handle: number, requestJson: string): string;
     drawing_overkill(handle: number, requestJson: string): string;
     drawing_hatch_pattern(handle: number, requestJson: string): string;
     drawing_title_block(handle: number, requestJson: string): string;

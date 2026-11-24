@@ -70,6 +70,7 @@ import type {
     SnapMode,
     SnapResult,
     StatsGroupBy,
+    StretchResult,
     TextStyle,
     TextStyleChange,
     TextMatchResult,
@@ -345,6 +346,10 @@ function describeAlign(result: AlignResult): string {
 
 function describeDistribute(result: DistributeResult): string {
     return `distributed ${result.affected} entities axis=${result.axis} revision=${result.revision}`;
+}
+
+function describeStretch(result: StretchResult): string {
+    return `stretched ${result.affected} entities skipped=${result.skipped} dx=${result.displacement[0]} dy=${result.displacement[1]} revision=${result.revision}`;
 }
 
 function describeOverkill(result: OverkillResult): string {
@@ -2239,6 +2244,38 @@ cli
         try {
             const result = await guard(ctx, () => opened.distribute({ ids, axis }));
             ctx.emitResult(result, describeDistribute(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('stretch', 'cli.cmd.stretch')
+    .option('--box <x1,y1,x2,y2>', 'cli.opt.box')
+    .option('--dx <number>', 'cli.opt.dx')
+    .option('--dy <number>', 'cli.opt.dy')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const window = box(options, 'box');
+        if (window === undefined) {
+            ctx.fail('open-cad.cli.box-required', { message: '`--box x1,y1,x2,y2` is required' });
+            return 2;
+        }
+        const dx = number(options, 'dx');
+        const dy = number(options, 'dy');
+        if (dx === undefined && dy === undefined) {
+            ctx.fail('open-cad.cli.stretch-required', { message: '`--dx <number>` and/or `--dy <number>` are required' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () => opened.stretch({ window, dx, dy }));
+            ctx.emitResult(result, describeStretch(result));
             return 0;
         } finally {
             opened.close();

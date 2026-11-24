@@ -941,6 +941,15 @@ fn drawing_distribute(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Stretches the vertices inside a crossing window by a displacement.
+#[function]
+fn drawing_stretch(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let result = call_stretch(handle, &request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 /// Removes exact duplicate entities and optionally merges collinear overlapping lines.
 #[function]
 fn drawing_overkill(ctx: CallContext) -> Result<JsValue> {
@@ -1484,6 +1493,32 @@ fn call_select(handle: u64, request: &Value) -> std::result::Result<Value, Strin
     };
     let layer = request.get("layer").and_then(Value::as_str);
     open_cad_drawing::select(handle, mode, [corner(&window[0])?, corner(&window[1])?], layer).map_err(service_failure)
+}
+
+fn call_stretch(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    let window = request
+        .get("window")
+        .and_then(Value::as_array)
+        .filter(|points| points.len() == 2)
+        .ok_or_else(|| "session/argument-invalid: `window` must be two [x, y] corners".to_string())?;
+    let corner = |value: &Value| -> std::result::Result<[f64; 2], String> {
+        let pair = value
+            .as_array()
+            .filter(|pair| pair.len() == 2)
+            .ok_or_else(|| "session/argument-invalid: every window corner needs two numbers".to_string())?;
+        let x = pair[0].as_f64().ok_or_else(|| "session/argument-invalid: every window corner needs two numbers".to_string())?;
+        let y = pair[1].as_f64().ok_or_else(|| "session/argument-invalid: every window corner needs two numbers".to_string())?;
+        Ok([x, y])
+    };
+    let delta = if request.get("dx").is_some() || request.get("dy").is_some() {
+        let dx = request.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
+        let dy = request.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
+        Some([dx, dy])
+    }
+    else {
+        None
+    };
+    open_cad_drawing::stretch(handle, [corner(&window[0])?, corner(&window[1])?], delta).map_err(service_failure)
 }
 
 fn call_move_entity(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -2676,6 +2711,7 @@ register_module![
     drawing_join,
     drawing_align,
     drawing_distribute,
+    drawing_stretch,
     drawing_overkill,
     drawing_hatch_pattern,
     drawing_title_block,

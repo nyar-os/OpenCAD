@@ -7,10 +7,12 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { drawingFormats, formatFromPath, formatInfo, OpenCAD, OpenCADError } from '../src/index.js';
 import type { DrawingInput } from '../src/index.js';
@@ -26,6 +28,9 @@ const installed = (() => {
 })();
 const withoutAddon = installed ? 'a built addon is installed' : false;
 const withAddon = installed ? false : 'no built addon is installed';
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const cliEntry = path.join(packageRoot, 'dist', 'cli.js');
+const cliBuilt = fs.existsSync(cliEntry);
 
 test('session construction is synchronous and side-effect free', async () => {
     const cad = new OpenCAD();
@@ -843,6 +848,102 @@ test('align and distribute move entities by bounding boxes', { skip: withAddon }
         document.close();
     } finally {
         await cad.dispose();
+    }
+});
+
+test('stretch moves vertices inside a crossing window and skips annotations', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Stretch' });
+        const line = document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+        const polyline = document.addPolyline({ layer: '0', points: [[0, 2], [10, 2], [10, 12]], closed: false });
+        const circle = document.addCircle({ layer: '0', center: [20, 20], radius: 2 });
+        const text = document.addText({ layer: '0', at: [2, 2], height: 1, content: 'Site' });
+
+        const before = document.revision;
+        const result = document.stretch({ window: [[-1, -1], [3, 3]], dx: 0, dy: 5 });
+        assert.deepEqual(result.window, [[-1, -1], [3, 3]]);
+        assert.deepEqual(result.displacement, [0, 5]);
+        assert.equal(result.affected, 2);
+        assert.equal(result.skipped, 1);
+        assert.equal(result.revision, before + 1);
+        assert.equal(document.revision, before + 1);
+
+        const [movedLine, movedPolyline, unchangedCircle, unchangedText] = document.listEntities();
+        assert.equal(movedLine?.id, line.id);
+        assert.deepEqual(movedLine?.kind, { type: 'line', from: [0, 5], to: [10, 0] });
+        assert.equal(movedPolyline?.id, polyline.id);
+        assert.deepEqual(movedPolyline?.kind, { type: 'polyline', points: [[0, 7], [10, 2], [10, 12]], closed: false });
+        assert.deepEqual(unchangedCircle?.kind, circle.kind);
+        assert.equal(unchangedText?.id, text.id);
+        assert.deepEqual(unchangedText?.kind, text.kind);
+
+        assert.throws(
+            () => document.stretch({ window: [[0, 0], [0, 0]], dx: 1 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.throws(
+            () => document.stretch({ window: [[0, 0], [1, 1]] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.equal(document.revision, before + 1, 'rejected stretches do not bump the revision');
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
+test('stretch CLI edits a saved drawing and reports invalid windows', { skip: withAddon || (cliBuilt ? false : 'no built CLI is installed') }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-cli-stretch-'));
+    try {
+        const file = path.join(dir, 'plan.ocad');
+        const cad = new OpenCAD();
+        try {
+            const document = await cad.create({ title: 'Stretch CLI' });
+            document.addLine({ layer: '0', from: [0, 0], to: [10, 0] });
+            document.save({ target: file, overwrite: false });
+            document.close();
+        } finally {
+            await cad.dispose();
+        }
+
+        const run = spawnSync(
+            process.execPath,
+            [cliEntry, '--json', 'stretch', file, '--box=-1,-1,1,1', '--dx=0', '--dy=5'],
+            { encoding: 'utf8' },
+        );
+        assert.equal(run.status, 0, run.stderr);
+        const envelope = JSON.parse(run.stdout) as {
+            ok: boolean;
+            data: { affected: number; skipped: number; displacement: [number, number]; revision: number };
+        };
+        assert.equal(envelope.ok, true);
+        assert.equal(envelope.data.affected, 1);
+        assert.equal(envelope.data.skipped, 0);
+        assert.deepEqual(envelope.data.displacement, [0, 5]);
+
+        const reopenedCad = new OpenCAD();
+        try {
+            const reopened = await reopenedCad.open({ path: file });
+            const [line] = reopened.listEntities();
+            assert.deepEqual(line?.kind, { type: 'line', from: [0, 5], to: [10, 0] });
+            assert.equal(reopened.revision, envelope.data.revision);
+            reopened.close();
+        } finally {
+            await reopenedCad.dispose();
+        }
+
+        const invalid = spawnSync(
+            process.execPath,
+            [cliEntry, '--json', 'stretch', file, '--box=0,0,0,0', '--dx=1'],
+            { encoding: 'utf8' },
+        );
+        assert.notEqual(invalid.status, 0);
+        const failure = JSON.parse(invalid.stdout) as { ok: boolean; error: { code: string } };
+        assert.equal(failure.ok, false);
+        assert.equal(failure.error.code, 'session/argument-invalid');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
     }
 });
 

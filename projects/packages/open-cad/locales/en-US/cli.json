@@ -41,6 +41,7 @@
             "join": "Merge two collinear lines that share an endpoint into one line and save the file",
             "align": "Align entities to one bounding-box edge or centreline and save the file",
             "distribute": "Spread entities with equal gaps between bounding boxes and save the file",
+            "stretch": "Stretch the vertices and endpoints inside a crossing window by a displacement and save the file",
             "overkill": "Remove exact duplicate entities and optionally merge collinear overlapping lines, then save the file",
             "title-block": "Add a sheet frame and a title block filled from the drawing properties and save the file",
             "fillet": "Fillet two lines with a tangent arc, trimming both, and save the file",

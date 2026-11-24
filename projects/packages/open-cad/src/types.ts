@@ -922,6 +922,29 @@ export interface DistributeResult {
     readonly bounds: Bounds;
 }
 
+/** Arguments of `stretch()`. */
+export interface StretchRequest {
+    /** Two world-coordinate corners of the crossing window. */
+    readonly window: readonly [Point, Point];
+    /** Horizontal displacement applied to vertices inside the window. */
+    readonly dx?: number;
+    /** Vertical displacement applied to vertices inside the window. */
+    readonly dy?: number;
+}
+
+/** Result of `stretch()`. */
+export interface StretchResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    /** The crossing window, as supplied. */
+    readonly window: readonly [Point, Point];
+    readonly displacement: Point;
+    /** Entities with at least one vertex moved by the displacement. */
+    readonly affected: number;
+    /** Text and dimension entities that matched the window but cannot stretch. */
+    readonly skipped: number;
+}
+
 /** Arguments of `overkill()`. */
 export interface OverkillRequest {
     /** Geometric tolerance in drawing units; defaults to 1e-9. */
