@@ -149,7 +149,20 @@ impl Frame {
                 let width = extents.width().max(1.0);
                 let height = extents.height().max(1.0);
                 let pad = (width.max(height) * 0.08).max(frame_margin(drawing.units) * 1.6);
-                Self { min_x: extents.min.x - pad, min_y: extents.min.y - pad, width: width + pad * 2.0, height: height + pad * 2.0 }
+                // The title block hangs from the inner border's bottom-right corner, so the
+                // bottom padding must clear the block's full height plus a gap; otherwise a
+                // tall part runs straight through the title rows.
+                let sheet = match drawing.units {
+                    Units::Mm => 1.0,
+                    Units::Inch => 1.0 / 25.4,
+                };
+                let bottom = (frame_margin(drawing.units) + 28.0 * sheet).max(pad);
+                Self {
+                    min_x: extents.min.x - pad,
+                    min_y: extents.min.y - bottom,
+                    width: width + pad * 2.0,
+                    height: height + pad + bottom,
+                }
             }
             None => Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 },
         }
