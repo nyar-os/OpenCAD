@@ -688,11 +688,12 @@ fn scale_svg_size(svg: String, units: Units) -> String {
         else {
             continue;
         };
-        if let Ok(number) = tag[value_start..value_start + quote_offset].parse::<f64>() {
-            if number.is_finite() && number > 0.0 {
-                let scaled = format!("{:.1}", number * factor);
-                tag.replace_range(value_start..value_start + quote_offset, &scaled);
-            }
+        if let Ok(number) = tag[value_start..value_start + quote_offset].parse::<f64>()
+            && number.is_finite()
+            && number > 0.0
+        {
+            let scaled = format!("{:.1}", number * factor);
+            tag.replace_range(value_start..value_start + quote_offset, &scaled);
         }
     }
     tag.push_str(&svg[tag_end..]);
