@@ -71,6 +71,7 @@ fn capability_matrix_matches_the_implemented_surface() {
         "chamfer",
         "align",
         "distribute",
+        "stretch",
         "overkill",
         "measure",
         "measure-points",
@@ -5360,6 +5361,164 @@ fn align_and_distribute_are_single_history_steps() {
         EntityKind::Line { from: [0.0, 5.0], to: [4.0, 5.0] },
         "one undo reverses the whole distribute"
     );
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_moves_only_the_vertices_inside_the_window() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_polyline(handle, DEFAULT_LAYER, vec![[0.0, 20.0], [10.0, 20.0], [10.0, 30.0]], false).expect("polyline");
+
+    let result = stretch(handle, [[-1.0, -1.0], [11.0, 21.0]], Some([5.0, -5.0])).expect("stretch");
+    assert_eq!(result["window"], json!([[-1.0, -1.0], [11.0, 21.0]]));
+    assert_eq!(result["displacement"], json!([5.0, -5.0]));
+    assert_eq!(result["affected"], json!(2));
+    assert_eq!(result["skipped"], json!(0));
+    assert_eq!(result["revision"], json!(4), "a stretch is one revision bump");
+
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [5.0, -5.0], to: [15.0, -5.0] }, "both endpoints are inside");
+    assert_eq!(
+        drawing.entities[1].kind,
+        EntityKind::Polyline { points: vec![[5.0, 15.0], [15.0, 15.0], [10.0, 30.0]], closed: false },
+        "the vertex outside the window stays put"
+    );
+    assert_eq!(drawing.entities[0].id, "entity-1");
+    assert_eq!(drawing.entities[1].id, "entity-2");
+    assert_eq!(drawing.entities[0].layer, DEFAULT_LAYER);
+    assert_eq!(drawing.entities[1].layer, DEFAULT_LAYER);
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_includes_vertices_on_the_window_boundary() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_point(handle, DEFAULT_LAYER, [10.0, 0.0]).expect("point");
+
+    let result = stretch(handle, [[0.0, 0.0], [10.0, 0.0]], Some([0.0, 3.0])).expect("stretch");
+    assert_eq!(result["affected"], json!(2), "endpoints and the point on the corners move");
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [0.0, 3.0], to: [10.0, 3.0] });
+    assert_eq!(drawing.entities[1].kind, EntityKind::Point { at: [10.0, 3.0] });
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_moves_curve_centres_without_changing_their_shape() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 5.0).expect("circle");
+    add_arc(handle, DEFAULT_LAYER, [20.0, 0.0], 3.0, 0.0, 90.0).expect("arc");
+    add_ellipse(handle, DEFAULT_LAYER, [40.0, 0.0], 10.0, 5.0, 30.0, 0.0, 360.0).expect("ellipse");
+
+    let result = stretch(handle, [[-1.0, -1.0], [41.0, 41.0]], Some([2.0, 3.0])).expect("stretch");
+    assert_eq!(result["affected"], json!(3));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Circle { center: [2.0, 3.0], radius: 5.0 });
+    assert_eq!(drawing.entities[1].kind, EntityKind::Arc { center: [22.0, 3.0], radius: 3.0, start_angle: 0.0, end_angle: 90.0 });
+    assert_eq!(
+        drawing.entities[2].kind,
+        EntityKind::Ellipse { center: [42.0, 3.0], rx: 10.0, ry: 5.0, rotation: 30.0, start_angle: 0.0, end_angle: 360.0 }
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_moves_spline_fit_points_and_hatch_vertices() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_spline(handle, DEFAULT_LAYER, vec![[0.0, 0.0], [10.0, 0.0]], false).expect("spline");
+    add_hatch(handle, DEFAULT_LAYER, vec![[20.0, 0.0], [30.0, 0.0], [30.0, 10.0]], None).expect("hatch");
+
+    let result = stretch(handle, [[-1.0, -1.0], [31.0, 11.0]], Some([0.0, 5.0])).expect("stretch");
+    assert_eq!(result["affected"], json!(2));
+    let drawing = drawing_of(handle);
+    assert_eq!(drawing.entities[0].kind, EntityKind::Spline { points: vec![[0.0, 5.0], [10.0, 5.0]], closed: false });
+    assert_eq!(
+        drawing.entities[1].kind,
+        EntityKind::Hatch { points: vec![[20.0, 5.0], [30.0, 5.0], [30.0, 15.0]], pattern: "SOLID".to_string() }
+    );
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_skips_annotations_and_preserves_identity_order_and_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [0.0, 0.0], [10.0, 0.0]).expect("line");
+    add_circle(handle, DEFAULT_LAYER, [20.0, 20.0], 2.0).expect("circle");
+    add_polyline(handle, DEFAULT_LAYER, vec![[30.0, 30.0], [40.0, 30.0]], false).expect("polyline");
+    add_text(handle, DEFAULT_LAYER, [50.0, 50.0], 2.5, "Site").expect("text");
+    add_dimension(handle, DIMENSION_LAYER, [60.0, 60.0], [70.0, 60.0], 5.0, None).expect("dimension");
+
+    let result = stretch(handle, [[-10.0, -10.0], [80.0, 80.0]], Some([1.0, 2.0])).expect("stretch");
+    assert_eq!(result["affected"], json!(3), "line, circle and polyline have vertices");
+    assert_eq!(result["skipped"], json!(2), "text and dimension cannot stretch");
+    assert_eq!(result["revision"], json!(7));
+
+    let drawing = drawing_of(handle);
+    let ids = drawing.entities.iter().map(|entity| entity.id.as_str()).collect::<Vec<_>>();
+    assert_eq!(ids, vec!["entity-1", "entity-2", "entity-3", "entity-4", "entity-5"], "draw order is untouched");
+    assert_eq!(drawing.entities[3].layer, DEFAULT_LAYER);
+    assert_eq!(drawing.entities[4].layer, DIMENSION_LAYER);
+    assert_eq!(drawing.entities[3].kind, EntityKind::Text { at: [50.0, 50.0], height: 2.5, content: "Site".to_string() });
+    assert_eq!(drawing.entities[4].kind, EntityKind::Dimension { from: [60.0, 60.0], to: [70.0, 60.0], offset: 5.0, text: None, style: None });
+    assert_eq!(drawing.entities[0].kind, EntityKind::Line { from: [1.0, 2.0], to: [11.0, 2.0] });
+    assert_eq!(drawing.entities[1].kind, EntityKind::Circle { center: [21.0, 22.0], radius: 2.0 });
+    assert_eq!(drawing.entities[2].kind, EntityKind::Polyline { points: vec![[31.0, 32.0], [41.0, 32.0]], closed: false });
+
+    let undone = undo(handle).expect("undo the stretch");
+    assert_eq!(undone["revision"], json!(8));
+    assert_eq!(drawing_of(handle).entities[0].kind, EntityKind::Line { from: [0.0, 0.0], to: [10.0, 0.0] });
+    let redone = redo(handle).expect("redo the stretch");
+    assert_eq!(redone["revision"], json!(9));
+    assert_eq!(drawing_of(handle).entities[0].kind, EntityKind::Line { from: [1.0, 2.0], to: [11.0, 2.0] });
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_with_no_matching_entities_commits_one_revision() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, DEFAULT_LAYER, [100.0, 100.0], [110.0, 100.0]).expect("line");
+
+    let result = stretch(handle, [[0.0, 0.0], [1.0, 1.0]], Some([1.0, 0.0])).expect("empty stretch");
+    assert_eq!(result["affected"], json!(0));
+    assert_eq!(result["skipped"], json!(0));
+    assert_eq!(result["revision"], json!(3), "a valid empty stretch still bumps the revision");
+    assert_eq!(drawing_of(handle).entities[0].kind, EntityKind::Line { from: [100.0, 100.0], to: [110.0, 100.0] });
+
+    let undone = undo(handle).expect("undo the empty stretch");
+    assert_eq!(undone["revision"], json!(4), "the empty stretch recorded one history step");
+    close(handle).expect("close");
+}
+
+#[test]
+fn stretch_rejects_invalid_windows_displacements_and_locked_layers() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_layer(handle, "Structure", Some("#ff0000")).expect("layer");
+    add_line(handle, "Structure", [0.0, 0.0], [10.0, 0.0]).expect("line");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(true), ..LayerUpdate::default() }).expect("lock");
+
+    assert_eq!(
+        stretch(handle, [[f64::NAN, 0.0], [1.0, 1.0]], Some([1.0, 0.0])).expect_err("non-finite window").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(stretch(handle, [[0.0, 0.0], [0.0, 0.0]], Some([1.0, 0.0])).expect_err("degenerate window").code, "session/argument-invalid");
+    assert_eq!(stretch(handle, [[0.0, 0.0], [1.0, 1.0]], None).expect_err("missing displacement").code, "session/argument-invalid");
+    assert_eq!(
+        stretch(handle, [[0.0, 0.0], [1.0, 1.0]], Some([f64::INFINITY, 0.0])).expect_err("non-finite displacement").code,
+        "session/argument-invalid"
+    );
+    assert_eq!(stretch(handle, [[-1.0, -1.0], [1.0, 1.0]], Some([1.0, 0.0])).expect_err("locked layer").code, "drawing/layer-locked");
+    update_layer(handle, "Structure", LayerUpdate { locked: Some(false), frozen: Some(true), ..LayerUpdate::default() }).expect("freeze");
+    assert_eq!(stretch(handle, [[-1.0, -1.0], [1.0, 1.0]], Some([1.0, 0.0])).expect_err("frozen layer").code, "drawing/layer-frozen");
+    assert_eq!(drawing_of(handle).revision, 5, "rejected stretches do not bump the revision");
     close(handle).expect("close");
 }
 

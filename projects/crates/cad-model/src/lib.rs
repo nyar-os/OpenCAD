@@ -193,6 +193,7 @@ pub fn capabilities() -> Value {
                 "chamfer",
                 "align",
                 "distribute",
+                "stretch",
                 "overkill",
                 "measure",
                 "measure-entity",
@@ -218,7 +219,7 @@ pub fn capabilities() -> Value {
             ],
             |name| match name {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
-                | "distribute" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
+                | "distribute" | "stretch" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
                 | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth"
                 | "polyline-chamfer" | "diff" | "quantity-table" => {
                     "supported"
@@ -4027,6 +4028,110 @@ pub fn distribute(handle: u64, request: DistributeRequest) -> Result<Value, Serv
             "bounds": bounds_json(&session.drawing),
         })
     })
+}
+
+/// Stretches the vertices and endpoints inside a crossing window.
+///
+/// The rectangle is normalised like [`select`] and tested with crossing
+/// semantics, so an entity joins the edit when any sampled outline point is
+/// inside the rectangle or its outline crosses it. Only the defining points
+/// inside the rectangle (boundary included) move by `delta`:
+///
+/// - `line`: `from` and `to`;
+/// - `polyline`, `spline` and `hatch`: their ordered points;
+/// - `point`: its position;
+/// - `circle`, `arc` and `ellipse`: their centre, matching [`Entity`]'s
+///   translation behaviour.
+///
+/// Text and every dimension kind have no stretchable vertices; they are
+/// counted in `skipped`. Ids, layers, draw order and every other property are
+/// untouched. A valid request that matches nothing still commits one revision
+/// and one history step with `affected = 0`.
+pub fn stretch(handle: u64, window: [[f64; 2]; 2], delta: Option<[f64; 2]>) -> Result<Value, ServiceError> {
+    if !finite_point(window[0]) || !finite_point(window[1]) {
+        return Err(argument("the stretch window needs two finite corners"));
+    }
+    let rect = SelectionRect::new(window[0], window[1]);
+    if rect.width() <= 0.0 && rect.height() <= 0.0 {
+        return Err(argument("the stretch window needs a non-zero width or height"));
+    }
+    let delta = delta.ok_or_else(|| argument("the stretch displacement needs `dx` and/or `dy`"))?;
+    if !finite_point(delta) {
+        return Err(argument("the stretch displacement needs finite `dx` and `dy` values"));
+    }
+    let (affected, skipped) = store::edit(handle, |drawing| {
+        let mut affected = 0usize;
+        let mut skipped = 0usize;
+        for index in 0..drawing.entities.len() {
+            if !entity_matches_selection(&drawing.entities[index].kind, SelectionMode::Crossing, rect) {
+                continue;
+            }
+            let Some(vertices) = stretch_vertices(&drawing.entities[index].kind)
+            else {
+                skipped += 1;
+                continue;
+            };
+            if !vertices.iter().any(|point| rect.contains(*point)) {
+                continue;
+            }
+            if let Some(error) = locked_layer(drawing, &drawing.entities[index].layer) {
+                return Err(error);
+            }
+            let points = stretch_points_mut(&mut drawing.entities[index].kind)
+                .expect("a kind with stretchable vertices keeps them when borrowed mutably");
+            for point in points {
+                if rect.contains(*point) {
+                    point[0] += delta[0];
+                    point[1] += delta[1];
+                }
+            }
+            affected += 1;
+        }
+        drawing.revision += 1;
+        Ok((affected, skipped))
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "window": window,
+            "displacement": delta,
+            "affected": affected,
+            "skipped": skipped,
+        })
+    })
+}
+
+/// Snapshot of the points [`stretch`] can move, or `None` for annotation-only kinds.
+fn stretch_vertices(kind: &EntityKind) -> Option<Vec<[f64; 2]>> {
+    match kind {
+        EntityKind::Line { from, to } => Some(vec![*from, *to]),
+        EntityKind::Circle { center, .. } | EntityKind::Arc { center, .. } | EntityKind::Ellipse { center, .. } => Some(vec![*center]),
+        EntityKind::Point { at } => Some(vec![*at]),
+        EntityKind::Polyline { points, .. } | EntityKind::Spline { points, .. } | EntityKind::Hatch { points, .. } => Some(points.clone()),
+        EntityKind::Text { .. }
+        | EntityKind::Dimension { .. }
+        | EntityKind::RadialDimension { .. }
+        | EntityKind::OrdinateDimension { .. }
+        | EntityKind::AngularDimension { .. } => None,
+    }
+}
+
+/// Mutable view of the same point set [`stretch_vertices`] reports.
+fn stretch_points_mut(kind: &mut EntityKind) -> Option<Vec<&mut [f64; 2]>> {
+    match kind {
+        EntityKind::Line { from, to } => Some(vec![from, to]),
+        EntityKind::Circle { center, .. } | EntityKind::Arc { center, .. } | EntityKind::Ellipse { center, .. } => Some(vec![center]),
+        EntityKind::Point { at } => Some(vec![at]),
+        EntityKind::Polyline { points, .. } | EntityKind::Spline { points, .. } | EntityKind::Hatch { points, .. } => {
+            Some(points.iter_mut().collect())
+        }
+        EntityKind::Text { .. }
+        | EntityKind::Dimension { .. }
+        | EntityKind::RadialDimension { .. }
+        | EntityKind::OrdinateDimension { .. }
+        | EntityKind::AngularDimension { .. } => None,
+    }
 }
 
 /// Arguments of [`overkill`].
