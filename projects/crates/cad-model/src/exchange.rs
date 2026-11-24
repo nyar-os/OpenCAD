@@ -15,8 +15,8 @@ use geometry_planar::{Point as PlanarPoint, Rect, signed_polygon_area};
 use serde::Serialize;
 
 use crate::schema::{
-    CONTINUOUS_LINETYPE, Drawing, Entity, EntityKind, OrdinateAxis, Units, angular_points, angular_sweep, angular_value, arc_sweep,
-    offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse, sample_spline,
+    CONTINUOUS_LINETYPE, DimensionStyle, Drawing, Entity, EntityKind, OrdinateAxis, Units, angular_points, angular_sweep, angular_value,
+    arc_sweep, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse, sample_spline,
 };
 
 /// One item an exchange target could not keep.
@@ -275,6 +275,9 @@ struct Projection<'a> {
     lineweight_scale: f64,
     label_offset: f64,
     label_size: f64,
+    /// Dimension styles consulted for arrowhead sizes; the first entry is the
+    /// fallback for entities without a style reference.
+    dim_styles: &'a [DimensionStyle],
 }
 
 /// Converts a layer lineweight in millimetres to drawing units.
@@ -339,6 +342,56 @@ fn build_drawing(drawing: &Drawing, size: FlatSize, projection: &Projection<'_>)
     flat
 }
 
+/// Solid arrowhead length of a dimension, in flat-drawing units.
+///
+/// The style reference selects the dimension style; a missing or unknown id
+/// falls back to the drawing's first style, and an empty style table uses the
+/// `standard` arrow size of 2.5. The model length is scaled into flat-drawing
+/// units so the arrow keeps its proportion on a fitted PDF page.
+fn arrow_length(style: Option<&str>, projection: &Projection<'_>) -> f64 {
+    let arrow_size = projection
+        .dim_styles
+        .iter()
+        .find(|candidate| Some(candidate.id.as_str()) == style)
+        .or_else(|| projection.dim_styles.first())
+        .map_or(2.5, |style| style.arrow_size);
+    arrow_size.max(0.0) * projection.scale
+}
+
+/// A solid paint without an outline, for arrowheads and centre marks.
+///
+/// `Style::fill` keeps the default black stroke, which would wrap every
+/// filled triangle in a visible border.
+fn solid(color: Color) -> Style {
+    Style { stroke: None, ..Style::fill(color) }
+}
+
+/// Pushes one solid triangular arrowhead with its tip at `tip`.
+///
+/// `direction` is the way the arrow points; the triangle base sits `length`
+/// behind the tip against the arrow axis. A degenerate direction or a
+/// non-positive length is skipped so a collapsed dimension draws no spike.
+fn push_arrowhead(
+    flat: &mut FlatDrawing,
+    map: &dyn Fn([f64; 2]) -> FlatPoint,
+    color: Color,
+    tip: [f64; 2],
+    direction: [f64; 2],
+    length: f64,
+) {
+    let norm = (direction[0] * direction[0] + direction[1] * direction[1]).sqrt();
+    if norm <= f64::EPSILON || !length.is_finite() || length <= 0.0 {
+        return;
+    }
+    let unit = [direction[0] / norm, direction[1] / norm];
+    let normal = [-unit[1], unit[0]];
+    let half = length * 0.35;
+    let back = [tip[0] - unit[0] * length, tip[1] - unit[1] * length];
+    let points =
+        vec![map(tip), map([back[0] + normal[0] * half, back[1] + normal[1] * half]), map([back[0] - normal[0] * half, back[1] - normal[1] * half])];
+    flat.push(Element::new(Shape::Polygon { points }, solid(color)));
+}
+
 fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_style: &Style, text_style: &Style, projection: &Projection<'_>) {
     let map = projection.map;
     let scale = projection.scale;
@@ -397,11 +450,14 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
                 text_style.clone(),
             ));
         }
-        EntityKind::Dimension { from, to, offset, text, .. } => {
+        EntityKind::Dimension { from, to, offset, text, style } => {
             let (p1, p2) = offset_points(*from, *to, *offset);
             for (start, end) in [(*from, p1), (*to, p2), (p1, p2)] {
                 flat.push(Element::new(Shape::Line { from: map(start), to: map(end) }, stroke_style.clone()));
             }
+            let arrow = arrow_length(style.as_deref(), projection);
+            push_arrowhead(flat, map, color, p1, [p1[0] - p2[0], p1[1] - p2[1]], arrow);
+            push_arrowhead(flat, map, color, p2, [p2[0] - p1[0], p2[1] - p1[1]], arrow);
             let midpoint = [(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0 + projection.label_offset];
             flat.push(Element::new(
                 Shape::Text { at: map(midpoint), text: dimension_label(*from, *to, text), size: projection.label_size.max(0.01) },
@@ -412,6 +468,11 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
             let target = radial_target(*center, *radius, *angle);
             let start = if *diameter { radial_target(*center, *radius, *angle + 180.0) } else { *center };
             flat.push(Element::new(Shape::Line { from: map(start), to: map(target) }, stroke_style.clone()));
+            let arrow = arrow_length(None, projection);
+            push_arrowhead(flat, map, color, target, [target[0] - center[0], target[1] - center[1]], arrow);
+            if !*diameter {
+                flat.push(Element::new(Shape::Circle { center: map(*center), radius: arrow * 0.18 }, solid(color)));
+            }
             let label = radial_label(*center, *radius, *angle, *offset);
             flat.push(Element::new(
                 Shape::Text { at: map(label), text: radial_dimension_label(*radius, *diameter, text), size: projection.label_size.max(0.01) },
@@ -422,6 +483,8 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
             let (base, guide) = ordinate_points(*origin, *feature, *axis, *offset);
             flat.push(Element::new(Shape::Line { from: map(*feature), to: map(guide) }, stroke_style.clone()));
             flat.push(Element::new(Shape::Line { from: map(base), to: map(guide) }, stroke_style.clone()));
+            let arrow = arrow_length(None, projection);
+            push_arrowhead(flat, map, color, guide, [guide[0] - feature[0], guide[1] - feature[1]], arrow);
             let midpoint = [(base[0] + guide[0]) / 2.0, (base[1] + guide[1]) / 2.0 + projection.label_offset];
             flat.push(Element::new(
                 Shape::Text {
@@ -445,6 +508,11 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
                 Shape::Arc { center: map(*center), radius: radius * scale, start_degrees: -start, end_degrees: -(start + sweep) },
                 stroke_style.clone(),
             ));
+            let arrow = arrow_length(None, projection);
+            let start_radians = start.to_radians();
+            let end_radians = (start + sweep).to_radians();
+            push_arrowhead(flat, map, color, start_point, [start_radians.sin(), -start_radians.cos()], arrow);
+            push_arrowhead(flat, map, color, end_point, [-end_radians.sin(), end_radians.cos()], arrow);
             flat.push(Element::new(
                 Shape::Text {
                     at: map(label_point),
@@ -470,7 +538,15 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
     let stroke = stroke_width(drawing.units);
     let map = |point: [f64; 2]| frame.map(point);
-    let projection = Projection { map: &map, scale: 1.0, stroke, lineweight_scale: 1.0, label_offset: 1.0, label_size: stroke * 3.5 };
+    let projection = Projection {
+        map: &map,
+        scale: 1.0,
+        stroke,
+        lineweight_scale: 1.0,
+        label_offset: 1.0,
+        label_size: stroke * 3.5,
+        dim_styles: &drawing.dim_styles,
+    };
     let flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
     let svg = flat.to_svg().unwrap_or_else(|_| {
         format!(
@@ -1078,7 +1154,8 @@ pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
     let offset_x = (PDF_PAGE_WIDTH - width * scale) / 2.0 - min_x * scale;
     let offset_y = (PDF_PAGE_HEIGHT - height * scale) / 2.0 - min_y * scale;
     let map = |point: [f64; 2]| FlatPoint::new(point[0] * scale + offset_x, PDF_PAGE_HEIGHT - (point[1] * scale + offset_y));
-    let projection = Projection { map: &map, scale, stroke: 0.7, lineweight_scale: scale, label_offset: 1.75, label_size: 1.75 * scale };
+    let projection =
+        Projection { map: &map, scale, stroke: 0.7, lineweight_scale: scale, label_offset: 1.75, label_size: 1.75 * scale, dim_styles: &drawing.dim_styles };
     let flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
     let out = flat.to_pdf().map_or_else(|_| String::from("%PDF-1.7\n%%EOF\n"), |bytes| String::from_utf8_lossy(&bytes).into_owned());
 
