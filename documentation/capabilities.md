@@ -130,10 +130,15 @@ reduce the line type to one dash/gap pair so a dashed layer reads as dashed. The
 draw hatch boundary polygons, not the pattern definition; the line entities
 `hatchPattern` creates are ordinary visible entities and are drawn normally.
 
-SVG is the only renderer. PDF is A4 landscape with one uniform fit to the page.
-PDF approximates arcs and ellipses with cubic Bezier segments and reports
-`pdf/text-encoding` when a character cannot be encoded. Neither format is
-editable: reopening it is not supported.
+Both formats draw the same engineering sheet: two borders inset from the sheet
+edge and a title block in the lower-right corner of the inner border carrying
+the drawing title, the author/company/project byline, the declared units and the
+current revision. SVG is the only renderer. PDF is A4 landscape with one
+uniform fit into the area left by the inner border and the title block, so
+geometry never crosses either of them. PDF approximates arcs and ellipses with
+cubic Bezier segments and reports `pdf/text-encoding` when a character cannot be
+encoded, including characters in the title block. Neither format is editable:
+reopening it is not supported.
 
 ## STL, OBJ and STEP
 
