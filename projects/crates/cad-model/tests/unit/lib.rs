@@ -2544,7 +2544,7 @@ fn render_returns_a_read_only_svg_preview() {
     assert!(svg.contains("<svg"), "the preview is an SVG document");
     assert!(svg.contains("<line"), "the line is drawn");
     assert!(svg.contains("<path"), "the polyline is drawn");
-    assert_eq!(preview["width"], json!(12.0), "the 10 unit line plus the 1 unit pad on each side");
+    assert_eq!(preview["width"], json!(42.0), "the 10 unit line plus the 16 unit frame margin pad on each side");
     assert!(preview["height"].as_f64().is_some_and(|height| height > 0.0));
 
     let again = render(handle, "svg").expect("render again");

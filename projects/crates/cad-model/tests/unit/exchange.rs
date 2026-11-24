@@ -101,3 +101,19 @@ fn dimension_arrow_follows_the_referenced_style() {
     assert!(widths[..2].iter().all(|width| (width - 2.5).abs() < 1e-6), "the default style keeps the standard arrow: {widths:?}");
     assert!(widths[2..].iter().all(|width| (width - 10.0).abs() < 1e-6), "the referenced style sizes the arrow: {widths:?}");
 }
+
+#[test]
+fn svg_export_draws_sheet_frame_and_title_block() {
+    let mut drawing = Drawing::empty(Some("Bracket".to_string()), Units::Mm);
+    drawing.properties.author = "Ada".to_string();
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [100.0, 40.0] },
+    });
+    let svg = svg(&drawing);
+    assert!(svg.contains("Units: mm"), "the title block declares the units: {svg}");
+    assert!(svg.contains("Rev 1"), "the title block reports the revision: {svg}");
+    assert!(svg.contains("Ada"), "the title block reports the author: {svg}");
+    assert!(svg.matches("<path").count() >= 3, "the borders and the title block are closed paths: {svg}");
+}

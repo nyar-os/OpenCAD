@@ -96,6 +96,15 @@ fn stroke_width(units: Units) -> f64 {
     }
 }
 
+/// Margin between the sheet edge and the inner drawing frame border, in the
+/// declared drawing units (10 mm / 0.5 in).
+fn frame_margin(units: Units) -> f64 {
+    match units {
+        Units::Mm => 10.0,
+        Units::Inch => 0.5,
+    }
+}
+
 fn dimension_label(from: [f64; 2], to: [f64; 2], text: &Option<String>) -> String {
     if let Some(text) = text {
         return text.clone();
@@ -139,7 +148,7 @@ impl Frame {
             Some(extents) => {
                 let width = extents.width().max(1.0);
                 let height = extents.height().max(1.0);
-                let pad = (width.max(height) * 0.05).max(1.0);
+                let pad = (width.max(height) * 0.08).max(frame_margin(drawing.units) * 1.6);
                 Self { min_x: extents.min.x - pad, min_y: extents.min.y - pad, width: width + pad * 2.0, height: height + pad * 2.0 }
             }
             None => Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 },
@@ -535,6 +544,76 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
     }
 }
 
+/// Pushes the engineering sheet frame and title block onto an SVG scene.
+///
+/// Two borders inset from the sheet edge follow drafting practice; the title
+/// block sits in the lower-right corner of the inner border and reports the
+/// drawing title, its author, company and project, the declared units and the
+/// current revision. The shapes are placed in canvas coordinates directly
+/// because the sheet, unlike the entities, is not projected from the model.
+fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, frame: Frame, stroke: f64) {
+    let margin = frame_margin(drawing.units);
+    let border = Style::stroke(EXPORT_INK, stroke.max(0.35));
+    let label = Style::fill(EXPORT_INK);
+    let outer = margin * 0.4;
+    let inner = margin.max(outer + stroke * 3.0);
+    let rectangle = |x: f64, y: f64, width: f64, height: f64| Shape::Polygon {
+        points: vec![
+            FlatPoint::new(x, y),
+            FlatPoint::new(x + width, y),
+            FlatPoint::new(x + width, y + height),
+            FlatPoint::new(x, y + height),
+        ],
+    };
+    flat.push(Element::new(rectangle(outer, outer, frame.width - outer * 2.0, frame.height - outer * 2.0), border.clone()));
+    flat.push(Element::new(rectangle(inner, inner, frame.width - inner * 2.0, frame.height - inner * 2.0), border.clone()));
+
+    let sheet: f64 = match drawing.units {
+        Units::Mm => 1.0,
+        Units::Inch => 1.0 / 25.4,
+    };
+    let inner_width = (frame.width - inner * 2.0).max(0.0);
+    let inner_height = (frame.height - inner * 2.0).max(0.0);
+    let width = (180.0 * sheet).min(inner_width * 0.8);
+    let height = (24.0 * sheet).min(inner_height * 0.6);
+    if width < 1.0 || height < 1.0 {
+        return;
+    }
+    let row = height / 3.0;
+    let left = frame.width - inner - width;
+    let top = frame.height - inner - height;
+    let size = (row * 0.5).max(0.5);
+    flat.push(Element::new(rectangle(left, top, width, height), border.clone()));
+    for index in 1..3 {
+        let y = top + row * index as f64;
+        flat.push(Element::new(Shape::Line { from: FlatPoint::new(left, y), to: FlatPoint::new(left + width, y) }, border.clone()));
+    }
+    let meta_x = left + width * 0.55;
+    flat.push(Element::new(
+        Shape::Line { from: FlatPoint::new(meta_x, top + row * 2.0), to: FlatPoint::new(meta_x, top + height) },
+        border.clone(),
+    ));
+
+    let byline = [drawing.properties.author.as_str(), drawing.properties.company.as_str(), drawing.properties.project.as_str()]
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let byline = if byline.is_empty() { String::from("Unattributed") } else { byline };
+    let units_label = format!("Units: {}", drawing.units.as_str());
+    let revision_label = format!("Rev {}", drawing.revision);
+    let baseline = |index: usize| top + row * (index as f64 + 1.0) - row * 0.28;
+    let cells = [
+        (drawing.title.as_deref().unwrap_or("Untitled drawing"), left, 0usize),
+        (byline.as_str(), left, 1),
+        (units_label.as_str(), left, 2),
+        (revision_label.as_str(), meta_x, 2),
+    ];
+    for (value, x, index) in cells {
+        flat.push(Element::new(Shape::Text { at: FlatPoint::new(x + row * 0.3, baseline(index)), text: value.to_string(), size }, label.clone()));
+    }
+}
+
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
     let stroke = stroke_width(drawing.units);
     let map = |point: [f64; 2]| frame.map(point);
@@ -547,7 +626,8 @@ fn svg_document(drawing: &Drawing, frame: Frame) -> String {
         label_size: stroke * 3.5,
         dim_styles: &drawing.dim_styles,
     };
-    let flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
+    let mut flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
+    push_sheet_frame(&mut flat, drawing, frame, stroke);
     let svg = flat.to_svg().unwrap_or_else(|_| {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n</svg>\n",
