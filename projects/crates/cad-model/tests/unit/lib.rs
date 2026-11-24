@@ -3143,6 +3143,31 @@ fn step_export_skips_open_profiles_instead_of_faking_a_solid() {
 }
 
 #[test]
+fn three_d_exports_extrude_a_full_circle() {
+    let dir = TempDir::new("circle-extrude");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_circle(handle, DEFAULT_LAYER, [0.0, 0.0], 10.0).expect("circle");
+
+    let stl_path = dir.path.join("circle.stl");
+    let stl = export(handle, "stl", &stl_path).expect("export stl");
+    let triangles = stl["triangles"].as_u64().expect("stl triangles");
+    assert!(triangles > 0, "a full circle is a closed profile and must be extruded, not skipped silently");
+    assert!(stl["losses"].as_array().is_some_and(Vec::is_empty), "the circle export must not report losses: {}", stl["losses"]);
+
+    let obj_path = dir.path.join("circle.obj");
+    let obj = export(handle, "obj", &obj_path).expect("export obj");
+    assert_eq!(obj["triangles"].as_u64().expect("obj triangles"), triangles, "OBJ and STL describe the same solid");
+
+    let step_path = dir.path.join("circle.step");
+    let step = export(handle, "step", &step_path).expect("export step");
+    assert_eq!(step["faces"].as_u64().expect("step faces"), triangles, "STEP keeps one face per triangle");
+    let text = fs::read_to_string(&step_path).expect("read step");
+    assert!(text.contains("MANIFOLD_SOLID_BREP"), "the extruded circle must become a real solid");
+    close(handle).expect("close");
+}
+
+#[test]
 fn arc_and_ellipse_round_trip_and_reject_invalid_values() {
     let dir = TempDir::new("arc-ellipse");
     let path = dir.path.join("curves.ocad");

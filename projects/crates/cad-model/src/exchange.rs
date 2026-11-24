@@ -1308,6 +1308,49 @@ fn closed_profile(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     profile
 }
 
+/// Selects the extrudable profile of one entity for the 3D projections.
+///
+/// Curve entities (polyline, spline, arc, ellipse, circle) return their sampled
+/// profile and whether it is closed; a full circle and a full-sweep ellipse are
+/// closed, an arc and an open polyline are not. Lines, text and dimensions
+/// return `None` and are never extruded. The STL, OBJ and STEP writers share
+/// this selection so all three describe the same solid.
+fn extrude_profile(kind: &EntityKind) -> Option<(Vec<[f64; 2]>, bool)> {
+    match kind {
+        EntityKind::Polyline { points, closed } => Some((closed_profile(points), *closed)),
+        EntityKind::Spline { points, closed } => Some((closed_profile(&sample_spline(points, *closed)), *closed)),
+        EntityKind::Arc { center, radius, start_angle, end_angle } => {
+            Some((closed_profile(&sample_arc(*center, radius.abs(), *start_angle, *end_angle)), false))
+        }
+        EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+            let sampled = sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle);
+            let closed = arc_sweep(*start_angle, *end_angle) >= 360.0 - 1e-9;
+            Some((if closed { seam_profile(&sampled) } else { closed_profile(&sampled) }, closed))
+        }
+        EntityKind::Circle { center, radius } => Some((seam_profile(&sample_arc(*center, radius.abs(), 0.0, 0.0)), true)),
+        _ => None,
+    }
+}
+
+/// Deduplicates a closed profile sampled over a full turn.
+///
+/// Sampling from `0` through `360` degrees repeats the start point with a
+/// floating-point offset of about `1e-15` of the radius, which exact
+/// [`closed_profile`] deduplication keeps and ear clipping then turns into
+/// degenerate seam triangles.
+fn seam_profile(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut profile = closed_profile(points);
+    if profile.len() > 2 {
+        let first = profile[0];
+        let last = profile[profile.len() - 1];
+        let (dx, dy) = (last[0] - first[0], last[1] - first[1]);
+        if dx * dx + dy * dy < 1e-12 {
+            profile.pop();
+        }
+    }
+    profile
+}
+
 fn signed_area(points: &[[f64; 2]]) -> f64 {
     let polygon = points.iter().map(|point| PlanarPoint::new(point[0], point[1])).collect::<Vec<_>>();
     signed_polygon_area(&polygon)
@@ -1418,12 +1461,13 @@ fn extrusion_triangles(profile: &[[f64; 2]], cap: &[[usize; 3]], height: f64) ->
     triangles
 }
 
-/// Extrudes every closed polyline along +Z and writes an ASCII STL solid.
+/// Extrudes every closed profile along +Z and writes an ASCII STL solid.
 ///
 /// The projection is a solid, not a surface model: each closed profile becomes
-/// two triangulated caps plus one side wall per edge. Circles, text and
-/// dimensions are not extruded, and an open polyline is reported as a loss
-/// instead of being closed silently.
+/// two triangulated caps plus one side wall per edge. Polylines, splines, full
+/// circles and full ellipses are extruded (curves are sampled); lines, text and
+/// dimensions are not, and an open profile is reported as a loss instead of
+/// being closed silently.
 pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
     let height = if thickness.is_finite() && thickness > 0.0 { thickness } else { STL_DEFAULT_THICKNESS };
     let mut content = String::from("solid open-cad\n");
@@ -1432,18 +1476,9 @@ pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
     let mut losses = Vec::new();
 
     for entity in &drawing.entities {
-        let (profile, closed) = match &entity.kind {
-            EntityKind::Polyline { points, closed } => (closed_profile(points), *closed),
-            EntityKind::Spline { points, closed } => (closed_profile(&sample_spline(points, *closed)), *closed),
-            EntityKind::Arc { center, radius, start_angle, end_angle } => {
-                (closed_profile(&sample_arc(*center, radius.abs(), *start_angle, *end_angle)), false)
-            }
-            EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
-                let sampled = sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle);
-                let closed = arc_sweep(*start_angle, *end_angle) >= 360.0 - 1e-9;
-                (closed_profile(&sampled), closed)
-            }
-            _ => continue,
+        let Some((profile, closed)) = extrude_profile(&entity.kind)
+        else {
+            continue;
         };
         if !closed {
             losses.push(Loss::warning(
@@ -1459,7 +1494,7 @@ pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
                 "stl/degenerate-triangle",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` has fewer than three distinct vertices", entity.id),
+                format!("profile `{}` has fewer than three distinct vertices", entity.id),
             ));
             continue;
         }
@@ -1469,7 +1504,7 @@ pub(crate) fn stl(drawing: &Drawing, thickness: f64) -> StlReport {
                 "stl/invalid-profile",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` could not be triangulated", entity.id),
+                format!("profile `{}` could not be triangulated", entity.id),
             ));
             continue;
         };
@@ -1504,7 +1539,7 @@ pub(crate) struct ObjReport {
 /// Extrudes every closed profile along +Z and writes a Wavefront OBJ mesh.
 ///
 /// The projection uses the same closed-profile selection and extrusion as the
-/// STL writer, so both formats describe the same solid. Circles, text and
+/// STL writer, so both formats describe the same solid. Lines, text and
 /// dimensions are not extruded, and an open profile is reported with
 /// `obj/open-profile` instead of being closed silently.
 pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
@@ -1516,18 +1551,9 @@ pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
     let mut losses = Vec::new();
 
     for entity in &drawing.entities {
-        let (profile, closed) = match &entity.kind {
-            EntityKind::Polyline { points, closed } => (closed_profile(points), *closed),
-            EntityKind::Spline { points, closed } => (closed_profile(&sample_spline(points, *closed)), *closed),
-            EntityKind::Arc { center, radius, start_angle, end_angle } => {
-                (closed_profile(&sample_arc(*center, radius.abs(), *start_angle, *end_angle)), false)
-            }
-            EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
-                let sampled = sample_ellipse(*center, rx.abs(), ry.abs(), *rotation, *start_angle, *end_angle);
-                let closed = arc_sweep(*start_angle, *end_angle) >= 360.0 - 1e-9;
-                (closed_profile(&sampled), closed)
-            }
-            _ => continue,
+        let Some((profile, closed)) = extrude_profile(&entity.kind)
+        else {
+            continue;
         };
         if !closed {
             losses.push(Loss::warning(
@@ -1543,7 +1569,7 @@ pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
                 "obj/degenerate-triangle",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` has fewer than three distinct vertices", entity.id),
+                format!("profile `{}` has fewer than three distinct vertices", entity.id),
             ));
             continue;
         }
@@ -1553,7 +1579,7 @@ pub(crate) fn obj(drawing: &Drawing, thickness: f64) -> ObjReport {
                 "obj/invalid-profile",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` could not be triangulated", entity.id),
+                format!("profile `{}` could not be triangulated", entity.id),
             ));
             continue;
         };
@@ -1678,14 +1704,15 @@ fn step_face(builder: &mut StepBuilder, triangle: [[f64; 3]; 3]) -> Option<usize
     Some(builder.add(format!("ADVANCED_FACE('',(#{bound}),#{plane},.T.)")))
 }
 
-/// Extrudes every closed polyline along +Z and writes AP203-style STEP text.
+/// Extrudes every closed profile along +Z and writes AP203-style STEP text.
 ///
 /// The projection is a faceted BREP, not a modelling kernel: every triangle of
 /// one extrusion becomes one planar `ADVANCED_FACE`, and each closed profile
 /// becomes its own `CLOSED_SHELL` inside a `MANIFOLD_SOLID_BREP`, so disjoint
 /// profiles stay separate solids. There are no booleans and no analytic
-/// surfaces. Circles, text and dimensions are not extruded, and an open polyline
-/// is reported with `step/open-profile` instead of being closed silently.
+/// surfaces. The profile selection matches the STL and OBJ writers, so lines,
+/// text and dimensions are not extruded and an open profile is reported with
+/// `step/open-profile` instead of being closed silently.
 pub(crate) fn step(drawing: &Drawing, thickness: f64) -> StepReport {
     let height = if thickness.is_finite() && thickness > 0.0 { thickness } else { STL_DEFAULT_THICKNESS };
     let mut builder = StepBuilder::new();
@@ -1717,26 +1744,25 @@ pub(crate) fn step(drawing: &Drawing, thickness: f64) -> StepReport {
     let shape_axis = builder.add(format!("AXIS2_PLACEMENT_3D('',#{origin},#{z_axis},#{x_axis})"));
 
     for entity in &drawing.entities {
-        let EntityKind::Polyline { points, closed } = &entity.kind
+        let Some((profile, closed)) = extrude_profile(&entity.kind)
         else {
             continue;
         };
-        if !*closed {
+        if !closed {
             losses.push(Loss::warning(
                 "step/open-profile",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` is not closed and was not extruded", entity.id),
+                format!("profile `{}` is not closed and was not extruded", entity.id),
             ));
             continue;
         }
-        let profile = closed_profile(points);
         if profile.len() < 3 {
             losses.push(Loss::warning(
                 "step/degenerate-triangle",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` has fewer than three distinct vertices", entity.id),
+                format!("profile `{}` has fewer than three distinct vertices", entity.id),
             ));
             continue;
         }
@@ -1746,7 +1772,7 @@ pub(crate) fn step(drawing: &Drawing, thickness: f64) -> StepReport {
                 "step/invalid-profile",
                 Some(&entity.layer),
                 Some(&entity.id),
-                format!("polyline `{}` could not be triangulated", entity.id),
+                format!("profile `{}` could not be triangulated", entity.id),
             ));
             continue;
         };
