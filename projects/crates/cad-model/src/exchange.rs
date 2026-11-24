@@ -157,12 +157,7 @@ impl Frame {
                     Units::Inch => 1.0 / 25.4,
                 };
                 let bottom = (frame_margin(drawing.units) + 28.0 * sheet).max(pad);
-                Self {
-                    min_x: extents.min.x - pad,
-                    min_y: extents.min.y - bottom,
-                    width: width + pad * 2.0,
-                    height: height + pad + bottom,
-                }
+                Self { min_x: extents.min.x - pad, min_y: extents.min.y - bottom, width: width + pad * 2.0, height: height + pad + bottom }
             }
             None => Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 },
         }
@@ -393,14 +388,7 @@ fn solid(color: Color) -> Style {
 /// `direction` is the way the arrow points; the triangle base sits `length`
 /// behind the tip against the arrow axis. A degenerate direction or a
 /// non-positive length is skipped so a collapsed dimension draws no spike.
-fn push_arrowhead(
-    flat: &mut FlatDrawing,
-    map: &dyn Fn([f64; 2]) -> FlatPoint,
-    color: Color,
-    tip: [f64; 2],
-    direction: [f64; 2],
-    length: f64,
-) {
+fn push_arrowhead(flat: &mut FlatDrawing, map: &dyn Fn([f64; 2]) -> FlatPoint, color: Color, tip: [f64; 2], direction: [f64; 2], length: f64) {
     let norm = (direction[0] * direction[0] + direction[1] * direction[1]).sqrt();
     if norm <= f64::EPSILON || !length.is_finite() || length <= 0.0 {
         return;
@@ -409,8 +397,11 @@ fn push_arrowhead(
     let normal = [-unit[1], unit[0]];
     let half = length * 0.35;
     let back = [tip[0] - unit[0] * length, tip[1] - unit[1] * length];
-    let points =
-        vec![map(tip), map([back[0] + normal[0] * half, back[1] + normal[1] * half]), map([back[0] - normal[0] * half, back[1] - normal[1] * half])];
+    let points = vec![
+        map(tip),
+        map([back[0] + normal[0] * half, back[1] + normal[1] * half]),
+        map([back[0] - normal[0] * half, back[1] - normal[1] * half]),
+    ];
     flat.push(Element::new(Shape::Polygon { points }, solid(color)));
 }
 
@@ -557,73 +548,127 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
     }
 }
 
-/// Pushes the engineering sheet frame and title block onto an SVG scene.
-///
-/// Two borders inset from the sheet edge follow drafting practice; the title
-/// block sits in the lower-right corner of the inner border and reports the
-/// drawing title, its author, company and project, the declared units and the
-/// current revision. The shapes are placed in canvas coordinates directly
-/// because the sheet, unlike the entities, is not projected from the model.
-fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, frame: Frame, stroke: f64) {
-    let margin = frame_margin(drawing.units);
-    let border = Style::stroke(EXPORT_INK, stroke.max(0.35));
-    let label = Style::fill(EXPORT_INK);
-    let outer = margin * 0.4;
-    let inner = margin.max(outer + stroke * 3.0);
-    let rectangle = |x: f64, y: f64, width: f64, height: f64| Shape::Polygon {
-        points: vec![
-            FlatPoint::new(x, y),
-            FlatPoint::new(x + width, y),
-            FlatPoint::new(x + width, y + height),
-            FlatPoint::new(x, y + height),
-        ],
-    };
-    flat.push(Element::new(rectangle(outer, outer, frame.width - outer * 2.0, frame.height - outer * 2.0), border.clone()));
-    flat.push(Element::new(rectangle(inner, inner, frame.width - inner * 2.0, frame.height - inner * 2.0), border.clone()));
+/// Title block size in millimetres, shared by the SVG and PDF sheets.
+const TITLE_BLOCK_WIDTH_MM: f64 = 180.0;
+const TITLE_BLOCK_HEIGHT_MM: f64 = 24.0;
 
-    let sheet: f64 = match drawing.units {
+/// Drawing units per sheet millimetre, used to size the title block.
+fn sheet_scale(units: Units) -> f64 {
+    match units {
         Units::Mm => 1.0,
         Units::Inch => 1.0 / 25.4,
-    };
-    let inner_width = (frame.width - inner * 2.0).max(0.0);
-    let inner_height = (frame.height - inner * 2.0).max(0.0);
-    let width = (180.0 * sheet).min(inner_width * 0.8);
-    let height = (24.0 * sheet).min(inner_height * 0.6);
-    if width < 1.0 || height < 1.0 {
-        return;
     }
-    let row = height / 3.0;
-    let left = frame.width - inner - width;
-    let top = frame.height - inner - height;
-    let size = (row * 0.5).max(0.5);
-    flat.push(Element::new(rectangle(left, top, width, height), border.clone()));
-    for index in 1..3 {
-        let y = top + row * index as f64;
-        flat.push(Element::new(Shape::Line { from: FlatPoint::new(left, y), to: FlatPoint::new(left + width, y) }, border.clone()));
-    }
-    let meta_x = left + width * 0.55;
-    flat.push(Element::new(
-        Shape::Line { from: FlatPoint::new(meta_x, top + row * 2.0), to: FlatPoint::new(meta_x, top + height) },
-        border.clone(),
-    ));
+}
 
+/// Placement of the bottom-right title block, in sheet coordinates.
+#[derive(Debug, Clone, Copy)]
+struct TitleBlock {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Sheet borders and title block placement shared by the SVG and PDF writers.
+///
+/// Both formats draw the same two borders and the same bottom-right block; only
+/// the coordinate unit differs, so the layout is derived once from a sheet
+/// size, a margin and a title-block size expressed in that unit.
+#[derive(Debug, Clone, Copy)]
+struct SheetLayout {
+    outer: f64,
+    inner: f64,
+    block: Option<TitleBlock>,
+}
+
+impl SheetLayout {
+    fn of(width: f64, height: f64, margin: f64, stroke: f64, block_size: FlatSize, min_block: f64) -> Self {
+        let outer = margin * 0.4;
+        let inner = margin.max(outer + stroke * 3.0);
+        let inner_width = (width - inner * 2.0).max(0.0);
+        let inner_height = (height - inner * 2.0).max(0.0);
+        let block_width = block_size.width.min(inner_width * 0.8);
+        let block_height = block_size.height.min(inner_height * 0.6);
+        let block = (block_width >= min_block && block_height >= min_block).then_some(TitleBlock {
+            left: width - inner - block_width,
+            top: height - inner - block_height,
+            width: block_width,
+            height: block_height,
+        });
+        Self { outer, inner, block }
+    }
+
+    /// Layout of an SVG sheet, in drawing units.
+    fn for_svg(drawing: &Drawing, frame: Frame, stroke: f64) -> Self {
+        let sheet = sheet_scale(drawing.units);
+        let block = FlatSize::new(TITLE_BLOCK_WIDTH_MM * sheet, TITLE_BLOCK_HEIGHT_MM * sheet);
+        Self::of(frame.width, frame.height, frame_margin(drawing.units), stroke, block, sheet)
+    }
+}
+
+/// The title block's text: title, byline, units and revision.
+fn title_block_labels(drawing: &Drawing) -> [String; 4] {
     let byline = [drawing.properties.author.as_str(), drawing.properties.company.as_str(), drawing.properties.project.as_str()]
         .into_iter()
         .filter(|value| !value.trim().is_empty())
         .collect::<Vec<_>>()
         .join(" / ");
     let byline = if byline.is_empty() { String::from("Unattributed") } else { byline };
-    let units_label = format!("Units: {}", drawing.units.as_str());
-    let revision_label = format!("Rev {}", drawing.revision);
-    let baseline = |index: usize| top + row * (index as f64 + 1.0) - row * 0.28;
-    let cells = [
-        (drawing.title.as_deref().unwrap_or("Untitled drawing"), left, 0usize),
-        (byline.as_str(), left, 1),
-        (units_label.as_str(), left, 2),
-        (revision_label.as_str(), meta_x, 2),
-    ];
+    [
+        drawing.title.as_deref().unwrap_or("Untitled drawing").to_string(),
+        byline,
+        format!("Units: {}", drawing.units.as_str()),
+        format!("Rev {}", drawing.revision),
+    ]
+}
+
+/// Pushes the engineering sheet frame and title block onto a scene.
+///
+/// Two borders inset from the sheet edge follow drafting practice; the title
+/// block sits in the lower-right corner of the inner border and reports the
+/// drawing title, its author, company and project, the declared units and the
+/// current revision. The shapes are placed in canvas coordinates directly
+/// because the sheet, unlike the entities, is not projected from the model.
+fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, sheet: FlatSize, stroke: f64, layout: &SheetLayout) {
+    let border = Style::stroke(EXPORT_INK, stroke.max(0.35));
+    let label = Style::fill(EXPORT_INK);
+    let rectangle = |x: f64, y: f64, width: f64, height: f64| Shape::Polygon {
+        points: vec![FlatPoint::new(x, y), FlatPoint::new(x + width, y), FlatPoint::new(x + width, y + height), FlatPoint::new(x, y + height)],
+    };
+    flat.push(Element::new(
+        rectangle(layout.outer, layout.outer, sheet.width - layout.outer * 2.0, sheet.height - layout.outer * 2.0),
+        border.clone(),
+    ));
+    flat.push(Element::new(
+        rectangle(layout.inner, layout.inner, sheet.width - layout.inner * 2.0, sheet.height - layout.inner * 2.0),
+        border.clone(),
+    ));
+
+    let Some(block) = layout.block
+    else {
+        return;
+    };
+    let row = block.height / 3.0;
+    let size = (row * 0.5).max(0.5);
+    flat.push(Element::new(rectangle(block.left, block.top, block.width, block.height), border.clone()));
+    for index in 1..3 {
+        let y = block.top + row * index as f64;
+        flat.push(Element::new(
+            Shape::Line { from: FlatPoint::new(block.left, y), to: FlatPoint::new(block.left + block.width, y) },
+            border.clone(),
+        ));
+    }
+    let meta_x = block.left + block.width * 0.55;
+    flat.push(Element::new(
+        Shape::Line { from: FlatPoint::new(meta_x, block.top + row * 2.0), to: FlatPoint::new(meta_x, block.top + block.height) },
+        border.clone(),
+    ));
+
+    let [title, byline, units, revision] = title_block_labels(drawing);
+    let baseline = |index: usize| block.top + row * (index as f64 + 1.0) - row * 0.28;
+    let cells = [(title, block.left, 0usize), (byline, block.left, 1), (units, block.left, 2), (revision, meta_x, 2)];
     for (value, x, index) in cells {
-        flat.push(Element::new(Shape::Text { at: FlatPoint::new(x + row * 0.3, baseline(index)), text: value.to_string(), size }, label.clone()));
+        flat.push(Element::new(Shape::Text { at: FlatPoint::new(x + row * 0.3, baseline(index)), text: value, size }, label.clone()));
     }
 }
 
@@ -640,7 +685,8 @@ fn svg_document(drawing: &Drawing, frame: Frame) -> String {
         dim_styles: &drawing.dim_styles,
     };
     let mut flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
-    push_sheet_frame(&mut flat, drawing, frame, stroke);
+    let layout = SheetLayout::for_svg(drawing, frame, stroke);
+    push_sheet_frame(&mut flat, drawing, FlatSize::new(frame.width, frame.height), stroke, &layout);
     let svg = flat.to_svg().unwrap_or_else(|_| {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n</svg>\n",
@@ -1207,6 +1253,12 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
 const PDF_PAGE_WIDTH: f64 = 841.89;
 const PDF_PAGE_HEIGHT: f64 = 595.28;
 const PDF_MARGIN: f64 = 28.0;
+/// PostScript points per millimetre, used to place the physical sheet furniture.
+const PDF_POINTS_PER_MILLIMETRE: f64 = PDF_PAGE_WIDTH / 297.0;
+/// Gap between the inner border and the fitted geometry, in points.
+const PDF_FIT_PADDING: f64 = 8.0;
+/// Outline width of the sheet frame and title block, in points.
+const PDF_FRAME_STROKE: f64 = 0.7;
 
 /// Escapes one text string for a PDF literal and reports replacements.
 ///
@@ -1232,25 +1284,50 @@ fn pdf_text(value: &str) -> (String, usize) {
     (out, replaced)
 }
 
-/// Renders one drawing to a vector PDF and reports text losses.
+/// Builds the A4 landscape PDF page: the fitted drawing plus its sheet frame.
 ///
-/// The page is A4 landscape. Content is fitted into the printable area with a
-/// uniform scale, so the output is a drawing sheet rather than a 1:1 plot.
-pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
+/// The geometry is fitted into the inner border with the title block's band
+/// reserved, using the same [`SheetLayout`] the SVG writer draws. The frame is
+/// appended after the entities, so it paints on top like drafting furniture.
+fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
     let extents = visible_extents(drawing);
     let (min_x, min_y, width, height) = match extents {
         Some(extents) => (extents.min.x, extents.min.y, extents.width().max(1.0), extents.height().max(1.0)),
         None => (0.0, 0.0, 297.0, 210.0),
     };
-    let usable_width = PDF_PAGE_WIDTH - PDF_MARGIN * 2.0;
-    let usable_height = PDF_PAGE_HEIGHT - PDF_MARGIN * 2.0;
-    let scale = (usable_width / width).min(usable_height / height);
-    let offset_x = (PDF_PAGE_WIDTH - width * scale) / 2.0 - min_x * scale;
-    let offset_y = (PDF_PAGE_HEIGHT - height * scale) / 2.0 - min_y * scale;
-    let map = |point: [f64; 2]| FlatPoint::new(point[0] * scale + offset_x, PDF_PAGE_HEIGHT - (point[1] * scale + offset_y));
-    let projection =
-        Projection { map: &map, scale, stroke: 0.7, lineweight_scale: scale, label_offset: 1.75, label_size: 1.75 * scale, dim_styles: &drawing.dim_styles };
-    let flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
+    let block = FlatSize::new(TITLE_BLOCK_WIDTH_MM * PDF_POINTS_PER_MILLIMETRE, TITLE_BLOCK_HEIGHT_MM * PDF_POINTS_PER_MILLIMETRE);
+    let layout = SheetLayout::of(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN, PDF_FRAME_STROKE, block, PDF_POINTS_PER_MILLIMETRE);
+    let left = layout.inner + PDF_FIT_PADDING;
+    let top = layout.inner + PDF_FIT_PADDING;
+    let right = PDF_PAGE_WIDTH - layout.inner - PDF_FIT_PADDING;
+    let bottom = layout.block.map_or(PDF_PAGE_HEIGHT - layout.inner - PDF_FIT_PADDING, |title| title.top - PDF_FIT_PADDING);
+    let area_width = (right - left).max(1.0);
+    let area_height = (bottom - top).max(1.0);
+    let scale = (area_width / width).min(area_height / height);
+    let origin_x = left + (area_width - width * scale) / 2.0 - min_x * scale;
+    let origin_y = top + (area_height - height * scale) / 2.0 + (height + min_y) * scale;
+    let map = |point: [f64; 2]| FlatPoint::new(point[0] * scale + origin_x, origin_y - point[1] * scale);
+    let projection = Projection {
+        map: &map,
+        scale,
+        stroke: PDF_FRAME_STROKE,
+        lineweight_scale: scale,
+        label_offset: 1.75,
+        label_size: 1.75 * scale,
+        dim_styles: &drawing.dim_styles,
+    };
+    let mut flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
+    push_sheet_frame(&mut flat, drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), PDF_FRAME_STROKE, &layout);
+    (flat, layout)
+}
+
+/// Renders one drawing to a vector PDF and reports text losses.
+///
+/// The page is A4 landscape. Content is fitted into the area left by the frame
+/// and title block with a uniform scale, so the output is a drawing sheet
+/// rather than a 1:1 plot.
+pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
+    let (flat, layout) = pdf_page(drawing);
     let out = flat.to_pdf().map_or_else(|_| String::from("%PDF-1.7\n%%EOF\n"), |bytes| String::from_utf8_lossy(&bytes).into_owned());
 
     let mut replaced = 0;
@@ -1267,6 +1344,11 @@ pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
                 }
                 _ => {}
             }
+        }
+    }
+    if layout.block.is_some() {
+        for label in title_block_labels(drawing) {
+            replaced += pdf_text(&label).1;
         }
     }
 

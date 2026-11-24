@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use open_cad_drawing::{CreateRequest, PropertiesUpdate, add_circle, add_line, add_radial_dimension, add_text, create, export, update_properties};
+use open_cad_drawing::{
+    CreateRequest, PropertiesUpdate, add_circle, add_line, add_radial_dimension, add_text, create, export, update_properties,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = std::env::args().nth(1).unwrap_or_else(|| "export-all".into());

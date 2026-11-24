@@ -52,12 +52,22 @@ fn every_dimension_kind_lowers_solid_arrowheads() {
     });
     let frame = Frame::of(&drawing);
     let map = |point: [f64; 2]| frame.map(point);
-    let projection =
-        Projection { map: &map, scale: 1.0, stroke: 0.5, lineweight_scale: 1.0, label_offset: 1.0, label_size: 1.75, dim_styles: &drawing.dim_styles };
+    let projection = Projection {
+        map: &map,
+        scale: 1.0,
+        stroke: 0.5,
+        lineweight_scale: 1.0,
+        label_offset: 1.0,
+        label_size: 1.75,
+        dim_styles: &drawing.dim_styles,
+    };
     let flat = build_drawing(&drawing, FlatSize::new(frame.width, frame.height), &projection);
     let arrows = flat.elements.iter().filter(|element| matches!(&element.shape, Shape::Polygon { .. })).collect::<Vec<_>>();
     assert_eq!(arrows.len(), 6, "two linear, one radial, one ordinate and two angular arrowheads");
-    assert!(arrows.iter().all(|element| element.style.fill.is_some() && element.style.stroke.is_none()), "every arrowhead is a solid outline-free triangle");
+    assert!(
+        arrows.iter().all(|element| element.style.fill.is_some() && element.style.stroke.is_none()),
+        "every arrowhead is a solid outline-free triangle"
+    );
     let dots = flat.elements.iter().filter(|element| matches!(&element.shape, Shape::Circle { .. })).count();
     assert_eq!(dots, 1, "the radius dimension marks its centre");
 }
@@ -65,12 +75,7 @@ fn every_dimension_kind_lowers_solid_arrowheads() {
 #[test]
 fn dimension_arrow_follows_the_referenced_style() {
     let mut drawing = Drawing::empty(None, Units::Mm);
-    drawing.dim_styles.push(DimensionStyle {
-        id: "big".to_string(),
-        name: "big".to_string(),
-        arrow_size: 10.0,
-        ..DimensionStyle::standard()
-    });
+    drawing.dim_styles.push(DimensionStyle { id: "big".to_string(), name: "big".to_string(), arrow_size: 10.0, ..DimensionStyle::standard() });
     drawing.entities.push(Entity {
         id: "entity-1".to_string(),
         layer: "dimensions".to_string(),
@@ -83,14 +88,22 @@ fn dimension_arrow_follows_the_referenced_style() {
     });
     let frame = Frame::of(&drawing);
     let map = |point: [f64; 2]| frame.map(point);
-    let projection =
-        Projection { map: &map, scale: 1.0, stroke: 0.5, lineweight_scale: 1.0, label_offset: 1.0, label_size: 1.75, dim_styles: &drawing.dim_styles };
+    let projection = Projection {
+        map: &map,
+        scale: 1.0,
+        stroke: 0.5,
+        lineweight_scale: 1.0,
+        label_offset: 1.0,
+        label_size: 1.75,
+        dim_styles: &drawing.dim_styles,
+    };
     let flat = build_drawing(&drawing, FlatSize::new(frame.width, frame.height), &projection);
     let widths = flat
         .elements
         .iter()
         .filter_map(|element| {
-            let Shape::Polygon { points } = &element.shape else {
+            let Shape::Polygon { points } = &element.shape
+            else {
                 return None;
             };
             let xs = points.iter().map(|point| point.x).collect::<Vec<_>>();
@@ -116,4 +129,62 @@ fn svg_export_draws_sheet_frame_and_title_block() {
     assert!(svg.contains("Rev 1"), "the title block reports the revision: {svg}");
     assert!(svg.contains("Ada"), "the title block reports the author: {svg}");
     assert!(svg.matches("<path").count() >= 3, "the borders and the title block are closed paths: {svg}");
+}
+
+#[test]
+fn pdf_export_draws_sheet_frame_and_title_block() {
+    let mut drawing = Drawing::empty(Some("Bracket".to_string()), Units::Mm);
+    drawing.properties.author = "Ada".to_string();
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [100.0, 40.0] },
+    });
+    let (pdf, losses) = pdf(&drawing);
+    assert!(pdf.starts_with("%PDF-1.7"), "a PDF header: {pdf}");
+    assert!(pdf.contains("(Bracket) Tj"), "the title block reports the title: {pdf}");
+    assert!(pdf.contains("(Units: mm) Tj"), "the title block declares the units: {pdf}");
+    assert!(pdf.contains("(Rev 1) Tj"), "the title block reports the revision: {pdf}");
+    assert!(pdf.contains("(Ada) Tj"), "the title block reports the author: {pdf}");
+    assert!(losses.is_empty(), "ASCII sheet text needs no encoding loss: {losses:?}");
+    // Two borders, the block frame and its three rules, plus the entity itself.
+    let strokes = pdf.matches("\nS\n").count();
+    assert!(strokes >= 7, "the content stream carries the frame strokes and the entity: {strokes}");
+}
+
+#[test]
+fn pdf_geometry_stays_clear_of_the_title_block() {
+    let mut drawing = Drawing::empty(Some("Bracket".to_string()), Units::Mm);
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [100.0, 40.0] },
+    });
+    let (flat, layout) = pdf_page(&drawing);
+    let block = layout.block.expect("the A4 sheet fits a title block");
+    let Shape::Line { from, to } = &flat.elements[0].shape
+    else {
+        panic!("the entity is the first element");
+    };
+    for point in [from, to] {
+        assert!(point.y < block.top, "{point:?} reaches into the title block whose top is {}", block.top);
+        assert!(
+            point.x > layout.inner && point.x < PDF_PAGE_WIDTH - layout.inner,
+            "{point:?} crosses a vertical inner border at {}",
+            layout.inner
+        );
+        assert!(
+            point.y > layout.inner && point.y < PDF_PAGE_HEIGHT - layout.inner,
+            "{point:?} crosses a horizontal inner border at {}",
+            layout.inner
+        );
+    }
+}
+
+#[test]
+fn pdf_export_handles_an_empty_drawing() {
+    let (pdf, losses) = pdf(&Drawing::empty(None, Units::Mm));
+    assert!(pdf.starts_with("%PDF-1.7"), "a PDF header: {pdf}");
+    assert!(pdf.contains("(Untitled drawing) Tj"), "the frame falls back to a placeholder title: {pdf}");
+    assert!(losses.is_empty(), "a frame-only sheet needs no loss: {losses:?}");
 }
