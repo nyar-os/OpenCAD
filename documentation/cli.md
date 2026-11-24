@@ -142,6 +142,7 @@ exactly one transform.
 | `join` | `--a <line>`, `--b <line>` (collinear and sharing one endpoint) |
 | `align` | `--ids a,b`, `--mode left\|center\|right\|bottom\|middle\|top` |
 | `distribute` | `--ids a,b,c`, `--axis x\|y` |
+| `stretch` | `--box x1,y1,x2,y2`, then `--dx n` and/or `--dy n` |
 | `fillet` | `--first <id>`, `--second <id>`, `--radius n` |
 | `chamfer` | `--first <id>`, `--second <id>`, `--distance-a n`, `--distance-b n` (defaults to A) |
 
@@ -158,6 +159,7 @@ open-cad break plan.ocad --id entity-3 --at 50,0
 open-cad join plan.ocad --a entity-3 --b entity-4
 open-cad align plan.ocad --ids entity-3,entity-4,entity-5 --mode left
 open-cad distribute plan.ocad --ids entity-3,entity-4,entity-5 --axis x
+open-cad stretch plan.ocad --box 0,0,100,50 --dx 10 --dy 0
 open-cad fillet plan.ocad --first entity-5 --second entity-6 --radius 20
 ```
 
@@ -222,6 +224,16 @@ so the gaps match. Fewer than three distinct ids report
 `object/not-found`, locked or frozen layers with `drawing/layer-locked` or
 `drawing/layer-frozen`, and entities without finite bounds with
 `object/degenerate`.
+
+`stretch` moves the line endpoints, polyline/spline/hatch points, point
+positions and circle/arc/ellipse centres that lie inside `--box` (boundary
+included) by `--dx`/`--dy`, and saves the file. The window uses crossing
+selection, like `select --crossing`. Text and dimension entities can not stretch;
+they are skipped and counted in the response. Ids, layers and draw order stay
+put, and the call is one revision and one history step, including a window that
+matches nothing. A missing window reports `open-cad.cli.box-required`; a missing
+displacement reports `open-cad.cli.stretch-required`; a non-finite or degenerate
+window reports `session/argument-invalid`.
 
 ## Hatch patterns and title blocks
 

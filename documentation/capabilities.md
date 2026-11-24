@@ -35,9 +35,9 @@ Entity kinds reported by `entities`: `line`, `circle`, `arc`, `ellipse`,
 
 Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
-`distribute`, `overkill`, `hatch-pattern`, `title-block`, `polyline-smooth`,
-`polyline-chamfer`, `diff`, `quantity-table`, `measure`, `measure-entity`,
-`measure-points`, `stats`,
+`distribute`, `stretch`, `overkill`, `hatch-pattern`, `title-block`,
+`polyline-smooth`, `polyline-chamfer`, `diff`, `quantity-table`, `measure`,
+`measure-entity`, `measure-points`, `stats`,
 `dimension-style`, `text-style`, `text-search`, `group`, `select`, `properties`,
 `snap`, `linetype`, `ucs`.
 `constraints` and `kernel3d` are reported as unsupported.
@@ -448,6 +448,40 @@ single history steps with undo/redo
 (`align_and_distribute_are_single_history_steps`), the save/reopen round trip
 (`align_and_distribute_survive_save_and_reopen`) and repeatability
 (`align_is_deterministic`).
+
+## Stretch
+
+`stretch(request)` moves the defining points that lie inside a crossing window
+(boundary included) by a displacement. The rectangle is normalised like `select`
+and tested with crossing semantics, so an entity joins the edit when any sampled
+outline point is inside it or its outline crosses it. Each supported kind maps
+one-to-one to the model:
+
+- `line`: `from` and `to`;
+- `polyline`, `spline` and `hatch`: their ordered points;
+- `point`: its position;
+- `circle`, `arc` and `ellipse`: their centre, the same point `transform` and
+  `entity move` translate.
+
+Text and every dimension kind have no stretchable vertices; they are skipped
+and counted in `skipped`. A line or curve that crosses the window without any
+defining point inside is left unchanged and is not counted as affected. Ids,
+layers and draw order are untouched. Every accepted request writes one revision
+and one history step, including a request that matches nothing (`affected = 0`).
+The response carries `{ revision, drawing, window, displacement, affected,
+skipped }`.
+
+| Code | Cause |
+| :--- | :--- |
+| `session/argument-invalid` | A window corner or displacement value is not finite, the window has zero width and height, or no `dx`/`dy` displacement is supplied. |
+| `drawing/layer-locked` | An entity that would move sits on a locked layer. |
+| `drawing/layer-frozen` | An entity that would move sits on a frozen layer. |
+
+The model tests cover partial line and polyline movement, boundary-inclusive
+vertices, curve centres with their shape preserved, spline and hatch points,
+annotation skipping with identity/order/layer preservation, single revision and
+history steps with undo/redo, the empty selection revision, and invalid windows,
+displacements, locked and frozen layers.
 
 ## Hatch patterns
 
