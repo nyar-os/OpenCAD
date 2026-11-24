@@ -6509,3 +6509,17 @@ fn diff_reports_unreadable_and_malformed_projects() {
     assert_eq!(diff(&valid, &junk).expect_err("malformed").code, "format/invalid");
     close(handle).expect("close");
 }
+
+#[test]
+fn empty_drawing_exports_every_supported_format_without_panic() {
+    let dir = TempDir::new("empty-export");
+    let created = create(CreateRequest::default()).expect("an empty drawing is created");
+    let handle = handle_of(&created);
+    for format in ["svg", "dxf", "dxf-r12", "pdf", "stl", "obj", "step"] {
+        let target = dir.path.join(format!("empty.{format}"));
+        let report = export(handle, format, &target).unwrap_or_else(|error| panic!("`{format}` failed: {}", error.message));
+        let bytes = report["bytes"].as_u64().expect("the report counts bytes");
+        assert!(bytes > 0, "`{format}` wrote an empty file for an empty drawing");
+    }
+    close(handle).expect("close");
+}
