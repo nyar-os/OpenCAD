@@ -182,6 +182,25 @@ fn pdf_geometry_stays_clear_of_the_title_block() {
 }
 
 #[test]
+fn pdf_export_keeps_dimension_text_legible() {
+    let mut drawing = Drawing::empty(Some("Large plate".to_string()), Units::Mm);
+    drawing.entities.push(Entity {
+        id: "entity-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Dimension { from: [0.0, 0.0], to: [300.0, 200.0], offset: 10.0, text: None, style: None },
+    });
+    let (pdf, _) = pdf(&drawing);
+    let sizes: Vec<f64> = pdf
+        .split("/F1 ")
+        .filter_map(|chunk| chunk.split(" Tf").next())
+        .filter_map(|size| size.trim().parse::<f64>().ok())
+        .collect();
+    assert!(!sizes.is_empty(), "the sheet writes text: {pdf}");
+    let smallest = sizes.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(smallest >= 7.0, "dimension text stays legible after fitting: {smallest} pt in {sizes:?}");
+}
+
+#[test]
 fn pdf_export_handles_an_empty_drawing() {
     let (pdf, losses) = pdf(&Drawing::empty(None, Units::Mm));
     assert!(pdf.starts_with("%PDF-1.7"), "a PDF header: {pdf}");

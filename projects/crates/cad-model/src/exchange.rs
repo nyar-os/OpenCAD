@@ -1313,7 +1313,10 @@ fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
         stroke: PDF_FRAME_STROKE,
         lineweight_scale: scale,
         label_offset: 1.75,
-        label_size: 1.75 * scale,
+        // A fitted A4 sheet shrinks large drawings enough that scaled label
+        // text drops below the legible print floor; keep annotations at least
+        // 7 pt so dimensions stay readable on paper.
+        label_size: (1.75 * scale).max(7.0),
         dim_styles: &drawing.dim_styles,
     };
     let mut flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
