@@ -649,7 +649,7 @@ const SVG_PX_PER_MILLIMETRE: f64 = 8.0;
 /// drawing units, so a 133 mm sheet would open as a 133 px stamp. The
 /// `viewBox` keeps the unit coordinates; only the rendered size changes,
 /// matching the pixel canvas the other Open* exporters produce.
-fn scale_svg_size(mut svg: String, units: Units) -> String {
+fn scale_svg_size(svg: String, units: Units) -> String {
     let factor = match units {
         Units::Mm => SVG_PX_PER_MILLIMETRE,
         Units::Inch => SVG_PX_PER_MILLIMETRE * 25.4,
