@@ -190,11 +190,8 @@ fn pdf_export_keeps_dimension_text_legible() {
         kind: EntityKind::Dimension { from: [0.0, 0.0], to: [300.0, 200.0], offset: 10.0, text: None, style: None },
     });
     let (pdf, _) = pdf(&drawing);
-    let sizes: Vec<f64> = pdf
-        .split("/F1 ")
-        .filter_map(|chunk| chunk.split(" Tf").next())
-        .filter_map(|size| size.trim().parse::<f64>().ok())
-        .collect();
+    let sizes: Vec<f64> =
+        pdf.split("/F1 ").filter_map(|chunk| chunk.split(" Tf").next()).filter_map(|size| size.trim().parse::<f64>().ok()).collect();
     assert!(!sizes.is_empty(), "the sheet writes text: {pdf}");
     let smallest = sizes.iter().copied().fold(f64::INFINITY, f64::min);
     assert!(smallest >= 7.0, "dimension text stays legible after fitting: {smallest} pt in {sizes:?}");
