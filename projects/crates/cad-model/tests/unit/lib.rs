@@ -1124,8 +1124,8 @@ fn snap_ordering_tolerance_and_defaults_stay_deterministic() {
     let default = snap_points(handle, SnapRequest::default()).expect("default");
     let modes = default["modes"].as_array().expect("modes").iter().map(|value| value.as_str().expect("mode").to_string()).collect::<Vec<_>>();
     assert_eq!(modes, SNAP_DEFAULT_MODES.iter().map(|mode| (*mode).to_string()).collect::<Vec<_>>());
-    assert!(!modes.contains(&"quadrant".to_string()), "quadrant is opt-in");
-    assert!(!modes.contains(&"nearest".to_string()), "nearest is opt-in");
+    assert!(!modes.iter().any(|mode| mode == "quadrant"), "quadrant is opt-in");
+    assert!(!modes.iter().any(|mode| mode == "nearest"), "nearest is opt-in");
     let circle_endpoints = snap_points(
         handle,
         SnapRequest {
@@ -1277,7 +1277,7 @@ fn snap_perpendicular_ordering_tolerance_and_missing_probe() {
 
     let default = snap_points(handle, SnapRequest::default()).expect("default");
     let modes = default["modes"].as_array().expect("modes").iter().map(|value| value.as_str().expect("mode").to_string()).collect::<Vec<_>>();
-    assert!(!modes.contains(&"perpendicular".to_string()), "perpendicular is opt-in");
+    assert!(!modes.iter().any(|mode| mode == "perpendicular"), "perpendicular is opt-in");
     close(handle).expect("close");
 }
 
@@ -1388,7 +1388,7 @@ fn snap_tangent_filters_arcs_and_needs_a_probe() {
 
     let default = snap_points(handle, SnapRequest::default()).expect("default");
     let modes = default["modes"].as_array().expect("modes").iter().map(|value| value.as_str().expect("mode").to_string()).collect::<Vec<_>>();
-    assert!(!modes.contains(&"tangent".to_string()), "tangent is opt-in");
+    assert!(!modes.iter().any(|mode| mode == "tangent"), "tangent is opt-in");
     close(handle).expect("close");
 }
 
@@ -6246,7 +6246,7 @@ fn title_block_generates_a_framed_sheet_with_defaults() {
     assert_eq!(lines, 19, "outer border, inner frame, block frame, six row separators and one label divider");
     let texts = created_text(&result["created"]);
     for expected in ["Title", "Number", "Revision", "Scale", "Date", "Author", "Sheet", "Site plan", "drawing-1", "1:1", "Ada"] {
-        assert!(texts.contains(&expected.to_string()), "missing `{expected}` in {texts:?}");
+        assert!(texts.iter().any(|text| text == expected), "missing `{expected}` in {texts:?}");
     }
     let drawing = drawing_of(handle);
     let layer = drawing.layer("titleblock").expect("titleblock layer");
@@ -6281,7 +6281,7 @@ fn title_block_honours_overrides_and_a_custom_sheet() {
     .expect("custom block");
     let texts = created_text(&result["created"]);
     for expected in ["Pump skid", "A-101", "C", "1:50", "2026-11-23", "Lin", "2"] {
-        assert!(texts.contains(&expected.to_string()), "missing `{expected}` in {texts:?}");
+        assert!(texts.iter().any(|text| text == expected), "missing `{expected}` in {texts:?}");
     }
     let drawing = drawing_of(handle);
     assert!(drawing.layer("Sheet").is_some());
