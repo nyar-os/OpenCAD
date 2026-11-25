@@ -4,7 +4,7 @@
 
 OpenCAD is a 2D technical drawing tool: one `.ocad` document model behind an
 `open-cad` command line and a TypeScript SDK, with a declared ASCII DXF import
-subset and SVG/PDF/DXF/STL/OBJ/STEP export. This repository is the whole product:
+subset and SVG/PDF/PNG/DXF/STL/OBJ/STEP export. This repository is the whole product:
 drawing model, native binding, SDK/CLI, studio shell, agent skill and site.
 
 ## Documentation map

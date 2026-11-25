@@ -26,7 +26,8 @@ Every unsupported route answers with `capability/not-implemented`.
 | OBJ | partial | Export direction only (triangle meshes). |
 | STL | export target only | Recorded as `unsupported` under `formats` because there is no STL reader; `exportTargets.stl` is `supported`. |
 | IGES/IGS | partial | Export direction only (a declared IGES-5.3 deck subset); no reader. |
-| DWG, PNG, JPG | unsupported | No reader and no writer. |
+| PNG | export target only | Recorded as `partial` under `formats` because there is no PNG reader; `exportTargets.png` is `supported`. |
+| DWG, JPG | unsupported | No reader and no writer. |
 | Interactive viewport | unsupported | SVG output is the only renderer; the studio does not paint geometry. |
 | Constraint solver, 3D kernel | unsupported | No constraints, booleans, analytic surfaces or solids beyond faceted projection. |
 
@@ -225,6 +226,25 @@ approximates arcs and ellipses with cubic Bezier segments and reports
 encoded, including characters in the title block. PDF is not editable:
 reopening it is not supported. SVG can be reopened through the declared import
 subset above.
+
+## PNG
+
+`png` rasterises the same page the PDF writer lays out — sheet frame, title
+block, visible entities and dimension annotations included — at a requested
+`dpi` (pixels per inch, default 144). Strokes, polygon and ellipse fills and
+dashes come from the lowered drawing; text paints through a built-in 5x7
+bitmap font that covers ASCII letters, digits and common punctuation.
+Characters outside that set are left blank and reported as `png/text-glyph` in
+one aggregated warning.
+
+The image is 8-bit RGB with a white background, at most 8192 pixels per edge
+and 32 million pixels in total; a `dpi` that exceeds either limit, and a
+non-finite or non-positive value, report `session/argument-invalid`. The PNG
+encoder writes uncompressed `deflate` blocks with its own CRC-32 and Adler-32,
+so it is self-contained and byte-stable: the same drawing and `dpi` always
+produce identical bytes. There is no anti-aliasing, no alpha channel and no
+PNG reader; the raster is not editable. The export report adds
+`image: { width, height }`.
 
 ## STL, OBJ and STEP
 

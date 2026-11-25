@@ -60,10 +60,11 @@ types.
 | History | `undo`, `redo`, `close` |
 | Save and export | `save`, `export` |
 
-`export({ format })` accepts `dxf`, `dxf-r12`, `svg`, `pdf`, `stl`, `obj`,
-`step` and `iges`. The result reports what the target kept in `losses`, so a
-successful export does not imply a lossless file. `convertUnits` switches a drawing between
-`mm` and `inch`.
+`export({ format })` accepts `dxf`, `dxf-r12`, `svg`, `pdf`, `png`, `stl`,
+`obj`, `step` and `iges`. The result reports what the target kept in `losses`,
+so a successful export does not imply a lossless file. `png` also takes `dpi`
+(pixels per inch, default 144) and reports its `image` size. `convertUnits`
+switches a drawing between `mm` and `inch`.
 
 ## Constraints
 
@@ -76,6 +77,8 @@ successful export does not imply a lossless file. `convertUnits` switches a draw
   `capabilities()` reports these as unsupported, and operations that need them
   answer `capability/not-implemented`.
 - STEP, STL and OBJ are export-only faceted projections, not analytic solids.
+- PNG is an export-only raster of the sheet with a built-in bitmap font. It is
+  not editable and there is no PNG reader.
 - `history: 'sidecar'` is required for undo across processes; it is what the CLI
   uses. The default keeps history in memory.
 - Colours are `#rrggbb`. Layer lineweights are `0`–`10` mm. A line-type pattern

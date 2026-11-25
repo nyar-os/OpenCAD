@@ -41,7 +41,7 @@ revision because they produce a new committed state.
 
 | Layer | Location | Responsibility |
 | :--- | :--- | :--- |
-| Model | `projects/crates/cad-model` (crate `open-cad-drawing`) | Schema, store, persistence, undo snapshots, entity and layer operations, inspection, DXF import subset, SVG/PDF/DXF/STL/OBJ/STEP writers |
+| Model | `projects/crates/cad-model` (crate `open-cad-drawing`) | Schema, store, persistence, undo snapshots, entity and layer operations, inspection, DXF import subset, SVG/PDF/PNG/DXF/STL/OBJ/STEP writers |
 | Binding | `projects/crates/cad-napi` (crate `open-cad-napi`) | One Node-API function per operation; JSON string in, JSON string out; process-wide drawing handles; WebView host for the studio |
 | Native access | `projects/packages/open-cad/src/native.ts`, `service.ts` | Resolve the addon, decode JSON, map failures to stable `OpenCADError` codes |
 | Document | `projects/packages/open-cad/src/document.ts` | Own one native handle and the last drawing summary; forward edits; sidecar history |

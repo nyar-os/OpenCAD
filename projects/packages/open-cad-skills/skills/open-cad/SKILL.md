@@ -34,7 +34,7 @@ geometry, polylines, dimensions, duplicate entities, zero-length geometry,
 open contours and opted-in empty layers, report per-layer statistics, import
 the declared ASCII DXF subset (including SPLINE,
 LEADER, MLEADER, HATCH and 3D POLYLINE projection), and export SVG, ASCII DXF,
-R12-compatible ASCII DXF, PDF, STL, OBJ or STEP.
+R12-compatible ASCII DXF, PDF, PNG, STL, OBJ or STEP.
 The interactive viewport, the constraint solver, DWG/STEP import, a full DXF
 reader and STL/OBJ import are not implemented. Those routes report
 `capability/not-implemented`; do not present them as executable and do not
@@ -153,9 +153,11 @@ open-cad import site.dxf --out site.ocad
 
 `--out` on `create` and `import` refuses to replace an existing file unless
 `--overwrite` is given. `--format` accepts the declared targets; `svg`, `dxf`,
-`dxf-r12`, `pdf`, `stl`, `obj` and `step` are implemented. `dxf-r12` always
+`dxf-r12`, `pdf`, `png`, `stl`, `obj` and `step` are implemented. `dxf-r12` always
 writes `AC1009`, simplifies ellipses and hatches to boundary polylines, and
-reports omitted `$INSUNITS`, lineweight and plot flags. STL, OBJ and STEP are
+reports omitted `$INSUNITS`, lineweight and plot flags. `png` rasterises the
+sheet at `--dpi` (default 144; at most 8192 pixels per edge), paints text
+through a built-in bitmap font and is export-only. STL, OBJ and STEP are
 export-only: they extrude closed polylines along +Z and do not read STL/OBJ/STEP,
 model surfaces or run boolean operations. OBJ writes the same extrusion as
 `v`/`f` mesh records. STEP writes ISO-10303-21 AP203-style text as a faceted

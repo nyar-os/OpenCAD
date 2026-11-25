@@ -18,7 +18,7 @@ standard output; a domain failure prints its stable error code and exits `1`
 | `open <file>` | — | Prints id, revision, entity count, unit, title and layer names. |
 | `inspect <file>` | `--checks <a,b,...>` | Runs the selected checks; defaults to `units,layers,geometry,polylines,dimensions,duplicate-entity,zero-length,open-contour`. Exits `1` when any error is found. |
 | `diff <left> <right>` | — | Compares two project files by entity and layer id and prints the counts and side-by-side differences. Exits `1` when the drawings differ. |
-| `export <file>` | `--format dxf\|dxf-r12\|obj\|step\|stl\|svg\|pdf\|iges` (required), `--out <file>` (required) | Writes the format and prints its losses. |
+| `export <file>` | `--format dxf\|dxf-r12\|obj\|step\|stl\|svg\|pdf\|png\|iges` (required), `--out <file>` (required), `--dpi <number>` | Writes the format and prints its losses. `--dpi` sets the PNG resolution in pixels per inch (default 144). |
 | `undo <file>` | — | Restores the previous snapshot; persists through the sidecar history. |
 | `redo <file>` | — | Reapplies the next snapshot. |
 | `import <source>` | `--out <file>` (required), `--title <text>`, `--overwrite` | Imports the declared ASCII DXF subset, or the declared SVG subset for a `.svg` source, and prints entity counts and losses. |

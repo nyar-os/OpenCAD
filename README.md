@@ -17,7 +17,7 @@ Typical uses:
   layer, entity or style changed;
 - automate repetitive edits from a script or an agent, with stable entity ids and
   stable error codes instead of screenshot-and-click instructions;
-- produce an SVG or PDF preview or plot without a desktop CAD application;
+- produce an SVG, PDF or PNG preview or plot without a desktop CAD application;
 - bring geometry, layers and basic dimensions across from an existing DXF file.
 
 **OpenCAD is not:**
