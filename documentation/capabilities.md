@@ -163,7 +163,11 @@ or proxy objects, text styles beyond the declared table fields, and any
 
 `iges` writes an IGES-5.3 ASCII deck (80-column cards, `S`, `G`, `D`, `P` and
 `T` sections) containing the drawing's curve entities in the XY plane. The deck
-is deterministic: the same drawing always produces the same bytes. The global
+is deterministic: the same drawing always produces the same bytes. Parameter
+data fills columns 1-72 and the last parameter card of every entity carries a
+negative sequence number, the directory structure lines mark each entity as the
+root of its own structure, and the terminate card reports the size of every
+section and the card number where each section starts. The global
 section declares the producer, the IGES version, the card width and the units
 taken from the drawing (`MILLIMETE` or `INCH`); the deck carries curve entities
 only, with no transform, section or property definition entities.
@@ -206,8 +210,13 @@ edge and a title block in the lower-right corner of the inner border carrying
 the drawing title, the author/company/project byline, the declared units and the
 current revision. SVG is the only renderer. PDF is A4 landscape with one
 uniform fit into the area left by the inner border and the title block, so
-geometry never crosses either of them. PDF approximates arcs and ellipses with
-cubic Bezier segments and reports `pdf/text-encoding` when a character cannot be
+geometry never crosses either of them. After fitting, PDF keeps every text
+entity — notes and title-block text included, not only dimension labels — at
+the 7 pt legible print floor. A linear dimension whose span cannot hold two
+arrowheads and the label draws both arrowheads outside the extension lines
+pointing inward, so the label never sits inside crossing arrows. PDF
+approximates arcs and ellipses with cubic Bezier segments and reports
+`pdf/text-encoding` when a character cannot be
 encoded, including characters in the title block. PDF is not editable:
 reopening it is not supported. SVG can be reopened through the declared import
 subset above.
