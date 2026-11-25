@@ -28,9 +28,10 @@ use std::{
 
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
-    DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, MirrorAxis, OffsetSide, OrdinateAxis,
-    OverkillRequest, PolylineChamferRequest, QuantityTableRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest,
-    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis,
+    MultiViewSheetRequest, OffsetSide, OrdinateAxis, OverkillRequest, PolylineChamferRequest, QuantityTableRequest, SectionViewRequest,
+    ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection,
+    UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -1089,6 +1090,39 @@ fn drawing_quantity_table(ctx: CallContext) -> Result<JsValue> {
         },
     )
     .map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Projects a declarative part model onto a first- or third-angle multiview sheet.
+#[function]
+fn drawing_multiview_sheet(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: MultiViewSheetRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_multiview_sheet(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Cuts a declarative part model by a plane and draws the section outline with hatch lines.
+#[function]
+fn drawing_section_view(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: SectionViewRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_section_view(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Draws a polyline leader with an arrowhead and a note on an open drawing.
+#[function]
+fn drawing_leader_note(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: LeaderNoteRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_leader_note(handle, request).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2747,6 +2781,9 @@ register_module![
     drawing_ucs,
     drawing_stats,
     drawing_quantity_table,
+    drawing_multiview_sheet,
+    drawing_section_view,
+    drawing_leader_note,
     drawing_import_dxf,
     drawing_import_svg,
     open_gui,

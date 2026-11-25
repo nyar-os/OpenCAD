@@ -50,6 +50,9 @@
             "measure-points": "Measure the distance between two points or the angle at three points",
             "stats": "Report entity count, path length and enclosed area grouped by layer, type, colour or line type",
             "quantity-table": "Draw a framed quantity take-off table of the drawing aggregates and save the file",
+            "multiview-sheet": "Project a JSON part model into first- or third-angle views plus an isometric view and save the file",
+            "section-view": "Cut a JSON part model by a plane and draw the hatched section view and save the file",
+            "leader-note": "Draw a leader with an arrowhead and a note and save the file",
             "select": "Select entities inside or crossing a rectangular window without changing the drawing",
             "snap": "Compute endpoint, midpoint, centre and line-intersection snap points without changing the drawing",
             "ucs": "Convert points and entities between world and user coordinates and save the file",
@@ -263,7 +266,22 @@
             "quantity-layer": "Target layer for the quantity table; defaults to quantity",
             "origin-point": "Bottom-left corner of the table as x,y; defaults to 0,0",
             "quantity-text-height": "Height of the table text; defaults to 3.5",
-            "quantity-title": "Caption above the table header; an empty value omits the caption row"
+            "quantity-title": "Caption above the table header; an empty value omits the caption row",
+            "part-spec": "JSON part model as {\"solids\":[...],\"voids\":[...]} with box, cylinder, cone, sphere and wedge features",
+            "projection": "Projection convention: first (default) or third angle",
+            "view-scale": "Linear scale factor applied to every projected view; defaults to 1",
+            "view-text-height": "Height of the view and section labels; defaults to 3.5",
+            "views-layer": "Layer carrying the view outlines and labels; defaults to views",
+            "section-axis": "Axis the cutting plane is perpendicular to: x, y or z",
+            "section-at": "Coordinate of the cutting plane along --axis",
+            "section-hatch-angle": "Hatch angle in degrees; defaults to 45",
+            "section-hatch-spacing": "Perpendicular distance between hatch lines; defaults to 4",
+            "section-label": "Section caption; defaults to SECTION A-A",
+            "leader-points": "Leader points from the referenced object to the note as \"x,y x,y ...\"; at least two",
+            "leader-text": "Note text; non-empty",
+            "leader-text-height": "Height of the note text; defaults to 3.5",
+            "leader-arrow": "Arrowhead at the first leader point: on or off; defaults to on",
+            "notes-layer": "Layer carrying the leader note; defaults to notes"
         },
         "error": {
             "hatch-pattern-required": "`--id <entity>` is required",
@@ -272,7 +290,10 @@
             "polyline-smooth-required": "`--id <entity>` is required",
             "polyline-chamfer-required": "`--id <entity>` and `--distance <number>` are required",
             "dimension-update-required": "`--id <entity>` and at least one of `--from`, `--to`, `--offset` or `--style` are required",
-            "origin-invalid": "`--origin x,y` needs two numbers"
+            "origin-invalid": "`--origin x,y` needs two numbers",
+            "part-invalid": "`--part <json>` needs a JSON object with a non-empty `solids` list",
+            "section-cut-required": "`--axis x|y|z` and `--at <number>` are required",
+            "leader-note-required": "`--points \"x,y x,y ...\"` with at least two points and `--text <note>` are required"
         }
     }
 }

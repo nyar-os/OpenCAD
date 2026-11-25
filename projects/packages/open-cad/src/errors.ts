@@ -46,6 +46,7 @@ export const errorCodes = [
     'hatch/solid-pattern',
     'hatch/degenerate-boundary',
     'hatch/spacing-too-fine',
+    'section/empty',
     'titleblock/invalid-sheet',
     'dimension/unsupported-entity',
     'polyline/invalid-iterations',

@@ -79,6 +79,8 @@ import type {
     InspectCheck,
     InspectReport,
     JoinResult,
+    LeaderNoteRequest,
+    LeaderNoteResult,
     LayerChange,
     LayerDeletion,
     LayerMerge,
@@ -92,6 +94,8 @@ import type {
     MeasureResult,
     MergeLayerRequest,
     MoveEntityRequest,
+    MultiViewSheetRequest,
+    MultiViewSheetResult,
     OffsetRequest,
     OffsetResult,
     OffsetBySideRequest,
@@ -105,6 +109,8 @@ import type {
     QuantityTableRequest,
     QuantityTableResult,
     ReplaceTextRequest,
+    SectionViewRequest,
+    SectionViewResult,
     SaveReport,
     SelectionRequest,
     SelectionResult,
@@ -1138,6 +1144,59 @@ export function quantityTable(handle: number, request: QuantityTableRequest): Qu
                 origin: request.origin,
                 textHeight: request.textHeight,
                 title: request.title,
+            }),
+        ),
+    );
+}
+
+/** Projects a declarative part model onto a first- or third-angle multiview sheet. */
+export function multiviewSheet(handle: number, request: MultiViewSheetRequest): MultiViewSheetResult {
+    return decode<MultiViewSheetResult>(() =>
+        binding('drawing.multiviewSheet').drawing_multiview_sheet(
+            handle,
+            JSON.stringify({
+                part: request.part,
+                projection: request.projection,
+                scale: request.scale,
+                textHeight: request.textHeight,
+                origin: request.origin,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
+/** Cuts a declarative part model by a plane and draws the section outline with hatch lines. */
+export function sectionView(handle: number, request: SectionViewRequest): SectionViewResult {
+    return decode<SectionViewResult>(() =>
+        binding('drawing.sectionView').drawing_section_view(
+            handle,
+            JSON.stringify({
+                part: request.part,
+                axis: request.axis,
+                at: request.at,
+                hatchAngle: request.hatchAngle,
+                hatchSpacing: request.hatchSpacing,
+                textHeight: request.textHeight,
+                origin: request.origin,
+                label: request.label,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
+/** Draws a polyline leader with an arrowhead and a note on an open drawing. */
+export function leaderNote(handle: number, request: LeaderNoteRequest): LeaderNoteResult {
+    return decode<LeaderNoteResult>(() =>
+        binding('drawing.leaderNote').drawing_leader_note(
+            handle,
+            JSON.stringify({
+                layer: request.layer,
+                points: request.points,
+                text: request.text,
+                textHeight: request.textHeight,
+                arrow: request.arrow,
             }),
         ),
     );

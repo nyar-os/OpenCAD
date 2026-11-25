@@ -15,7 +15,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { drawingFormats, formatFromPath, formatInfo, OpenCAD, OpenCADError } from '../src/index.js';
-import type { DrawingInput } from '../src/index.js';
+import type { DrawingInput, PartSpec } from '../src/index.js';
 import { nativeBinding } from '../src/native.js';
 import * as service from '../src/service.js';
 
@@ -1127,6 +1127,57 @@ test('stats grouping and the quantity table draw aggregates', { skip: withAddon 
         assert.equal(table.totals.entities, 2);
         assert.ok(table.created.length > 0);
         assert.ok(table.created.every((entity) => entity.layer === 'quantity'));
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
+test('multiview sheets, section views and leader notes project a part model', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Projection' });
+        const part: PartSpec = {
+            solids: [
+                { kind: 'box', min: [0, 0, 0], max: [20, 12, 8] },
+                { kind: 'cylinder', axis: 'z', center: [10, 6], from: 0, to: 8, radius: 3 },
+            ],
+        };
+
+        const sheet = document.multiviewSheet({ part, projection: 'third' });
+        assert.equal(sheet.projection, 'third');
+        assert.ok(sheet.created.length > 0);
+        assert.ok(sheet.created.every((entity) => entity.layer === 'views'));
+        assert.equal(sheet.views.front.width, 20);
+        assert.equal(sheet.views.front.height, 8);
+        assert.equal(sheet.views.top.width, 20);
+        assert.equal(sheet.views.top.height, 12);
+        assert.ok(sheet.views.top.center[1] > sheet.views.front.center[1]);
+        assert.ok(sheet.views.iso.width > 0 && sheet.views.iso.height > 0);
+
+        const section = document.sectionView({ part, axis: 'z', at: 4 });
+        assert.ok(section.created.length > 0);
+        assert.ok(section.created.every((entity) => entity.layer === 'views'));
+        assert.ok(section.created.some((entity) => entity.kind.type === 'line'));
+        assert.ok(section.created.some((entity) => entity.kind.type === 'text'));
+
+        const note = document.leaderNote({ points: [[0, 0], [10, 0], [10, 5]], text: 'R5' });
+        assert.equal(note.created.length, 4);
+        assert.ok(note.created.every((entity) => entity.layer === 'notes'));
+        assert.equal(note.created.at(-1)?.kind.type, 'text');
+
+        assert.throws(
+            () => document.sectionView({ part, axis: 'z', at: 100 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'section/empty',
+        );
+        assert.throws(
+            () => document.sectionView({ part, axis: 'z', at: 4, hatchSpacing: 0.001 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'hatch/spacing-too-fine',
+        );
+        assert.throws(
+            () => document.leaderNote({ points: [[0, 0]], text: 'R5' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
         document.close();
     } finally {
         await cad.dispose();

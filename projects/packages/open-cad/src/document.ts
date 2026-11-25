@@ -95,6 +95,12 @@ import type {
     PolylineChamferRequest,
     QuantityTableRequest,
     QuantityTableResult,
+    LeaderNoteRequest,
+    LeaderNoteResult,
+    MultiViewSheetRequest,
+    MultiViewSheetResult,
+    SectionViewRequest,
+    SectionViewResult,
     MergeLayerRequest,
     MoveEntityRequest,
     ReplaceTextRequest,
@@ -1016,6 +1022,47 @@ export class DrawingDocument {
      */
     quantityTable(request: QuantityTableRequest = {}): QuantityTableResult {
         return this.edit((handle) => service.quantityTable(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Projects a declarative part model onto a multiview sheet.
+     *
+     * First- or third-angle front, top and left views plus an isometric view,
+     * with labels, hidden outlines from voids and the ISO projection symbol, on
+     * a `views` layer by default. The `views` field reports the placed view
+     * boxes; `origin` sets the lower-left corner of the group.
+     */
+    multiviewSheet(request: MultiViewSheetRequest): MultiViewSheetResult {
+        return this.edit((handle) => service.multiviewSheet(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Cuts a declarative part model by a plane and draws the section view.
+     *
+     * The cut outline, 45-degree hatch lines, the section label and the
+     * cutting-plane indicator, on a `views` layer by default. `axis` and `at`
+     * place the cutting plane; `hatchSpacing` too fine reports
+     * `hatch/spacing-too-fine`.
+     */
+    sectionView(request: SectionViewRequest): SectionViewResult {
+        return this.edit((handle) => service.sectionView(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Draws a polyline leader with an arrowhead and a note.
+     *
+     * `points` chain from the referenced object to the note; the first point
+     * carries an arrowhead unless `arrow` is false. The note lands on a
+     * `notes` layer by default.
+     */
+    leaderNote(request: LeaderNoteRequest): LeaderNoteResult {
+        return this.edit((handle) => service.leaderNote(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

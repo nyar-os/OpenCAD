@@ -25,6 +25,7 @@ import type {
     AlignResult,
     ArrayPlacement,
     ArrayResult,
+    Axis3,
     BreakResult,
     CopyResult,
     DimensionStyle,
@@ -54,18 +55,22 @@ import type {
     LayerChange,
     LayerMerge,
     LayerSummary,
+    LeaderNoteResult,
     Linetype,
     LinetypeChange,
     MeasureResult,
+    MultiViewSheetResult,
     OffsetBySideResult,
     OffsetResult,
     OffsetSide,
     OpenCADCapabilities,
     OverkillResult,
+    PartSpec,
     Point,
     PointMeasurement,
     QuantityTableResult,
     SaveReport,
+    SectionViewResult,
     SelectionResult,
     SnapMode,
     SnapResult,
@@ -235,6 +240,20 @@ const box = (options: ParsedOptions, key: string): [Point, Point] | undefined =>
         [values[0] as number, values[1] as number],
         [values[2] as number, values[3] as number],
     ];
+};
+
+const part = (options: ParsedOptions, key: string): PartSpec | undefined => {
+    const raw = text(options, key);
+    if (raw === undefined) {
+        return undefined;
+    }
+    try {
+        const value = JSON.parse(raw) as PartSpec;
+        return Array.isArray(value?.solids) && value.solids.length > 0 ? value : undefined;
+    }
+    catch {
+        return undefined;
+    }
 };
 
 function describeCapabilities(matrix: OpenCADCapabilities): string {
@@ -438,6 +457,25 @@ function describeQuantityTable(result: QuantityTableResult): string {
         `  total: entities=${result.totals.entities} length=${result.totals.length} area=${result.totals.area}`,
         `  created: ${result.created.length} entities`,
     ].join('\n');
+}
+
+function describeMultiviewSheet(result: MultiViewSheetResult): string {
+    const views = Object.entries(result.views).map(
+        ([name, view]) => `  ${name}: center=${view.center[0]},${view.center[1]} size=${view.width}x${view.height}`,
+    );
+    return [
+        `multiview sheet revision=${result.revision} projection=${result.projection}`,
+        ...views,
+        `  created: ${result.created.length} entities`,
+    ].join('\n');
+}
+
+function describeSectionView(result: SectionViewResult): string {
+    return [`section view revision=${result.revision}`, `  created: ${result.created.length} entities`].join('\n');
+}
+
+function describeLeaderNote(result: LeaderNoteResult): string {
+    return [`leader note revision=${result.revision}`, `  created: ${result.created.length} entities`].join('\n');
 }
 
 function describeTextMatches(result: TextMatchResult): string {
@@ -2519,6 +2557,143 @@ cli
                 }),
             );
             ctx.emitResult(result, describeQuantityTable(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('multiview-sheet', 'cli.cmd.multiview-sheet')
+    .option('--part <json>', 'cli.opt.part-spec')
+    .option('--projection <angle>', 'cli.opt.projection', { enum: ['first', 'third'] })
+    .option('--scale <number>', 'cli.opt.view-scale')
+    .option('--text-height <number>', 'cli.opt.view-text-height')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--layer <layer>', 'cli.opt.views-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const spec = part(options, 'part');
+        if (spec === undefined) {
+            ctx.fail('open-cad.cli.part-invalid', { message: '`--part <json>` needs a JSON object with a non-empty `solids` list' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.multiviewSheet({
+                    part: spec,
+                    projection: text(options, 'projection') as 'first' | 'third' | undefined,
+                    scale: number(options, 'scale'),
+                    textHeight: number(options, 'text-height'),
+                    origin,
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeMultiviewSheet(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('section-view', 'cli.cmd.section-view')
+    .option('--part <json>', 'cli.opt.part-spec')
+    .option('--axis <axis>', 'cli.opt.section-axis', { enum: ['x', 'y', 'z'] })
+    .option('--at <number>', 'cli.opt.section-at')
+    .option('--hatch-angle <degrees>', 'cli.opt.section-hatch-angle')
+    .option('--hatch-spacing <number>', 'cli.opt.section-hatch-spacing')
+    .option('--text-height <number>', 'cli.opt.view-text-height')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--label <text>', 'cli.opt.section-label')
+    .option('--layer <layer>', 'cli.opt.views-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const spec = part(options, 'part');
+        if (spec === undefined) {
+            ctx.fail('open-cad.cli.part-invalid', { message: '`--part <json>` needs a JSON object with a non-empty `solids` list' });
+            return 2;
+        }
+        const axis = text(options, 'axis');
+        const at = number(options, 'at');
+        if (axis === undefined || at === undefined) {
+            ctx.fail('open-cad.cli.section-cut-required', { message: '`--axis x|y|z` and `--at <number>` are required' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.sectionView({
+                    part: spec,
+                    axis: axis as Axis3,
+                    at,
+                    hatchAngle: number(options, 'hatch-angle'),
+                    hatchSpacing: number(options, 'hatch-spacing'),
+                    textHeight: number(options, 'text-height'),
+                    origin,
+                    label: text(options, 'label'),
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeSectionView(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('leader-note', 'cli.cmd.leader-note')
+    .option('--points <x,y ...>', 'cli.opt.leader-points')
+    .option('--text <note>', 'cli.opt.leader-text')
+    .option('--text-height <number>', 'cli.opt.leader-text-height')
+    .option('--arrow <on|off>', 'cli.opt.leader-arrow')
+    .option('--layer <layer>', 'cli.opt.notes-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const leaderPoints = points(options, 'points');
+        const note = text(options, 'text');
+        if (leaderPoints === undefined || leaderPoints.length < 2 || note === undefined) {
+            ctx.fail('open-cad.cli.leader-note-required', {
+                message: '`--points "x,y x,y ..."` with at least two points and `--text <note>` are required',
+            });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.leaderNote({
+                    points: leaderPoints,
+                    text: note,
+                    textHeight: number(options, 'text-height'),
+                    arrow: toggle(options, 'arrow'),
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeLeaderNote(result));
             return 0;
         } finally {
             opened.close();

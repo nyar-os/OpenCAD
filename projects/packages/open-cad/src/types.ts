@@ -77,6 +77,9 @@ export type OperationName =
     | 'snap'
     | 'linetype'
     | 'quantity-table'
+    | 'multiview-sheet'
+    | 'section-view'
+    | 'leader-note'
     | 'constraints'
     | 'kernel3d';
 
@@ -1480,6 +1483,158 @@ export interface QuantityTableResult {
         readonly length: number;
         readonly area: number;
     };
+    readonly created: readonly Entity[];
+}
+
+/** One of the three principal axes of the part model. */
+export type Axis3 = 'x' | 'y' | 'z';
+
+/** Axis-aligned box spanning `min` to `max`. */
+export interface BoxFeature {
+    readonly kind: 'box';
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+}
+
+/**
+ * Right circular cylinder along one principal axis.
+ *
+ * `center` holds the two coordinates transverse to `axis`, in ascending axis
+ * order (`[y, z]` for `x`, `[x, z]` for `y`, `[x, y]` for `z`); `from` and
+ * `to` are coordinates along `axis`.
+ */
+export interface CylinderFeature {
+    readonly kind: 'cylinder';
+    readonly axis: Axis3;
+    readonly center: readonly [number, number];
+    readonly from: number;
+    readonly to: number;
+    readonly radius: number;
+}
+
+/** Circular cone or frustum along one principal axis, with the same centre convention as {@link CylinderFeature}. */
+export interface ConeFeature {
+    readonly kind: 'cone';
+    readonly axis: Axis3;
+    readonly center: readonly [number, number];
+    readonly from: number;
+    readonly to: number;
+    readonly baseRadius: number;
+    /** Radius at `to`; zero for a full cone. */
+    readonly topRadius: number;
+}
+
+/** Sphere around `center`. */
+export interface SphereFeature {
+    readonly kind: 'sphere';
+    readonly center: readonly [number, number, number];
+    readonly radius: number;
+}
+
+/** Box whose top face slopes along X between `topFrom` and `topTo`. */
+export interface WedgeFeature {
+    readonly kind: 'wedge';
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+    readonly topFrom: number;
+    readonly topTo: number;
+}
+
+/** One convex solid of the declarative part model. */
+export type Feature3d = BoxFeature | CylinderFeature | ConeFeature | SphereFeature | WedgeFeature;
+
+/** A part: solid features plus void features that carve hidden outlines. */
+export interface PartSpec {
+    /** Material features; the part needs at least one. */
+    readonly solids: readonly Feature3d[];
+    /** Removed material, drawn as hidden outlines. */
+    readonly voids?: readonly Feature3d[];
+}
+
+/** One placed view on a multiview sheet, in sheet coordinates. */
+export interface PlacedView {
+    readonly center: Point;
+    readonly width: number;
+    readonly height: number;
+}
+
+/** Arguments of `multiviewSheet()`. */
+export interface MultiViewSheetRequest {
+    /** The projected part; needs at least one solid feature. */
+    readonly part: PartSpec;
+    /** Projection convention; defaults to `first`. */
+    readonly projection?: 'first' | 'third';
+    /** Linear scale factor applied to every view; defaults to 1. */
+    readonly scale?: number;
+    /** Height of the view labels; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Lower-left corner of the placed view group; defaults to the origin. */
+    readonly origin?: Point;
+    /** Layer carrying the visible outlines and labels; defaults to `views`. */
+    readonly layer?: LayerId;
+}
+
+/** Result of `multiviewSheet()`. `views` reports the placed view boxes. */
+export interface MultiViewSheetResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+    readonly views: {
+        readonly front: PlacedView;
+        readonly top: PlacedView;
+        readonly left: PlacedView;
+        readonly iso: PlacedView;
+    };
+    readonly projection: 'first' | 'third';
+}
+
+/** Arguments of `sectionView()`. */
+export interface SectionViewRequest {
+    /** The cut part; needs at least one solid feature. */
+    readonly part: PartSpec;
+    /** Axis the cutting plane is perpendicular to. */
+    readonly axis: Axis3;
+    /** Coordinate of the cutting plane along `axis`. */
+    readonly at: number;
+    /** Hatch angle in degrees; defaults to 45. */
+    readonly hatchAngle?: number;
+    /** Distance between hatch lines; defaults to 4. */
+    readonly hatchSpacing?: number;
+    /** Height of the section label; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Lower-left corner of the placed section; defaults to the origin. */
+    readonly origin?: Point;
+    /** Section caption; defaults to `SECTION A-A`. */
+    readonly label?: string;
+    /** Layer carrying the section; defaults to `views`. */
+    readonly layer?: LayerId;
+}
+
+/** Result of `sectionView()`. `created` holds outlines, hatch lines and labels. */
+export interface SectionViewResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+}
+
+/** Arguments of `leaderNote()`. */
+export interface LeaderNoteRequest {
+    /** Layer carrying the note; defaults to `notes`. */
+    readonly layer?: LayerId;
+    /** Leader points from the referenced object to the note; at least two. */
+    readonly points: readonly Point[];
+    /** Note text; non-empty. */
+    readonly text: string;
+    /** Height of the note text; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Whether an arrowhead marks the first point; defaults to true. */
+    readonly arrow?: boolean;
+}
+
+/** Result of `leaderNote()`. `created` holds the leader, arrowhead and text. */
+export interface LeaderNoteResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
     readonly created: readonly Entity[];
 }
 
