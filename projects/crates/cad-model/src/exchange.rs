@@ -616,12 +616,32 @@ impl SheetLayout {
         Self { outer, inner, block }
     }
 
-    /// Layout of an SVG sheet, in drawing units.
-    fn for_svg(drawing: &Drawing, frame: Frame, stroke: f64) -> Self {
-        let sheet = sheet_scale(drawing.units);
-        let block = FlatSize::new(TITLE_BLOCK_WIDTH_MM * sheet, TITLE_BLOCK_HEIGHT_MM * sheet);
-        Self::of(frame.width, frame.height, frame_margin(drawing.units), stroke, block, sheet)
+    /// Layout of a fitted SVG sheet, in drawing units.
+    fn for_svg(drawing: &Drawing, sheet: FlatSize, stroke: f64) -> Self {
+        let scale = sheet_scale(drawing.units);
+        let block = FlatSize::new(TITLE_BLOCK_WIDTH_MM * scale, TITLE_BLOCK_HEIGHT_MM * scale);
+        Self::of(sheet.width, sheet.height, frame_margin(drawing.units), stroke, block, scale)
     }
+}
+
+/// A4 landscape page every fitted export uses, in millimetres.
+const A4_SHEET_WIDTH_MM: f64 = 297.0;
+const A4_SHEET_HEIGHT_MM: f64 = 210.0;
+
+/// Gap between the inner border and the fitted geometry, in sheet millimetres.
+const SHEET_FIT_PADDING_MM: f64 = 4.0;
+
+/// Drawable box of a fitted sheet as `[left, top, width, height]`, measured
+/// from the top-left corner with y pointing down.
+///
+/// The box clears both borders and, when the layout carries one, the title
+/// block band, so fitted geometry and its labels never run under the block.
+fn sheet_drawable_area(layout: &SheetLayout, page: FlatSize, padding: f64) -> [f64; 4] {
+    let left = layout.inner + padding;
+    let top = layout.inner + padding;
+    let right = page.width - layout.inner - padding;
+    let bottom = layout.block.map_or(page.height - layout.inner - padding, |title| title.top - padding);
+    [left, top, (right - left).max(1.0), (bottom - top).max(1.0)]
 }
 
 /// The title block's text: title, number, byline, scale, units, sheet,
@@ -795,32 +815,79 @@ fn fit_text_size(content: &str, base: f64, max_width: f64) -> f64 {
 
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
     let stroke = stroke_width(drawing.units);
-    let map = |point: [f64; 2]| frame.map(point);
-    let projection = Projection {
-        map: &map,
-        scale: 1.0,
-        stroke,
-        lineweight_scale: 1.0,
-        label_offset: 1.0,
-        label_size: stroke * 3.5,
-        min_text_size: 0.0,
-        dim_styles: &drawing.dim_styles,
-    };
-    let mut flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
-    if !has_generated_sheet(drawing) {
-        let layout = SheetLayout::for_svg(drawing, frame, stroke);
-        push_sheet_frame(&mut flat, drawing, FlatSize::new(frame.width, frame.height), stroke, &layout);
+    let page = svg_page_size(drawing, frame);
+    let flat = if has_generated_sheet(drawing) {
+        // The authored A3/A4 sheet already carries its borders, title block and
+        // paper size, so it is plotted at 1:1.
+        let map = |point: [f64; 2]| frame.map(point);
+        let projection = Projection {
+            map: &map,
+            scale: 1.0,
+            stroke,
+            lineweight_scale: 1.0,
+            label_offset: 1.0,
+            label_size: stroke * 3.5,
+            min_text_size: 0.0,
+            dim_styles: &drawing.dim_styles,
+        };
+        build_drawing(drawing, page, &projection)
     }
+    else {
+        // Every generated drawing is laid out on the same fixed A4 landscape
+        // page: the visible content is scaled uniformly into the area left by
+        // the borders and the title block, then centred, so nothing is cropped
+        // by an exporter-sized frame.
+        let sheet = sheet_scale(drawing.units);
+        let layout = SheetLayout::for_svg(drawing, page, stroke);
+        let [left, top, area_width, area_height] = sheet_drawable_area(&layout, page, SHEET_FIT_PADDING_MM * sheet);
+        let (min_x, min_y, width, height) = match visible_extents(drawing) {
+            Some(extents) => (extents.min.x, extents.min.y, extents.width().max(1e-9), extents.height().max(1e-9)),
+            None => (0.0, 0.0, page.width, page.height),
+        };
+        let scale = (area_width / width).min(area_height / height);
+        let origin_x = left + (area_width - width * scale) / 2.0 - min_x * scale;
+        let origin_y = top + (area_height - height * scale) / 2.0 + (height + min_y) * scale;
+        let map = move |point: [f64; 2]| FlatPoint::new(point[0] * scale + origin_x, origin_y - point[1] * scale);
+        let projection = Projection {
+            map: &map,
+            scale,
+            stroke,
+            // Lineweights and dash patterns are paper properties, so they stay
+            // in sheet millimetres instead of following the model scale.
+            lineweight_scale: 1.0,
+            label_offset: 1.0,
+            label_size: stroke * 3.5,
+            min_text_size: 0.0,
+            dim_styles: &drawing.dim_styles,
+        };
+        let mut flat = build_drawing(drawing, page, &projection);
+        push_sheet_frame(&mut flat, drawing, page, stroke, &layout);
+        flat
+    };
     let svg = flat.to_svg().unwrap_or_else(|_| {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n</svg>\n",
-            num(frame.width),
-            num(frame.height),
-            num(frame.width),
-            num(frame.height)
+            num(page.width),
+            num(page.height),
+            num(page.width),
+            num(page.height)
         )
     });
     scale_svg_size(decorate_svg(svg, drawing), drawing.units)
+}
+
+/// Physical page of an SVG export, in drawing units.
+///
+/// Generated drawings always land on A4 landscape; an authored A3/A4 sheet
+/// keeps the size its own frame covers.
+fn svg_page_size(drawing: &Drawing, frame: Frame) -> FlatSize {
+    if has_generated_sheet(drawing) {
+        FlatSize::new(frame.width, frame.height)
+    }
+    else {
+        let sheet = sheet_scale(drawing.units);
+        FlatSize::new(A4_SHEET_WIDTH_MM * sheet, A4_SHEET_HEIGHT_MM * sheet)
+    }
 }
 
 /// Pixels per millimetre used for the rendered size of an exported SVG.
@@ -894,7 +961,8 @@ pub(crate) fn svg(drawing: &Drawing) -> String {
 /// read-only preview.
 pub(crate) fn svg_preview(drawing: &Drawing) -> (String, f64, f64) {
     let frame = Frame::of(drawing);
-    (svg_document(drawing, frame), frame.width, frame.height)
+    let page = svg_page_size(drawing, frame);
+    (svg_document(drawing, frame), page.width, page.height)
 }
 
 fn dxf_pair(out: &mut String, code: i64, value: impl std::fmt::Display) {
@@ -1471,11 +1539,7 @@ fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
 /// Drawable box of the fitted A4 sheet as `[left, top, width, height]` in
 /// points, excluding the borders and the title block.
 fn pdf_drawable_area(layout: &SheetLayout) -> [f64; 4] {
-    let left = layout.inner + PDF_FIT_PADDING;
-    let top = layout.inner + PDF_FIT_PADDING;
-    let right = PDF_PAGE_WIDTH - layout.inner - PDF_FIT_PADDING;
-    let bottom = layout.block.map_or(PDF_PAGE_HEIGHT - layout.inner - PDF_FIT_PADDING, |title| title.top - PDF_FIT_PADDING);
-    [left, top, (right - left).max(1.0), (bottom - top).max(1.0)]
+    sheet_drawable_area(layout, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), PDF_FIT_PADDING)
 }
 
 /// Renders one drawing to a vector PDF and reports text losses.

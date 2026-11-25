@@ -13,8 +13,9 @@
 //! part as a framed hole table.
 //!
 //! All projection, layout and hatching mathematics lives here; the binding and
-//! the SDK only forward the request. The exporters frame the sheet from the
-//! visible extents, so these operations never draw an outer sheet frame.
+//! the SDK only forward the request. These operations never draw an outer sheet
+//! frame: the exporters lay every drawing out on the same fixed A4 landscape
+//! page and scale the visible content into it.
 
 use std::f64::consts::{FRAC_PI_6, TAU};
 
@@ -240,6 +241,7 @@ impl Shape2 {
 }
 
 /// Nearest point to `point` on a segment.
+#[cfg(test)]
 fn nearest_on_segment(point: [f64; 2], from: [f64; 2], to: [f64; 2]) -> [f64; 2] {
     let span = [to[0] - from[0], to[1] - from[1]];
     let length = span[0] * span[0] + span[1] * span[1];
@@ -251,6 +253,7 @@ fn nearest_on_segment(point: [f64; 2], from: [f64; 2], to: [f64; 2]) -> [f64; 2]
 }
 
 /// Nearest point to `point` on the outline of a projected shape.
+#[cfg(test)]
 fn nearest_on_shape(shape: &Shape2, point: [f64; 2]) -> [f64; 2] {
     match shape {
         Shape2::Rect(a, b) => {
@@ -289,6 +292,7 @@ fn nearest_on_shape(shape: &Shape2, point: [f64; 2]) -> [f64; 2] {
         }
     }
 }
+
 /// Bounds of a shape list, `None` when the list is empty.
 fn shapes_bounds(shapes: &[Shape2]) -> Option<([f64; 2], [f64; 2])> {
     shapes.iter().map(Shape2::bounds).reduce(|(a, b), (c, d)| ([a[0].min(c[0]), a[1].min(c[1])], [b[0].max(d[0]), b[1].max(d[1])]))
@@ -1818,39 +1822,31 @@ pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> R
                 kinds.push((HIDDEN_LAYER.to_string(), shape.translated(shift).kind()));
             }
             let balloon = [balloon_x, start_y - step * rank_of[index] as f64];
-            let (owner_min, owner_max) = shifted[index];
+            let (owner_min, _owner_max) = shifted[index];
             let inset = radius * 0.35;
-            let low = owner_min[1] + inset;
-            let high = owner_max[1] - inset;
-            let middle = (owner_min[1] + owner_max[1]) * 0.5;
-            let span_y = owner_max[1] - owner_min[1];
-            let mut candidates = vec![balloon[1].clamp(low, high)];
-            for offset in [0.0, span_y * 0.35, -span_y * 0.35, span_y * 0.18, -span_y * 0.18] {
-                candidates.push((middle + offset).clamp(low, high));
-            }
+            // The leader meets the component at its own leftmost outline point,
+            // so the run never cuts across the body. When several contact
+            // points share that left edge, the one nearest the balloon row wins
+            // unless another component blocks the approach.
+            let mut contacts: Vec<[f64; 2]> =
+                shapes.iter().flat_map(shape_outline).map(|point| [point[0] + shift[0], point[1] + shift[1]]).collect();
+            contacts.sort_by(|left, right| {
+                left[0].total_cmp(&right[0]).then_with(|| (left[1] - balloon[1]).abs().total_cmp(&(right[1] - balloon[1]).abs()))
+            });
+            let left_edge = contacts.first().map_or(owner_min[0], |point| point[0]);
+            let edge_band = left_edge + radius * 0.5;
             let mut chosen = None;
-            for target_y in candidates {
-                let local = [owner_min[0] - shift[0], target_y - shift[1]];
-                let target_local = shapes
-                    .iter()
-                    .map(|shape| nearest_on_shape(shape, local))
-                    .min_by(|left, right| {
-                        let left = (left[0] - local[0]).powi(2) + (left[1] - local[1]).powi(2);
-                        let right = (right[0] - local[0]).powi(2) + (right[1] - local[1]).powi(2);
-                        left.total_cmp(&right)
-                    })
-                    .unwrap_or(local);
-                let target = [target_local[0] + shift[0], target_local[1] + shift[1]];
+            for contact in contacts.iter().copied().filter(|point| point[0] <= edge_band) {
                 let crosses = shifted
                     .iter()
                     .enumerate()
-                    .any(|(other, (min, max))| other != index && segment_hits_rect([knee_x, target[1]], target, *min, *max, inset * 0.8));
-                chosen = Some(target);
+                    .any(|(other, (min, max))| other != index && segment_hits_rect([knee_x, contact[1]], contact, *min, *max, inset * 0.8));
                 if !crosses {
+                    chosen = Some(contact);
                     break;
                 }
             }
-            let target = chosen.unwrap_or([owner_min[0], balloon[1]]);
+            let target = chosen.or_else(|| contacts.first().copied()).unwrap_or([owner_min[0], balloon[1]]);
             let edge = [balloon[0] + radius, balloon[1]];
             kinds.push((
                 layer.clone(),
@@ -2352,9 +2348,19 @@ pub fn add_detail_view(handle: u64, request: DetailViewRequest) -> Result<Value,
         let detail_radius = radius * scale;
         let detail_center = [origin[0] + base_width + VIEW_GAP + detail_radius, origin[1] + detail_radius];
         let mut drawn = 0usize;
+        // A run of a single edge whose both ends sit exactly on the detail
+        // circle is a bare chord: the neighbouring edges of that outline lie
+        // outside the circle, so the chord reads as a stray line cutting the
+        // detail rather than as geometry. Keep it only when the clipped run
+        // carries at least one interior vertex.
+        let on_boundary = |point: [f64; 2]| {
+            let distance = ((point[0] - center[0]).powi(2) + (point[1] - center[1]).powi(2)).sqrt();
+            (distance - radius).abs() <= radius.max(1.0) * 1e-6
+        };
         let place = |shape: &Shape2| -> Vec<Vec<[f64; 2]>> {
             clip_outline_to_circle(&shape_outline(shape), center, radius)
                 .into_iter()
+                .filter(|run| run.len() >= 3 || !(run.len() == 2 && on_boundary(run[0]) && on_boundary(run[1])))
                 .map(|run| {
                     run.into_iter()
                         .map(|point| [(point[0] - center[0]) * scale + detail_center[0], (point[1] - center[1]) * scale + detail_center[1]])

@@ -7,9 +7,10 @@
 use std::path::Path;
 
 use open_cad_drawing::{
-    AssemblyComponent, Axis3, CreateRequest, ExplodedAssemblyRequest, Feature3d, HoleTableRequest, IsometricViewRequest, LeaderNoteRequest,
-    MultiViewSheetRequest, PartSpec, SectionViewRequest, TitleBlockRequest, add_circle, add_exploded_assembly, add_hole_table,
-    add_isometric_view, add_leader_note, add_line, add_multiview_sheet, add_section_view, add_text, add_title_block, create, export,
+    AssemblyComponent, AuxiliaryViewRequest, Axis3, CreateRequest, DetailViewRequest, ExplodedAssemblyRequest, Feature3d, HoleTableRequest,
+    IsometricViewRequest, LeaderNoteRequest, MultiViewSheetRequest, PartSpec, SectionViewRequest, TitleBlockRequest, add_auxiliary_view,
+    add_circle, add_detail_view, add_exploded_assembly, add_hole_table, add_isometric_view, add_leader_note, add_line, add_multiview_sheet,
+    add_section_view, add_text, add_title_block, create, export,
 };
 
 fn bracket() -> PartSpec {
@@ -133,6 +134,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = created["handle"].as_u64().expect("handle");
     add_hole_table(handle, HoleTableRequest { part: bracket(), ..Default::default() })?;
     export_both(handle, out, "hole-table")?;
+
+    let created = create(CreateRequest { title: Some("OpenCAD detail".into()), units: Some("mm".into()), template: None })?;
+    let handle = created["handle"].as_u64().expect("handle");
+    add_detail_view(
+        handle,
+        DetailViewRequest {
+            part: bracket(),
+            view: Some("top".into()),
+            center: Some([20.0, 25.0]),
+            radius: Some(24.0),
+            scale: Some(2.0),
+            ..Default::default()
+        },
+    )?;
+    export_both(handle, out, "detail-bracket")?;
+
+    let created = create(CreateRequest { title: Some("OpenCAD auxiliary".into()), units: Some("mm".into()), template: None })?;
+    let handle = created["handle"].as_u64().expect("handle");
+    add_auxiliary_view(handle, AuxiliaryViewRequest { part: bracket(), angle: Some(45.0), plane: Some("front".into()), ..Default::default() })?;
+    export_both(handle, out, "auxiliary-bracket")?;
 
     let created = create(CreateRequest { title: Some("OpenCAD A4 sheet".into()), units: Some("mm".into()), template: None })?;
     let handle = created["handle"].as_u64().expect("handle");
