@@ -16,7 +16,8 @@ use serde::Serialize;
 
 use crate::schema::{
     CONTINUOUS_LINETYPE, DimensionStyle, Drawing, Entity, EntityKind, OrdinateAxis, Units, angular_points, angular_sweep, angular_value,
-    arc_sweep, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse, sample_spline,
+    arc_point, arc_sweep, ellipse_point, offset_points, ordinate_points, ordinate_value, radial_label, radial_target, sample_arc,
+    sample_ellipse, sample_spline,
 };
 
 /// One item an exchange target could not keep.
@@ -1907,6 +1908,397 @@ pub(crate) fn step(drawing: &Drawing, thickness: f64) -> StepReport {
     content.push_str("END-ISO-10303-21;\n");
 
     StepReport { content, faces, losses }
+}
+
+/// Result of one IGES projection.
+pub(crate) struct IgesModule {
+    /// IGES-5.3 ASCII deck text: one 80-column card per line.
+    pub(crate) content: String,
+    /// Number of directory entries (IGES entities) written.
+    pub(crate) entities: usize,
+    /// Content the projection could not keep.
+    pub(crate) losses: Vec<Loss>,
+}
+
+/// Formats one model point as an IGES `x,y,0` triple on the z = 0 plane.
+fn iges_point(point: [f64; 2]) -> String {
+    format!("{},{},0", num(point[0]), num(point[1]))
+}
+
+/// Prefixes one IGES `nH` string parameter with its exact character count.
+fn iges_string(value: &str) -> String {
+    format!("{}H{}", value.chars().count(), value)
+}
+
+/// Splits text into chunks of at most `width` characters, as IGES cards repeat.
+fn iges_chunks(text: &str, width: usize) -> Vec<String> {
+    text.chars().collect::<Vec<char>>().chunks(width.max(1)).map(|chunk| chunk.iter().collect::<String>()).collect()
+}
+
+/// Joins global parameters with commas, breaking cards at parameter boundaries.
+fn iges_global_cards(parameters: &[String], width: usize) -> Vec<String> {
+    let mut cards = Vec::new();
+    let mut current = String::new();
+    for parameter in parameters {
+        if !current.is_empty() && current.chars().count() + 1 + parameter.chars().count() > width {
+            cards.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(',');
+        }
+        current.push_str(parameter);
+    }
+    if !current.is_empty() {
+        cards.push(current);
+    }
+    cards
+}
+
+/// Pads one section body to column 72 and appends the 8-column section tag.
+fn iges_card(body: &str, section: char, number: usize) -> String {
+    let padding = 72usize.saturating_sub(body.chars().count());
+    format!("{}{}{}{:>7}", body, " ".repeat(padding), section, number)
+}
+
+/// Assembles one Type 126 B-spline parameter list from control points and knots.
+///
+/// `weights` carries one value per control point for a rational curve and is empty
+/// for a non-rational one. The knot vector must be clamped: its first and last
+/// `degree + 1` entries are equal, so the curve interpolates its end points.
+fn iges_bspline(degree: usize, controls: &[[f64; 2]], weights: &[f64], knots: &[f64]) -> String {
+    let n = controls.len() - 1;
+    let n1 = knots.len() - 1;
+    let n2 = n1 - degree;
+    let rational = usize::from(!weights.is_empty());
+    let mut data = format!("126,{degree},{n},{n1},{n2},0,{rational},0,{n1}");
+    data.push_str(&format!(",{},{}", iges_point(controls[0]), iges_point(controls[n])));
+    for control in &controls[1..n] {
+        data.push_str(&format!(",{}", iges_point(*control)));
+    }
+    for weight in weights {
+        data.push_str(&format!(",{}", num(*weight)));
+    }
+    for knot in knots {
+        data.push_str(&format!(",{}", num(*knot)));
+    }
+    data.push(';');
+    data
+}
+
+/// Writes one counter-clockwise circular arc as an exact rational quadratic B-spline.
+///
+/// Sweeps longer than a quarter turn are split into segments of at most 90 degrees;
+/// each conic span carries the weights `[1, cos(theta/2), 1]` and a control point at
+/// radius `r / cos(theta/2)`, so the curve passes exactly through the arc endpoints
+/// and midpoint. Interior knots are doubled, making the spans only C0-continuous.
+fn iges_arc_parameters(center: [f64; 2], radius: f64, start_angle: f64, sweep: f64) -> String {
+    let segments = (sweep / 90.0).ceil().max(1.0) as usize;
+    let step = sweep / segments as f64;
+    let weight = (step.to_radians() * 0.5).cos();
+    let mut controls: Vec<[f64; 2]> = Vec::with_capacity(segments * 2 + 1);
+    let mut weights = Vec::with_capacity(segments * 2 + 1);
+    for index in 0..segments {
+        let from = start_angle + step * index as f64;
+        if index == 0 {
+            controls.push(arc_point(center, radius, from));
+            weights.push(1.0);
+        }
+        controls.push(arc_point(center, radius / weight, from + step * 0.5));
+        weights.push(weight);
+        controls.push(arc_point(center, radius, from + step));
+        weights.push(1.0);
+    }
+    let mut knots = vec![0.0, 0.0, 0.0];
+    for index in 1..segments {
+        let value = index as f64 / segments as f64;
+        knots.extend([value, value]);
+    }
+    knots.extend([1.0, 1.0, 1.0]);
+    iges_bspline(2, &controls, &weights, &knots)
+}
+
+/// Writes the Catmull-Rom spline as one cubic B-spline with the same geometry.
+///
+/// Each span becomes one cubic Bezier segment whose handles follow the standard
+/// Catmull-Rom tangent `(P[i+1] - P[i-1]) / 2`, and interior knots are repeated
+/// `degree` times so every span is its own Bezier piece. The result interpolates
+/// the fit points exactly, matching the curve the SVG and PDF writers sample.
+fn iges_spline_parameters(points: &[[f64; 2]], closed: bool) -> String {
+    let count = points.len();
+    let spans = if closed { count } else { count - 1 };
+    let point_at = |index: isize| -> [f64; 2] {
+        if closed { points[index.rem_euclid(count as isize) as usize] } else { points[index.clamp(0, count as isize - 1) as usize] }
+    };
+    let tangent = |index: isize| -> [f64; 2] {
+        let next = point_at(index + 1);
+        let previous = point_at(index - 1);
+        [(next[0] - previous[0]) * 0.5, (next[1] - previous[1]) * 0.5]
+    };
+    let mut controls: Vec<[f64; 2]> = Vec::with_capacity(spans * 3 + 1);
+    for span in 0..spans {
+        let first = point_at(span as isize);
+        let second = point_at(span as isize + 1);
+        let start_tangent = tangent(span as isize);
+        let end_tangent = tangent(span as isize + 1);
+        if span == 0 {
+            controls.push(first);
+        }
+        controls.push([first[0] + start_tangent[0] / 3.0, first[1] + start_tangent[1] / 3.0]);
+        controls.push([second[0] - end_tangent[0] / 3.0, second[1] - end_tangent[1] / 3.0]);
+        controls.push(second);
+    }
+    let mut knots = vec![0.0, 0.0, 0.0, 0.0];
+    for index in 1..spans {
+        let value = index as f64 / spans as f64;
+        knots.extend([value, value, value]);
+    }
+    knots.extend([1.0, 1.0, 1.0, 1.0]);
+    iges_bspline(3, &controls, &[], &knots)
+}
+
+/// One line entity as an IGES Type 110 parameter list.
+fn iges_line_parameters(from: [f64; 2], to: [f64; 2]) -> String {
+    format!("110,{},{},0,{},{},0;", num(from[0]), num(from[1]), num(to[0]), num(to[1]))
+}
+
+/// One full circle as an IGES Type 112 parameter list.
+fn iges_circle_parameters(center: [f64; 2], radius: f64) -> String {
+    format!("112,{},{},0,{},{},0,{};", num(center[0]), num(center[1]), num(center[0] + radius), num(center[1]), num(radius))
+}
+
+/// Writes the drawing's planar geometry as a minimal IGES-5.3 ASCII deck.
+///
+/// Lines, points, circles, arcs, polylines, splines and full ellipses stay analytic:
+/// Types 110, 100, 112, 126 and 114 respectively, with arcs and Catmull-Rom splines
+/// converted to exact B-splines. Partial ellipses are flattened to line segments and
+/// reported with `iges/ellipse-polyline`. Text, every dimension kind and hatch are
+/// annotations the IGES subset does not carry and are aggregated into one
+/// `iges/unsupported-entity` loss; layer colours and line types are dropped with an
+/// `iges/layer-info` loss when the drawing carries layers beyond the built-in
+/// geometry and dimension pair. All geometry sits on the z = 0 plane of the
+/// drawing's own units.
+pub(crate) fn iges(drawing: &Drawing) -> IgesModule {
+    let mut entries: Vec<(usize, String)> = Vec::new();
+    let mut losses = Vec::new();
+    let mut skipped = 0usize;
+    let mut flattened = 0usize;
+
+    for entity in &drawing.entities {
+        match &entity.kind {
+            EntityKind::Line { from, to } => entries.push((110, iges_line_parameters(*from, *to))),
+            EntityKind::Point { at } => entries.push((100, format!("100,{};", iges_point(*at)))),
+            EntityKind::Circle { center, radius } => entries.push((112, iges_circle_parameters(*center, *radius))),
+            EntityKind::Arc { center, radius, start_angle, end_angle } => {
+                let sweep = arc_sweep(*start_angle, *end_angle);
+                if sweep >= 360.0 - 1e-9 {
+                    entries.push((112, iges_circle_parameters(*center, *radius)));
+                }
+                else {
+                    entries.push((126, iges_arc_parameters(*center, *radius, *start_angle, sweep)));
+                }
+            }
+            EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } => {
+                let sweep = arc_sweep(*start_angle, *end_angle);
+                if sweep >= 360.0 - 1e-9 {
+                    let (major, minor, endpoint) = if rx >= ry {
+                        (*rx, *ry, ellipse_point(*center, *rx, *ry, *rotation, 0.0))
+                    }
+                    else {
+                        (*ry, *rx, ellipse_point(*center, *rx, *ry, *rotation, 90.0))
+                    };
+                    entries.push((
+                        114,
+                        format!(
+                            "114,{},{},0,{},{},0,{},{};",
+                            num(center[0]),
+                            num(center[1]),
+                            num(endpoint[0]),
+                            num(endpoint[1]),
+                            num(minor),
+                            num(minor / major)
+                        ),
+                    ));
+                }
+                else {
+                    flattened += 1;
+                    for segment in sample_ellipse(*center, *rx, *ry, *rotation, *start_angle, *end_angle).windows(2) {
+                        entries.push((110, iges_line_parameters(segment[0], segment[1])));
+                    }
+                }
+            }
+            EntityKind::Polyline { points, closed } => {
+                if points.len() < 2 {
+                    if let Some(point) = points.first() {
+                        entries.push((100, format!("100,{};", iges_point(*point))));
+                    }
+                }
+                else {
+                    let mut chain = points.clone();
+                    if *closed && chain.len() > 2 {
+                        chain.push(chain[0]);
+                    }
+                    for segment in chain.windows(2) {
+                        entries.push((110, iges_line_parameters(segment[0], segment[1])));
+                    }
+                }
+            }
+            EntityKind::Spline { points, closed } => {
+                if points.len() < 3 {
+                    if points.len() == 2 {
+                        entries.push((110, iges_line_parameters(points[0], points[1])));
+                    }
+                    else if let Some(point) = points.first() {
+                        entries.push((100, format!("100,{};", iges_point(*point))));
+                    }
+                }
+                else {
+                    entries.push((126, iges_spline_parameters(points, *closed)));
+                }
+            }
+            EntityKind::Text { .. }
+            | EntityKind::Dimension { .. }
+            | EntityKind::RadialDimension { .. }
+            | EntityKind::OrdinateDimension { .. }
+            | EntityKind::AngularDimension { .. }
+            | EntityKind::Hatch { .. } => skipped += 1,
+        }
+    }
+
+    if skipped > 0 {
+        losses.push(Loss::warning(
+            "iges/unsupported-entity",
+            None,
+            None,
+            format!("{skipped} annotation entity(ies) are not written by the IGES subset"),
+        ));
+    }
+    if flattened > 0 {
+        losses.push(Loss::warning(
+            "iges/ellipse-polyline",
+            None,
+            None,
+            format!("{flattened} partial ellipse(s) were flattened to line segments"),
+        ));
+    }
+    if drawing.layers.len() > 2 {
+        losses.push(Loss::warning(
+            "iges/layer-info",
+            None,
+            None,
+            "layer colours and line types are not carried by the IGES subset".to_string(),
+        ));
+    }
+
+    let units = match drawing.units {
+        Units::Mm => "MILLIMETE",
+        Units::Inch => "INCH",
+    };
+    let version = format!("V{}", env!("CARGO_PKG_VERSION"));
+    // Global parameters #1-#21: delimiters, format flags, producer and units.
+    let mut globals: Vec<String> = vec![
+        iges_string(","),
+        iges_string(";"),
+        iges_string(","),
+        iges_string("$"),
+        iges_string(";"),
+        "32".to_string(),
+        "15".to_string(),
+        "9".to_string(),
+        "72".to_string(),
+        iges_string("OpenCAD"),
+        iges_string("OpenCAD"),
+        iges_string(&version),
+        iges_string("1"),
+        iges_string("0"),
+        iges_string("000101"),
+        "1.0".to_string(),
+        iges_string(units),
+        iges_string("RSS214"),
+        "8".to_string(),
+        "0.0833333".to_string(),
+        iges_string("1"),
+    ];
+    // #22-#26 author, source, country, symbol library and creation date.
+    globals.extend(std::iter::repeat_n(iges_string(""), 5));
+    globals[25] = iges_string("000101"); // fixed so the deck stays deterministic
+    // #27-#28 board and drawing size, #29-#31 user, comment and label.
+    globals.extend([iges_string("1200,1200,0"), iges_string("1200,1200,0")]);
+    globals.extend(std::iter::repeat_n(iges_string(""), 3));
+    // #32 record length, #33-#34 file name and post processor.
+    globals.push("80".to_string());
+    globals.extend(std::iter::repeat_n(iges_string(""), 2));
+    // #35-#37 specification version 5.3, specification directory and R2 pointer.
+    globals.push("7".to_string());
+    globals.push(iges_string(""));
+    globals.push(iges_string("R2"));
+    // #38-#44 section pointers, a reserved flag and the maximum colour count.
+    globals.extend([
+        iges_string("1"),
+        iges_string("0"),
+        iges_string("0"),
+        iges_string("0"),
+        iges_string("0"),
+        iges_string("0"),
+        iges_string("8"),
+    ]);
+    // #45-#70 reserved flags.
+    globals.extend(std::iter::repeat_n(iges_string("0"), 26));
+
+    let entities = entries.len();
+    let mut directory_cards: Vec<String> = Vec::new();
+    let mut parameter_cards: Vec<String> = Vec::new();
+    for (index, (entity_type, data)) in entries.iter().enumerate() {
+        let element = index + 1;
+        let chunks = iges_chunks(data, 64);
+        // The first directory line carries the opening 64 columns of the parameter
+        // data and points forward at the structure line of the entry.
+        directory_cards.push(format!("{:<64}{:>8}", chunks[0], 2 * element));
+        // The structure line points back at the entry, negatively when the
+        // parameter data continues, and counts the parameter lines.
+        let structure_pointer = if chunks.len() == 1 { 2 * element as i64 - 1 } else { -(2 * element as i64 - 1) };
+        directory_cards.push(format!("{:>8}{:>8}{:>7}", entity_type, structure_pointer, chunks.len()));
+        for (chunk_index, chunk) in chunks.iter().enumerate() {
+            let pointer = if chunk_index == 0 { 2 * element as i64 - 1 } else { -(2 * element as i64 - 1) };
+            parameter_cards.push(format!("{:<64}{:>8}", chunk, pointer));
+        }
+    }
+
+    let start_cards = iges_chunks(&iges_string("OpenCAD IGES export deck"), 72);
+    let global_cards = iges_global_cards(&globals, 72);
+    let terminate = format!(
+        "{},{},{},{},{},0,0,0,0,1,,1.0,0.0833333,{},{},{},{},1",
+        entities,
+        entities,
+        directory_cards.len(),
+        directory_cards.len(),
+        start_cards.len(),
+        start_cards.len(),
+        global_cards.len(),
+        directory_cards.len(),
+        parameter_cards.len()
+    );
+
+    let mut content = String::new();
+    for (index, card) in start_cards.iter().enumerate() {
+        content.push_str(&iges_card(card, 'S', index + 1));
+        content.push('\n');
+    }
+    for (index, card) in global_cards.iter().enumerate() {
+        content.push_str(&iges_card(card, 'G', index + 1));
+        content.push('\n');
+    }
+    for (index, card) in directory_cards.iter().enumerate() {
+        content.push_str(&iges_card(card, 'D', index + 1));
+        content.push('\n');
+    }
+    for (index, card) in parameter_cards.iter().enumerate() {
+        content.push_str(&iges_card(card, 'P', index + 1));
+        content.push('\n');
+    }
+    content.push_str(&iges_card(&terminate, 'T', 1));
+    content.push('\n');
+
+    IgesModule { content, entities, losses }
 }
 
 #[cfg(test)]

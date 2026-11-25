@@ -84,7 +84,7 @@ export type OperationName =
 export type RenderFormat = 'svg' | 'png' | 'pdf';
 
 /** Exchange formats `export()` can write. */
-export type ExportFormat = 'dxf' | 'dxf-r12' | 'obj' | 'step' | 'stl' | 'svg' | 'pdf';
+export type ExportFormat = 'dxf' | 'dxf-r12' | 'obj' | 'step' | 'stl' | 'svg' | 'pdf' | 'iges';
 
 /** Hard limits applied before work starts. */
 export interface ResourceBudgets {

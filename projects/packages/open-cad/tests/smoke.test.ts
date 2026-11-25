@@ -106,6 +106,7 @@ test('format registry classifies the drawing format family', () => {
     assert.equal(formatInfo('dwg').exchangeTarget, false);
     assert.equal(formatInfo('dxf').exchangeTarget, true);
     assert.equal(formatInfo('step').family, 'exchange');
+    assert.equal(formatInfo('iges').exchangeTarget, true);
     assert.equal(formatInfo('stl').family, 'mesh');
     assert.equal(formatInfo('obj').exchangeTarget, true);
     assert.equal(formatInfo('svg').markup, 'xml');
@@ -139,9 +140,11 @@ test('capability matrix matches the implemented core', { skip: withAddon }, asyn
     assert.equal(matrix.exportTargets.stl, 'supported');
     assert.equal(matrix.exportTargets.obj, 'supported');
     assert.equal(matrix.exportTargets.step, 'supported');
+    assert.equal(matrix.exportTargets.iges, 'supported', 'the IGES export subset is wired');
     assert.equal(matrix.formats.stl, 'unsupported', 'the STL reader stays unsupported');
     assert.equal(matrix.formats.obj, 'partial', 'OBJ is export-only');
     assert.equal(matrix.formats.step, 'partial', 'STEP is export-only');
+    assert.equal(matrix.formats.iges, 'partial', 'IGES is export-only');
     await cad.dispose();
 });
 

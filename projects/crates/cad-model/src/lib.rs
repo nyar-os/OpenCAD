@@ -64,7 +64,7 @@ pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
 pub const ARRAY_MODES: &[&str] = &["rectangular", "polar"];
 
 /// Exchange formats [`export`] knows about.
-pub const EXPORT_TARGETS: &[&str] = &["dxf", "dxf-r12", "obj", "step", "stl", "svg", "pdf"];
+pub const EXPORT_TARGETS: &[&str] = &["dxf", "dxf-r12", "obj", "step", "stl", "svg", "pdf", "iges"];
 
 const FILE_FORMAT: &str = "open-cad-drawing";
 const FILE_VERSION: u64 = 1;
@@ -108,12 +108,13 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// What this build can actually do.
 ///
 /// The matrix only claims what the test suite exercises: the native `.ocad`
-/// project is partial, SVG, PDF, STEP, STL and OBJ export are supported, DXF
-/// export plus the declared ASCII import subset are partial, and the supported
-/// document checks run. SVG is the only preview renderer; DWG and the STL
-/// reader stay unsupported. STEP and OBJ are partial overall because only their
-/// export direction is implemented: `exportTargets.step` and
-/// `exportTargets.obj` are supported and there is no STEP or OBJ reader.
+/// project is partial, SVG, PDF, STEP, STL, OBJ and IGES export are supported,
+/// DXF export plus the declared ASCII import subset are partial, and the
+/// supported document checks run. SVG is the only preview renderer; DWG and the
+/// STL reader stay unsupported. STEP, OBJ and IGES are partial overall because
+/// only their export direction is implemented: `exportTargets.step`,
+/// `exportTargets.obj` and `exportTargets.iges` are supported and there is no
+/// STEP, OBJ or IGES reader.
 /// `entities` and `operations` name the modelled geometry and the wired edit
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
@@ -131,7 +132,7 @@ pub fn capabilities() -> Value {
 
     let format_level = |name: &str| match name {
         "svg" | "pdf" => "supported",
-        "dxf" | "step" | "obj" => "partial",
+        "dxf" | "step" | "obj" | "iges" | "igs" => "partial",
         _ => "unsupported",
     };
     let check_level = |name: &str| match name {
@@ -145,7 +146,7 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let export_level = |name: &str| match name {
-        "svg" | "dxf" | "dxf-r12" | "pdf" | "stl" | "step" | "obj" => "supported",
+        "svg" | "dxf" | "dxf-r12" | "pdf" | "stl" | "step" | "obj" | "iges" => "supported",
         _ => "unsupported",
     };
 
@@ -523,10 +524,12 @@ pub struct ExportOptions {
 
 /// Projects one drawing into an exchange format.
 ///
-/// `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj` and `step` are written
+/// `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj`, `step` and `iges` are written
 /// atomically and report any loss. The STL, OBJ and STEP writers extrude closed
 /// profiles with the default thickness; use [`export_with_options`] to choose
-/// another. An unknown format reports `format/unsupported`.
+/// another. The IGES writer projects planar geometry only and reports its
+/// `entities` count in the export report. An unknown format reports
+/// `format/unsupported`.
 pub fn export(handle: u64, format: &str, path: &Path) -> Result<Value, ServiceError> {
     export_with_options(handle, format, path, ExportOptions::default())
 }
@@ -540,6 +543,7 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
     store::persist(handle, |drawing| {
         let mut triangles: Option<usize> = None;
         let mut faces: Option<usize> = None;
+        let mut entities: Option<usize> = None;
         let (contents, losses) = match format.as_str() {
             "svg" => (exchange::svg(drawing), Vec::new()),
             "dxf" => exchange::dxf(drawing),
@@ -560,10 +564,17 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
                 faces = Some(report.faces);
                 (report.content, report.losses)
             }
+            "iges" => {
+                let module = exchange::iges(drawing);
+                entities = Some(module.entities);
+                (module.content, module.losses)
+            }
             other => {
                 return Err(ServiceError::new(
                     "format/unsupported",
-                    format!("`{other}` is not an export target of this build; use `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj` or `step`"),
+                    format!(
+                        "`{other}` is not an export target of this build; use `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj`, `step` or `iges`"
+                    ),
                 ));
             }
         };
@@ -584,6 +595,9 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
         }
         if let Some(faces) = faces {
             report["faces"] = json!(faces);
+        }
+        if let Some(entities) = entities {
+            report["entities"] = json!(entities);
         }
         Ok(report)
     })

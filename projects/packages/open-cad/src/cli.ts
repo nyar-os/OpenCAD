@@ -632,7 +632,7 @@ cli
 
 cli
     .command('export', 'cli.cmd.export')
-    .option('--format <format>', 'cli.opt.format', { enum: ['dxf', 'dxf-r12', 'obj', 'step', 'stl', 'svg', 'pdf'] })
+    .option('--format <format>', 'cli.opt.format', { enum: ['dxf', 'dxf-r12', 'obj', 'step', 'stl', 'svg', 'pdf', 'iges'] })
     .option('--out <file>', 'cli.opt.out')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);

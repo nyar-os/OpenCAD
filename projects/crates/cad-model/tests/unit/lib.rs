@@ -50,6 +50,8 @@ fn capability_matrix_matches_the_implemented_surface() {
     assert_eq!(matrix["formats"]["dxf"], json!("partial"));
     assert_eq!(matrix["formats"]["step"], json!("partial"), "STEP is export-only, so the format is partial");
     assert_eq!(matrix["formats"]["obj"], json!("partial"), "OBJ is export-only, so the format is partial");
+    assert_eq!(matrix["formats"]["iges"], json!("partial"), "IGES is export-only, so the format is partial");
+    assert_eq!(matrix["formats"]["igs"], json!("partial"), "IGS is the other IGES extension");
     assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
     for check in ["units", "layers", "empty-layer", "geometry", "dimensions", "duplicate-entity", "zero-length", "open-contour"] {
         assert_eq!(matrix["checks"][check], json!("supported"), "check `{check}`");
@@ -104,6 +106,7 @@ fn capability_matrix_matches_the_implemented_surface() {
     assert_eq!(matrix["exportTargets"]["stl"], json!("supported"));
     assert_eq!(matrix["exportTargets"]["obj"], json!("supported"));
     assert_eq!(matrix["exportTargets"]["step"], json!("supported"));
+    assert_eq!(matrix["exportTargets"]["iges"], json!("supported"), "the IGES export subset is wired");
     assert_eq!(matrix["formats"]["stl"], json!("unsupported"), "the STL reader stays unsupported");
     assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
 }
@@ -6674,11 +6677,32 @@ fn empty_drawing_exports_every_supported_format_without_panic() {
     let dir = TempDir::new("empty-export");
     let created = create(CreateRequest::default()).expect("an empty drawing is created");
     let handle = handle_of(&created);
-    for format in ["svg", "dxf", "dxf-r12", "pdf", "stl", "obj", "step"] {
+    for format in ["svg", "dxf", "dxf-r12", "pdf", "stl", "obj", "step", "iges"] {
         let target = dir.path.join(format!("empty.{format}"));
         let report = export(handle, format, &target).unwrap_or_else(|error| panic!("`{format}` failed: {}", error.message));
         let bytes = report["bytes"].as_u64().expect("the report counts bytes");
         assert!(bytes > 0, "`{format}` wrote an empty file for an empty drawing");
     }
+    close(handle).expect("close");
+}
+
+#[test]
+fn iges_export_writes_the_deck_and_reports_its_projection() {
+    let dir = TempDir::new("iges-export");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, "0", [0.0, 0.0], [10.0, 5.0]).expect("line");
+    add_circle(handle, "0", [0.0, 0.0], 3.0).expect("circle");
+    add_text(handle, "0", [1.0, 1.0], 2.0, "NOTE").expect("text");
+    let target = dir.path.join("plan.iges");
+    let report = export(handle, "iges", &target).expect("iges export");
+    assert_eq!(report["format"], "iges");
+    assert_eq!(report["editable"], false);
+    assert_eq!(report["entities"], 2, "the annotation is not written as an IGES entity");
+    let losses = report["losses"].as_array().expect("losses");
+    assert!(losses.iter().any(|loss| loss["code"] == "iges/unsupported-entity"), "the skipped text is reported");
+    let deck = fs::read_to_string(&target).expect("read the deck");
+    assert!(deck.starts_with("24HOpenCAD IGES export deck"), "the deck opens with the start section: {deck}");
+    assert!(deck.contains("110,0,0,0,10,5,0;"), "the line is written analytically");
     close(handle).expect("close");
 }
