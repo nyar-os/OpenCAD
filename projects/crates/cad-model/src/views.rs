@@ -52,8 +52,16 @@ const CONE_STATIONS: u32 = 64;
 /// Cap on the hatch segments one section view may generate.
 const HATCH_LINE_LIMIT: u64 = 2000;
 
-/// Approximate glyph width as a fraction of the text height.
-const TEXT_WIDTH_FACTOR: f64 = 0.6;
+/// Approximate glyph width as a fraction of the text height. The raster
+/// exporter advances one glyph by `2/3` of its height, so this keeps measured
+/// text inside its cell instead of clipping the last character.
+const TEXT_WIDTH_FACTOR: f64 = 0.66;
+
+/// Horizontal padding inside one table cell, as a multiple of the text height.
+const CELL_PADDING: f64 = 0.7;
+
+/// Table row height as a multiple of the text height.
+const TABLE_ROW_HEIGHT: f64 = 2.2;
 
 /// One of the three principal axes of the part model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,8 +506,8 @@ fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
 }
 
 /// Rim samples of a cylinder or cone: a circle of the given radius at one
-/// axial station, projected into the isometric view.
-fn rim_samples(axis: Axis3, center: &[f64; 2], station: f64, radius: f64) -> Vec<[f64; 2]> {
+/// axial station, in part coordinates.
+fn rim_points(axis: Axis3, center: &[f64; 2], station: f64, radius: f64) -> Vec<[f64; 3]> {
     let [t0, t1] = axis.transverse();
     (0..RIM_SAMPLES)
         .map(|step| {
@@ -509,9 +517,14 @@ fn rim_samples(axis: Axis3, center: &[f64; 2], station: f64, radius: f64) -> Vec
             point[axis.index()] = station;
             point[t0.index()] = center[0] + radius * cos;
             point[t1.index()] = center[1] + radius * sin;
-            iso_point(&point)
+            point
         })
         .collect()
+}
+
+/// Rim samples projected into the isometric view.
+fn rim_samples(axis: Axis3, center: &[f64; 2], station: f64, radius: f64) -> Vec<[f64; 2]> {
+    rim_points(axis, center, station, radius).iter().map(iso_point).collect()
 }
 
 /// Isometric outline of one feature: the convex hull of its silhouette
@@ -645,6 +658,69 @@ fn text_width(content: &str, text_height: f64) -> f64 {
 /// Scale annotation such as `SCALE 1:2` for a model-to-paper factor.
 fn scale_annotation(scale: f64) -> String {
     if scale >= 1.0 { format!("SCALE {}:1", format_number(scale)) } else { format!("SCALE 1:{}", format_number(1.0 / scale)) }
+}
+
+/// Shrinks a text height until the line fits `max_width`, never below half the
+/// requested height so a pathological label stays readable.
+fn fitted_height(content: &str, height: f64, max_width: f64) -> f64 {
+    let natural = text_width(content, height);
+    if natural <= max_width || natural <= f64::EPSILON { height } else { (height * max_width / natural).max(height * 0.5) }
+}
+
+/// Measures one column per header from the widest header or cell, including
+/// the cell padding. Columns are measured before placement so the rules and the
+/// text always share the same widths.
+fn measure_columns(headers: &[&str], rows: &[Vec<String>], text_height: f64) -> Vec<f64> {
+    let padding = text_height * CELL_PADDING * 2.0;
+    let mut widths: Vec<f64> = headers.iter().map(|header| text_width(header, text_height) + padding).collect();
+    for row in rows {
+        for (index, value) in row.iter().enumerate().take(widths.len()) {
+            widths[index] = widths[index].max(text_width(value, text_height) + padding);
+        }
+    }
+    widths
+}
+
+/// Grows every column proportionally so the table is at least `minimum` wide.
+fn widen_columns(widths: &mut [f64], minimum: f64) {
+    let total: f64 = widths.iter().sum();
+    if total > f64::EPSILON && total < minimum {
+        let factor = minimum / total;
+        for width in widths.iter_mut() {
+            *width *= factor;
+        }
+    }
+}
+
+/// Whether a segment enters an axis-aligned rectangle shrunk by `inset`.
+fn segment_hits_rect(from: [f64; 2], to: [f64; 2], min: [f64; 2], max: [f64; 2], inset: f64) -> bool {
+    let lo = [min[0] + inset, min[1] + inset];
+    let hi = [max[0] - inset, max[1] - inset];
+    if hi[0] <= lo[0] || hi[1] <= lo[1] {
+        return false;
+    }
+    let mut t0 = 0.0_f64;
+    let mut t1 = 1.0_f64;
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    for axis in 0..2 {
+        if delta[axis].abs() <= f64::EPSILON {
+            if from[axis] < lo[axis] || from[axis] > hi[axis] {
+                return false;
+            }
+            continue;
+        }
+        let mut enter = (lo[axis] - from[axis]) / delta[axis];
+        let mut leave = (hi[axis] - from[axis]) / delta[axis];
+        if enter > leave {
+            std::mem::swap(&mut enter, &mut leave);
+        }
+        t0 = t0.max(enter);
+        t1 = t1.min(leave);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
 }
 
 /// One placed view: its centre, size and outlines in view-local coordinates.
@@ -1107,7 +1183,8 @@ fn hatch_lines(solids: &[Shape2], voids: &[Shape2], angle: f64, spacing: f64) ->
 /// shows the cut outline of every solid, the cut outline of every void as a
 /// visible edge, and hatch lines at `hatchAngle` degrees (default `45`) with
 /// `hatchSpacing` (default `4`) between them; void regions stay unhatched. A
-/// centred caption sits above the section and a cutting-plane indicator below.
+/// centred caption sits above the section and a cutting-plane indicator with
+/// the measured width below.
 /// The section is placed with its lower-left corner at `origin`. The edit is
 /// one history step and one revision, and the response carries
 /// `{ revision, drawing, created }`.
@@ -1186,9 +1263,18 @@ pub fn add_section_view(handle: u64, request: SectionViewRequest) -> Result<Valu
             content: scale_text.to_string(),
         });
         let indicator_y = min[1] - text_height * 2.0;
-        kinds.push(EntityKind::Line { from: [min[0], indicator_y], to: [max[0], indicator_y] });
+        let width_text = format_number(max[0] - min[0]);
+        let middle = (min[0] + max[0]) / 2.0;
+        let gap = text_width(&width_text, text_height) / 2.0 + text_height * 0.4;
+        kinds.push(EntityKind::Line { from: [min[0], indicator_y], to: [middle - gap, indicator_y] });
+        kinds.push(EntityKind::Line { from: [middle + gap, indicator_y], to: [max[0], indicator_y] });
         kinds.push(EntityKind::Line { from: [min[0], indicator_y], to: [min[0], indicator_y + text_height * 1.5] });
         kinds.push(EntityKind::Line { from: [max[0], indicator_y], to: [max[0], indicator_y + text_height * 1.5] });
+        kinds.push(EntityKind::Text {
+            at: [middle - text_width(&width_text, text_height) / 2.0, indicator_y + text_height * 0.35],
+            height: text_height,
+            content: width_text,
+        });
         let mut created = Vec::with_capacity(kinds.len());
         for kind in kinds {
             let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind };
@@ -1483,9 +1569,10 @@ type PlacedComponent = (Vec<Shape2>, Vec<Shape2>, ([f64; 2], [f64; 2]));
 /// Every component projects to an isometric image at `position + explode`;
 /// solids land on `layer` (default `views`), voids as dashed outlines on a
 /// generated `hidden` layer. Balloons carrying the 1-based component numbers
-/// are distributed evenly on a ring around the group, each leader ending on
-/// the nearest point of its component outline, and an optional `name` sits
-/// outside its balloon. A framed `BILL OF MATERIALS` table below the group
+/// sit in one vertical column left of the group, ordered top to bottom with
+/// their components, and each elbow leader reaches the nearest point of its
+/// own outline without crossing another component. An optional `name` sits
+/// left of its balloon. A framed `BILL OF MATERIALS` table right of the group
 /// lists `ITEM`, `PART`, `QTY` and `MATERIAL` from the component order,
 /// `quantity` (default `1`) and material. The group is scaled and its
 /// lower-left corner is placed at `origin`. The edit is one history step and
@@ -1569,36 +1656,31 @@ pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> R
             .filter_map(|(shapes, hidden, _)| union_bounds(shapes_bounds(shapes), shapes_bounds(hidden)))
             .reduce(|acc, item| union_bounds(Some(acc), Some(item)).unwrap_or(item))
             .unwrap_or(([0.0, 0.0], [0.0, 0.0]));
-        let group_min = group.0;
-        let group_max = group.1;
-        let shift = [origin[0] - group_min[0], origin[1] - group_min[1]];
-        let center = [(group_min[0] + group_max[0]) / 2.0, (group_min[1] + group_max[1]) / 2.0];
-        let reach = placed
-            .iter()
-            .map(|(_, _, (min, max))| {
-                [[min[0], min[1]], [max[0], min[1]], [min[0], max[1]], [max[0], max[1]]]
-                    .iter()
-                    .map(|corner| ((corner[0] - center[0]).powi(2) + (corner[1] - center[1]).powi(2)).sqrt())
-                    .fold(0.0_f64, f64::max)
-            })
-            .fold(0.0_f64, f64::max);
-        let radius = text_height * 1.5;
-        let ring = reach + VIEW_GAP + radius * 2.0;
+        let shift = [origin[0] - group.0[0], origin[1] - group.0[1]];
+        let shifted: Vec<([f64; 2], [f64; 2])> =
+            placed.iter().map(|(_, _, (min, max))| ([min[0] + shift[0], min[1] + shift[1]], [max[0] + shift[0], max[1] + shift[1]])).collect();
+        let gmin = [group.0[0] + shift[0], group.0[1] + shift[1]];
+        let gmax = [group.1[0] + shift[0], group.1[1] + shift[1]];
+        let radius = text_height * 1.4;
+        let column_gap = text_height * 2.6;
+        let balloon_x = gmin[0] - column_gap - radius;
+        let knee_x = gmin[0] - column_gap * 0.45;
+        let group_height = (gmax[1] - gmin[1]).max(0.0);
         let mut order: Vec<usize> = (0..placed.len()).collect();
         order.sort_by(|left, right| {
-            let left_angle = (placed[*left].2.0[1] - center[1]).atan2(placed[*left].2.0[0] - center[0]);
-            let right_angle = (placed[*right].2.0[1] - center[1]).atan2(placed[*right].2.0[0] - center[0]);
-            left_angle.total_cmp(&right_angle).then(left.cmp(right))
+            let left_y = (shifted[*left].0[1] + shifted[*left].1[1]) * 0.5;
+            let right_y = (shifted[*right].0[1] + shifted[*right].1[1]) * 0.5;
+            right_y.total_cmp(&left_y).then(left.cmp(right))
         });
-        let start_angle = order
-            .first()
-            .map(|index| (placed[*index].2.0[1] - center[1]).atan2(placed[*index].2.0[0] - center[0]))
-            .unwrap_or(std::f64::consts::FRAC_PI_2);
-        let step = std::f64::consts::TAU / placed.len() as f64;
+        let step = (text_height * 3.2).min((group_height / placed.len().max(1) as f64).max(radius * 2.2));
+        let start_y = (gmin[1] + gmax[1]) * 0.5 + step * (placed.len() - 1) as f64 * 0.5;
+        let mut rank_of = vec![0usize; placed.len()];
+        for (rank, index) in order.iter().enumerate() {
+            rank_of[*index] = rank;
+        }
         let mut kinds: Vec<(String, EntityKind)> = Vec::new();
         let mut items: Vec<Value> = Vec::with_capacity(placed.len());
-        let mut balloon_floor = f64::INFINITY;
-        for (rank, index) in order.iter().copied().enumerate() {
+        for index in 0..placed.len() {
             let (shapes, hidden, _) = &placed[index];
             for shape in shapes {
                 kinds.push((layer.clone(), shape.translated(shift).kind()));
@@ -1606,23 +1688,45 @@ pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> R
             for shape in hidden {
                 kinds.push((HIDDEN_LAYER.to_string(), shape.translated(shift).kind()));
             }
-            let angle = start_angle + step * rank as f64;
-            let balloon = [center[0] + ring * angle.cos() + shift[0], center[1] + ring * angle.sin() + shift[1]];
-            let local = [balloon[0] - shift[0], balloon[1] - shift[1]];
-            let target_local = shapes
-                .iter()
-                .map(|shape| nearest_on_shape(shape, local))
-                .min_by(|left, right| {
-                    let left = (left[0] - local[0]).powi(2) + (left[1] - local[1]).powi(2);
-                    let right = (right[0] - local[0]).powi(2) + (right[1] - local[1]).powi(2);
-                    left.total_cmp(&right)
-                })
-                .unwrap_or(local);
-            let target = [target_local[0] + shift[0], target_local[1] + shift[1]];
-            let span = ((target[0] - balloon[0]).powi(2) + (target[1] - balloon[1]).powi(2)).sqrt();
-            let direction = if span > 0.0 { [(target[0] - balloon[0]) / span, (target[1] - balloon[1]) / span] } else { [1.0, 0.0] };
-            let start = [balloon[0] + direction[0] * radius, balloon[1] + direction[1] * radius];
-            kinds.push((layer.clone(), EntityKind::Line { from: start, to: target }));
+            let balloon = [balloon_x, start_y - step * rank_of[index] as f64];
+            let (owner_min, owner_max) = shifted[index];
+            let inset = radius * 0.35;
+            let low = owner_min[1] + inset;
+            let high = owner_max[1] - inset;
+            let middle = (owner_min[1] + owner_max[1]) * 0.5;
+            let span_y = owner_max[1] - owner_min[1];
+            let mut candidates = vec![balloon[1].clamp(low, high)];
+            for offset in [0.0, span_y * 0.35, -span_y * 0.35, span_y * 0.18, -span_y * 0.18] {
+                candidates.push((middle + offset).clamp(low, high));
+            }
+            let mut chosen = None;
+            for target_y in candidates {
+                let local = [owner_min[0] - shift[0], target_y - shift[1]];
+                let target_local = shapes
+                    .iter()
+                    .map(|shape| nearest_on_shape(shape, local))
+                    .min_by(|left, right| {
+                        let left = (left[0] - local[0]).powi(2) + (left[1] - local[1]).powi(2);
+                        let right = (right[0] - local[0]).powi(2) + (right[1] - local[1]).powi(2);
+                        left.total_cmp(&right)
+                    })
+                    .unwrap_or(local);
+                let target = [target_local[0] + shift[0], target_local[1] + shift[1]];
+                let crosses = shifted
+                    .iter()
+                    .enumerate()
+                    .any(|(other, (min, max))| other != index && segment_hits_rect([knee_x, target[1]], target, *min, *max, inset * 0.8));
+                chosen = Some(target);
+                if !crosses {
+                    break;
+                }
+            }
+            let target = chosen.unwrap_or([owner_min[0], balloon[1]]);
+            let edge = [balloon[0] + radius, balloon[1]];
+            kinds.push((
+                layer.clone(),
+                EntityKind::Polyline { points: vec![edge, [knee_x, balloon[1]], [knee_x, target[1]], target], closed: false },
+            ));
             kinds.push((layer.clone(), EntityKind::Circle { center: balloon, radius }));
             let number = (index + 1).to_string();
             kinds.push((
@@ -1635,14 +1739,12 @@ pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> R
             ));
             let name = request.components[index].name.as_deref().map(str::trim).filter(|value| !value.is_empty());
             if let Some(name) = name {
-                let outward = radius + text_height * 0.5;
-                let text_x = if angle.cos() >= 0.0 { balloon[0] + outward } else { balloon[0] - outward - text_width(name, text_height) };
+                let text_x = balloon[0] - radius - text_height * 0.5 - text_width(name, text_height);
                 kinds.push((
                     layer.clone(),
                     EntityKind::Text { at: [text_x, balloon[1] - text_height / 2.0], height: text_height, content: name.to_string() },
                 ));
             }
-            balloon_floor = balloon_floor.min(balloon[1] - radius);
             let quantity = request.components[index].quantity.unwrap_or(1).max(1);
             let material = request.components[index].material.as_deref().map(str::trim).filter(|value| !value.is_empty());
             items.push(json!({
@@ -1654,7 +1756,7 @@ pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> R
                 "balloon": balloon,
             }));
         }
-        push_bom(&mut kinds, &layer, &request.components, [origin[0], origin[1].min(balloon_floor) - VIEW_GAP], text_height);
+        push_bom(&mut kinds, &layer, &request.components, [gmax[0] + column_gap, gmax[1]], text_height);
         let mut created = Vec::with_capacity(kinds.len());
         for (view_layer, kind) in kinds {
             let entity = Entity { id: drawing.take_entity_id(), layer: view_layer, kind };
@@ -1677,56 +1779,96 @@ pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> R
 /// Column headers of the exploded-assembly bill of materials.
 const BOM_COLUMNS: [&str; 4] = ["ITEM", "PART", "QTY", "MATERIAL"];
 
-/// Fraction of the BOM width each column occupies, left to right.
-const BOM_COLUMN_SHARE: [f64; 4] = [0.1, 0.5, 0.12, 0.28];
-
 /// Caption of the exploded-assembly bill of materials.
 const BOM_TITLE: &str = "BILL OF MATERIALS";
 
+/// Measured bill-of-materials grid: column widths and row height.
+struct BomGrid {
+    widths: [f64; 4],
+    row_height: f64,
+}
+
+/// Measures the BOM columns from the caption, headers and every cell.
+fn bom_grid(components: &[AssemblyComponent], text_height: f64) -> BomGrid {
+    let padding = text_height * CELL_PADDING;
+    let rows: Vec<Vec<String>> = components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| {
+            vec![
+                (index + 1).to_string(),
+                component_name(component, index).to_string(),
+                component.quantity.unwrap_or(1).max(1).to_string(),
+                component.material.as_deref().map(str::trim).unwrap_or("").to_string(),
+            ]
+        })
+        .collect();
+    let mut widths = measure_columns(&BOM_COLUMNS, &rows, text_height);
+    widen_columns(&mut widths, text_width(BOM_TITLE, text_height) + padding * 2.0);
+    let mut fixed = [0.0_f64; 4];
+    fixed.copy_from_slice(&widths);
+    BomGrid { widths: fixed, row_height: text_height * TABLE_ROW_HEIGHT }
+}
+
+/// Display name of one component, falling back to its part number.
+fn component_name(component: &AssemblyComponent, index: usize) -> String {
+    component
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("PART {}", index + 1))
+}
+
 /// Appends a framed, column-aligned bill of materials below the balloons.
 fn push_bom(kinds: &mut Vec<(String, EntityKind)>, layer: &str, components: &[AssemblyComponent], top_left: [f64; 2], text_height: f64) {
-    let width = 70.0 * text_height;
-    let row_height = 2.5 * text_height;
-    let row_count = components.len() + 2;
+    let grid = bom_grid(components, text_height);
+    let width: f64 = grid.widths.iter().sum();
+    let row_height = grid.row_height;
     let left = top_left[0];
     let top = top_left[1];
-    let bottom = top - row_count as f64 * row_height;
+    let bottom = top - (components.len() + 2) as f64 * row_height;
     let right = left + width;
+    let padding = text_height * CELL_PADDING;
     let line = |from: [f64; 2], to: [f64; 2]| EntityKind::Line { from, to };
     kinds.push((layer.to_string(), line([left, top], [right, top])));
     kinds.push((layer.to_string(), line([right, top], [right, bottom])));
     kinds.push((layer.to_string(), line([right, bottom], [left, bottom])));
     kinds.push((layer.to_string(), line([left, bottom], [left, top])));
-    for row in 1..row_count {
+    for row in 1..components.len() + 2 {
         let y = top - row as f64 * row_height;
         kinds.push((layer.to_string(), line([left, y], [right, y])));
     }
+    let mut separators = Vec::with_capacity(4);
     let mut column = left;
-    let mut separators = Vec::with_capacity(BOM_COLUMNS.len());
-    for share in BOM_COLUMN_SHARE.iter().take(BOM_COLUMNS.len() - 1) {
-        column += width * share;
+    for share in grid.widths.iter().take(BOM_COLUMNS.len() - 1) {
+        column += share;
         separators.push(column);
         kinds.push((layer.to_string(), line([column, top - row_height], [column, bottom])));
     }
-    let inset = text_height * 0.5;
     let baseline = |row: usize| top - (row + 1) as f64 * row_height + (row_height - text_height) * 0.5;
-    kinds.push((layer.to_string(), EntityKind::Text { at: [left + inset, baseline(0)], height: text_height, content: BOM_TITLE.to_string() }));
+    let title_height = fitted_height(BOM_TITLE, text_height, width - padding * 2.0);
+    kinds.push((
+        layer.to_string(),
+        EntityKind::Text { at: [left + padding, baseline(0)], height: title_height, content: BOM_TITLE.to_string() },
+    ));
     for (column_index, title) in BOM_COLUMNS.iter().enumerate() {
         let x = if column_index == 0 { left } else { separators[column_index - 1] };
-        kinds.push((layer.to_string(), EntityKind::Text { at: [x + inset, baseline(1)], height: text_height, content: (*title).to_string() }));
+        let size = fitted_height(title, text_height, grid.widths[column_index] - padding * 2.0);
+        let at = if column_index == 0 || column_index == 2 {
+            x + grid.widths[column_index] - padding - text_width(title, size)
+        }
+        else {
+            x + padding
+        };
+        kinds.push((layer.to_string(), EntityKind::Text { at: [at, baseline(1)], height: size, content: (*title).to_string() }));
     }
     for (index, component) in components.iter().enumerate() {
         let row = index + 2;
-        let name = component
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("PART {}", index + 1));
         let values = [
             (index + 1).to_string(),
-            name,
+            component_name(component, index),
             component.quantity.unwrap_or(1).max(1).to_string(),
             component.material.as_deref().map(str::trim).unwrap_or("").to_string(),
         ];
@@ -1735,7 +1877,14 @@ fn push_bom(kinds: &mut Vec<(String, EntityKind)>, layer: &str, components: &[As
                 continue;
             }
             let x = if column_index == 0 { left } else { separators[column_index - 1] };
-            kinds.push((layer.to_string(), EntityKind::Text { at: [x + inset, baseline(row)], height: text_height, content: value.clone() }));
+            let size = fitted_height(value, text_height, grid.widths[column_index] - padding * 2.0);
+            let at = if column_index == 0 || column_index == 2 {
+                x + grid.widths[column_index] - padding - text_width(value, size)
+            }
+            else {
+                x + padding
+            };
+            kinds.push((layer.to_string(), EntityKind::Text { at: [at, baseline(row)], height: size, content: value.clone() }));
         }
     }
 }
@@ -1763,9 +1912,6 @@ const HOLE_TABLE_TITLE: &str = "HOLE TABLE";
 /// Column headers of the hole table, left to right.
 const HOLE_COLUMNS: [&str; 6] = ["No.", "Axis", "Pos A", "Pos B", "Dia", "Depth"];
 
-/// Fraction of the table width each hole column occupies, left to right.
-const HOLE_COLUMN_SHARE: [f64; 6] = [0.1, 0.12, 0.2, 0.2, 0.19, 0.19];
-
 /// Formats one table number with at most three decimals and no trailing zeros.
 fn format_number(value: f64) -> String {
     if !value.is_finite() || value.abs() < 0.0005 {
@@ -1786,9 +1932,10 @@ fn format_number(value: f64) -> String {
 /// Every `cylinder` void becomes one numbered row in void order: the two
 /// coordinates transverse to its axis (ascending axis order) are `Pos A` and
 /// `Pos B`, the diameter is twice the radius and the depth is the axial
-/// length. A caption row sits above the
-/// header unless `title` is empty; the bottom-left corner sits at `origin`,
-/// the width is `70 * textHeight` and every row is `2.5 * textHeight` tall.
+/// length. A caption row sits above the header unless `title` is empty; the
+/// bottom-left corner sits at `origin`. Columns are measured from their widest
+/// header or cell before placement, numeric cells are right-aligned under
+/// their headers, and every row is `2.2 * textHeight` tall.
 /// The edit is one history step and one revision, and the response carries
 /// `{ revision, drawing, columns, rows, created }`.
 ///
@@ -1818,11 +1965,6 @@ pub fn add_hole_table(handle: u64, request: HoleTableRequest) -> Result<Value, S
     };
     let layer =
         request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| HOLE_TABLE_LAYER.to_string());
-    let width = text_height * 70.0;
-    if !width.is_finite() {
-        return Err(argument("`textHeight` is too large"));
-    }
-    let row_height = text_height * 2.5;
     let (created, rows) = store::edit(handle, |drawing| {
         let holes: Vec<(Axis3, [f64; 2], f64, f64, f64)> = request
             .part
@@ -1876,6 +2018,13 @@ pub fn add_hole_table(handle: u64, request: HoleTableRequest) -> Result<Value, S
                 })
             })
             .collect();
+        let padding = text_height * CELL_PADDING;
+        let row_height = text_height * TABLE_ROW_HEIGHT;
+        let table_rows: Vec<Vec<String>> = cells.iter().map(|row| row.to_vec()).collect();
+        let mut widths = measure_columns(&HOLE_COLUMNS, &table_rows, text_height);
+        let caption_width = caption.as_ref().map(|text| text_width(text, text_height) + padding * 2.0).unwrap_or(0.0);
+        widen_columns(&mut widths, caption_width);
+        let width: f64 = widths.iter().sum();
         let [x0, y0] = origin;
         let x1 = x0 + width;
         let y1 = y0 + row_height * (cells.len() + 1 + usize::from(caption.is_some())) as f64;
@@ -1897,29 +2046,40 @@ pub fn add_hole_table(handle: u64, request: HoleTableRequest) -> Result<Value, S
             separator -= row_height;
             kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
         }
-        let mut column_x = [0.0f64; HOLE_COLUMN_SHARE.len()];
+        let mut column_x = [0.0f64; HOLE_COLUMNS.len()];
         let mut cursor = x0;
-        for (index, share) in HOLE_COLUMN_SHARE.iter().enumerate() {
+        for (index, column_width) in widths.iter().enumerate() {
             column_x[index] = cursor;
-            cursor += width * share;
+            cursor += column_width;
         }
-        let inset = text_height * 0.5;
-        let header_bottom = y1 - row_height * (1.0 + f64::from(u8::from(caption.is_some())));
+        let rules_top = y1 - row_height * f64::from(u8::from(caption.is_some()));
         for x in &column_x[1..] {
-            kinds.push(EntityKind::Line { from: [*x, y0], to: [*x, header_bottom] });
+            kinds.push(EntityKind::Line { from: [*x, y0], to: [*x, rules_top] });
         }
         let mut baseline = y1 - row_height + (row_height - text_height) / 2.0;
         if let Some(caption) = &caption {
-            kinds.push(EntityKind::Text { at: [x0 + inset, baseline], height: text_height, content: caption.clone() });
+            let size = fitted_height(caption, text_height, width - padding * 2.0);
+            kinds.push(EntityKind::Text { at: [x0 + padding, baseline], height: size, content: caption.clone() });
             baseline -= row_height;
         }
         for (index, header) in HOLE_COLUMNS.iter().enumerate() {
-            kinds.push(EntityKind::Text { at: [column_x[index] + inset, baseline], height: text_height, content: (*header).to_string() });
+            let size = fitted_height(header, text_height, widths[index] - padding * 2.0);
+            let at = column_x[index] + (widths[index] - text_width(header, size)) / 2.0;
+            kinds.push(EntityKind::Text { at: [at, baseline], height: size, content: (*header).to_string() });
         }
         baseline -= row_height;
         for row in &cells {
             for (index, value) in row.iter().enumerate() {
-                kinds.push(EntityKind::Text { at: [column_x[index] + inset, baseline], height: text_height, content: value.clone() });
+                let size = fitted_height(value, text_height, widths[index] - padding * 2.0);
+                let at = if index == 1 {
+                    // The axis letter is centred; every numeric column is
+                    // right-aligned so the digits line up under their headers.
+                    column_x[index] + (widths[index] - text_width(value, size)) / 2.0
+                }
+                else {
+                    column_x[index] + widths[index] - padding - text_width(value, size)
+                };
+                kinds.push(EntityKind::Text { at: [at, baseline], height: size, content: value.clone() });
             }
             baseline -= row_height;
         }

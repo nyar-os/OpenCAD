@@ -276,6 +276,100 @@ fn pdf_geometry_stays_clear_of_the_title_block() {
 }
 
 #[test]
+fn fitted_hole_table_fills_the_drawable_area() {
+    let created = crate::create(crate::CreateRequest::default()).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let part = crate::PartSpec {
+        solids: vec![crate::Feature3d::Box { min: [0.0, 0.0, 0.0], max: [80.0, 50.0, 20.0] }],
+        voids: vec![
+            crate::Feature3d::Cylinder { axis: crate::Axis3::Z, center: [12.0, 12.0], from: 0.0, to: 20.0, radius: 3.0 },
+            crate::Feature3d::Cylinder { axis: crate::Axis3::Z, center: [68.0, 12.0], from: 0.0, to: 20.0, radius: 3.0 },
+            crate::Feature3d::Cylinder { axis: crate::Axis3::Z, center: [12.0, 38.0], from: 0.0, to: 10.0, radius: 4.0 },
+        ],
+    };
+    crate::add_hole_table(handle, crate::HoleTableRequest { part, ..Default::default() }).expect("hole table");
+    let drawing = crate::store::read(handle, |session| session.drawing.clone()).expect("read");
+    let block = FlatSize::new(TITLE_BLOCK_WIDTH_MM * PDF_POINTS_PER_MILLIMETRE, TITLE_BLOCK_HEIGHT_MM * PDF_POINTS_PER_MILLIMETRE);
+    let layout = SheetLayout::of(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN, PDF_FRAME_STROKE, block, PDF_POINTS_PER_MILLIMETRE);
+    let [_, _, area_width, area_height] = pdf_drawable_area(&layout);
+    let extents = visible_extents(&drawing).expect("content");
+    let width = extents.width().max(1.0);
+    let height = extents.height().max(1.0);
+    let scale = (area_width / width).min(area_height / height);
+    let cover_width = width * scale / area_width;
+    let cover_height = height * scale / area_height;
+    assert!(cover_width.max(cover_height) > 0.6, "the table must fill one axis: {cover_width} x {cover_height}");
+    assert!(cover_width.min(cover_height) > 0.6, "the measured table must fill both axes: {cover_width} x {cover_height}");
+}
+
+#[test]
+fn generated_drawings_are_framed_inside_their_page() {
+    let part = crate::PartSpec {
+        solids: vec![crate::Feature3d::Box { min: [0.0, 0.0, 0.0], max: [80.0, 50.0, 20.0] }],
+        voids: vec![crate::Feature3d::Cylinder { axis: crate::Axis3::Z, center: [20.0, 20.0], from: 0.0, to: 20.0, radius: 5.0 }],
+    };
+    let mut drawings: Vec<(&str, Drawing)> = Vec::new();
+    {
+        let created = crate::create(crate::CreateRequest::default()).expect("create");
+        let handle = created["handle"].as_u64().expect("handle");
+        crate::add_multiview_sheet(handle, crate::MultiViewSheetRequest { part: part.clone(), ..Default::default() }).expect("multiview");
+        drawings.push(("multiview", crate::store::read(handle, |session| session.drawing.clone()).expect("read")));
+    }
+    {
+        let created = crate::create(crate::CreateRequest::default()).expect("create");
+        let handle = created["handle"].as_u64().expect("handle");
+        let components = vec![
+            crate::AssemblyComponent {
+                name: Some(String::from("BASE")),
+                part: crate::PartSpec {
+                    solids: vec![crate::Feature3d::Box { min: [0.0, 0.0, 0.0], max: [40.0, 24.0, 6.0] }],
+                    voids: Vec::new(),
+                },
+                position: None,
+                explode: None,
+                quantity: Some(1),
+                material: Some(String::from("STEEL")),
+            },
+            crate::AssemblyComponent {
+                name: Some(String::from("COVER")),
+                part: crate::PartSpec {
+                    solids: vec![crate::Feature3d::Box { min: [0.0, 0.0, 0.0], max: [40.0, 24.0, 8.0] }],
+                    voids: Vec::new(),
+                },
+                position: Some([0.0, 0.0, 6.0]),
+                explode: Some([0.0, 0.0, 40.0]),
+                quantity: Some(1),
+                material: Some(String::from("STEEL")),
+            },
+        ];
+        crate::add_exploded_assembly(handle, crate::ExplodedAssemblyRequest { components, ..Default::default() }).expect("exploded");
+        drawings.push(("exploded", crate::store::read(handle, |session| session.drawing.clone()).expect("read")));
+    }
+    for (name, drawing) in drawings {
+        let frame = Frame::of(&drawing);
+        let margin = frame_margin(drawing.units);
+        let left = frame.min_x + margin;
+        let right = frame.min_x + frame.width - margin;
+        let bottom = frame.min_y + margin + TITLE_BLOCK_HEIGHT_MM;
+        let top = frame.min_y + frame.height - margin;
+        for entity in &drawing.entities {
+            for point in entity.bounds_points() {
+                assert!(
+                    point[0] >= left - 1e-6 && point[0] <= right + 1e-6,
+                    "{name}: x {} escapes the inner border [{left}, {right}]",
+                    point[0]
+                );
+                assert!(
+                    point[1] >= bottom - 1e-6 && point[1] <= top + 1e-6,
+                    "{name}: y {} overlaps the title block or border [{bottom}, {top}]",
+                    point[1]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn pdf_export_keeps_dimension_text_legible() {
     let mut drawing = Drawing::empty(Some("Large plate".to_string()), Units::Mm);
     drawing.entities.push(Entity {

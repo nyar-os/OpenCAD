@@ -7472,6 +7472,18 @@ pub struct TitleBlockRequest {
 /// Default layer the generated title block is drawn on.
 const TITLE_BLOCK_LAYER: &str = "titleblock";
 
+/// Approximate advance of one label line at `height`.
+fn content_width(content: &str, height: f64) -> f64 {
+    content.chars().count() as f64 * height * 0.66
+}
+
+/// Shrinks a title-block label until it fits its cell, keeping at least half the
+/// requested height so a long override stays readable instead of overflowing.
+fn fit_label(content: &str, height: f64, max_width: f64) -> f64 {
+    let natural = content_width(content, height);
+    if natural <= max_width || natural <= f64::EPSILON { height } else { (height * max_width / natural).max(height * 0.5) }
+}
+
 /// Standard sheet sizes in millimetres, landscape orientation.
 fn sheet_format(name: &str) -> Option<(f64, f64)> {
     match name {
@@ -7486,10 +7498,11 @@ fn sheet_format(name: &str) -> Option<(f64, f64)> {
 ///
 /// `format` selects an A4, A3 or A2 sheet and `orientation` rotates it; explicit
 /// `width`/`height` values win when no format is given. The operation draws the
-/// outer border, the inner frame inset by `margin`, and a five-row title block
-/// in the bottom-right corner with the drawing title, number, revision, scale,
-/// units, sheet count, author, date and a first- or third-angle projection
-/// symbol. Existing geometry is translated into the free area above the block
+/// outer border, the inner frame inset by `margin`, and a four-row title block
+/// in the bottom-right corner: the left column carries the drawing title,
+/// author/date, units and a first- or third-angle projection symbol, and the
+/// fixed-width right strip carries DWG NO., SCALE, SHEET and REV. Labels and
+/// values shrink to fit their cells so no text crosses a rule. Existing geometry is translated into the free area above the block
 /// so the frame can be applied to any view; geometry that cannot fit reports
 /// `titleblock/content-overflow` instead of being clipped. Field values default
 /// to the drawing title, id, revision, `1:1`, drawing units, `1`, author and an
@@ -7539,9 +7552,9 @@ pub fn add_title_block(handle: u64, request: TitleBlockRequest) -> Result<Value,
         request.sheet.map(|raw| property_value(&raw, "sheet")).transpose()?,
     ];
     let layer_name = request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
-    let row_height = text_height * 1.5;
-    let block_height = row_height * 5.0;
-    let block_width = (width * 0.5).min(180.0);
+    let row_height = text_height * 1.9;
+    let block_height = row_height * 4.0;
+    let block_width = (width * 0.52).min(190.0);
     if block_width > width - 2.0 * margin || block_height > height - 2.0 * margin {
         return Err(ServiceError::new("titleblock/invalid-sheet", "the sheet is too small for the frame and title block"));
     }
@@ -7623,43 +7636,55 @@ pub fn add_title_block(handle: u64, request: TitleBlockRequest) -> Result<Value,
             EntityKind::Line { from: [bx1, by1], to: [bx0, by1] },
             EntityKind::Line { from: [bx0, by1], to: [bx0, by0] },
         ];
-        for row in 1..5 {
+        for row in 1..4 {
             let y = by1 - row as f64 * row_height;
             kinds.push(EntityKind::Line { from: [bx0, y], to: [bx1, y] });
         }
-        let mid = bx0 + block_width / 2.0;
-        kinds.push(EntityKind::Line { from: [mid, by0], to: [mid, by1 - row_height] });
-        let inset = text_height * 0.5;
-        let baseline = |row: usize| by1 - (row + 1) as f64 * row_height + (row_height - text_height) / 2.0;
-        kinds.push(EntityKind::Text { at: [bx0 + inset, baseline(0)], height: text_height, content: values[0].clone() });
-        let fields: [(usize, &str, &str); 6] = [
-            (1, "NO.", &values[1]),
-            (1, "REV", &values[2]),
-            (2, "SCALE", &values[3]),
-            (2, "SHEET", &values[6]),
-            (4, "AUTHOR", &values[5]),
-            (4, "DATE", &values[4]),
-        ];
-        let label_width = block_width / 2.0 * 0.34;
-        for (row, label, value) in fields {
-            let column = if label == "REV" || label == "SHEET" || label == "DATE" { mid } else { bx0 };
-            kinds.push(EntityKind::Text { at: [column + inset, baseline(row)], height: text_height, content: label.to_string() });
-            if !value.is_empty() {
-                kinds.push(EntityKind::Text {
-                    at: [column + label_width + inset, baseline(row)],
-                    height: text_height,
-                    content: value.to_string(),
-                });
+        // Fixed-width metadata strip on the right: DWG NO., SCALE, SHEET and
+        // REV keep their cells on every sheet, so a longer title can only take
+        // room from the left column.
+        let right_width = block_width * 0.42;
+        let right_x = bx1 - right_width;
+        let left_width = right_x - bx0;
+        kinds.push(EntityKind::Line { from: [right_x, by0], to: [right_x, by1] });
+        let date_x = bx0 + left_width * 0.52;
+        kinds.push(EntityKind::Line { from: [date_x, by1 - row_height * 2.0], to: [date_x, by1 - row_height] });
+        let inset = text_height * 0.55;
+        let baseline = |row: usize, size: f64| by1 - (row + 1) as f64 * row_height + (row_height - size) / 2.0 + size * 0.1;
+        let cell = |content: &str, room: f64| fit_label(content, text_height, room - inset * 2.0);
+        let title_size = cell(&values[0], left_width);
+        kinds.push(EntityKind::Text { at: [bx0 + inset, baseline(0, title_size)], height: title_size, content: values[0].clone() });
+
+        let metadata: [(usize, usize, &str); 4] = [(0, 1, "NO."), (1, 3, "SCALE"), (2, 6, "SHEET"), (3, 2, "REV")];
+        for (row, value_index, label) in metadata {
+            let label_size = cell(label, right_width);
+            kinds.push(EntityKind::Text { at: [right_x + inset, baseline(row, label_size)], height: label_size, content: label.to_string() });
+            if !values[value_index].is_empty() {
+                let value_x = right_x + inset * 3.0 + content_width(label, label_size);
+                let size = cell(&values[value_index], bx1 - inset - value_x);
+                kinds.push(EntityKind::Text { at: [value_x, baseline(row, size)], height: size, content: values[value_index].clone() });
             }
         }
-        kinds.push(EntityKind::Text { at: [bx0 + inset, baseline(3)], height: text_height, content: String::from("UNITS") });
-        let units = drawing.units.as_str().to_ascii_uppercase();
-        kinds.push(EntityKind::Text { at: [bx0 + label_width + inset, baseline(3)], height: text_height, content: units });
-        kinds.push(EntityKind::Text { at: [mid + inset, baseline(3)], height: text_height, content: String::from("PROJ.") });
-        let symbol_x = mid + label_width + inset;
-        let symbol_y = baseline(3) + text_height * 0.4;
-        let half = text_height * 0.55;
-        let symbol_width = text_height * 1.6;
+
+        let field = |row: usize, label: &str, value: &str, left: f64, room: f64| {
+            let label_size = cell(label, room);
+            let value_x = left + inset * 3.0 + content_width(label, label_size);
+            let mut out =
+                vec![EntityKind::Text { at: [left + inset, baseline(row, label_size)], height: label_size, content: label.to_string() }];
+            if !value.is_empty() {
+                let size = cell(value, left + room - inset - value_x);
+                out.push(EntityKind::Text { at: [value_x, baseline(row, size)], height: size, content: value.to_string() });
+            }
+            out
+        };
+        kinds.extend(field(1, "AUTHOR", &values[5], bx0, left_width * 0.52));
+        kinds.extend(field(1, "DATE", &values[4], date_x, left_width * 0.48));
+        kinds.extend(field(2, "UNITS", &drawing.units.as_str().to_ascii_uppercase(), bx0, left_width));
+        kinds.push(EntityKind::Text { at: [bx0 + inset, baseline(3, text_height)], height: text_height, content: String::from("PROJ.") });
+        let symbol_x = bx0 + inset + text_height * 3.6;
+        let symbol_y = baseline(3, text_height) + text_height * 0.35;
+        let half = text_height * 0.5;
+        let symbol_width = text_height * 1.5;
         let first_angle = projection == "FIRST";
         let trapezoid = if first_angle {
             vec![
@@ -7681,7 +7706,13 @@ pub fn add_title_block(handle: u64, request: TitleBlockRequest) -> Result<Value,
         let circle_x = symbol_x + symbol_width * 0.5 + text_height * 0.7;
         kinds.push(EntityKind::Circle { center: [circle_x, symbol_y], radius: half * 0.5 });
         kinds.push(EntityKind::Circle { center: [circle_x, symbol_y], radius: half });
-        kinds.push(EntityKind::Text { at: [circle_x + half + text_height, baseline(3)], height: text_height, content: projection.to_string() });
+        let projection_x = circle_x + half + text_height * 0.8;
+        let projection_size = cell(projection, right_x - projection_x);
+        kinds.push(EntityKind::Text {
+            at: [projection_x, baseline(3, projection_size)],
+            height: projection_size,
+            content: projection.to_string(),
+        });
         let mut created = Vec::with_capacity(kinds.len());
         for kind in kinds {
             let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind };

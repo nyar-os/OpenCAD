@@ -155,7 +155,9 @@ impl Frame {
                     // (A3/A4) and avoids a second, offset frame.
                     return Self { min_x: extents.min.x, min_y: extents.min.y, width, height };
                 }
-                let pad = (width.max(height) * 0.08).max(frame_margin(drawing.units) * 1.6);
+                // The inner border sits `margin` inside the page, so the padding
+                // must clear it or the frame line would cut through the content.
+                let pad = (width.max(height) * 0.05).max(frame_margin(drawing.units) * 1.2);
                 // The title block hangs from the inner border's bottom-right corner, so the
                 // bottom padding must clear the block's full height plus a gap; otherwise a
                 // tall part runs straight through the title rows.
@@ -163,7 +165,7 @@ impl Frame {
                     Units::Mm => 1.0,
                     Units::Inch => 1.0 / 25.4,
                 };
-                let bottom = (frame_margin(drawing.units) + 32.0 * sheet).max(pad);
+                let bottom = frame_margin(drawing.units) + TITLE_BLOCK_HEIGHT_MM * sheet + pad * 0.5;
                 Self { min_x: extents.min.x - pad, min_y: extents.min.y - bottom, width: width + pad * 2.0, height: height + pad + bottom }
             }
             None => Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 },
@@ -699,9 +701,14 @@ fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, sheet: FlatSize, 
     else {
         return;
     };
+    // A four-row block: the left column carries the title, byline, units and the
+    // projection symbol; the right column is a fixed-width metadata strip with
+    // DWG NO., SCALE, SHEET and REV so those fields never shift between sheets.
     let row = block.height / 4.0;
-    let pad = row * 0.18;
-    let size = (row * 0.42).max(0.5);
+    let pad = row * 0.16;
+    let right_width = block.width * 0.42;
+    let right_x = block.left + block.width - right_width;
+    let left_width = block.width - right_width;
     flat.push(Element::new(rectangle(block.left, block.top, block.width, block.height), border.clone()));
     for index in 1..4 {
         let y = block.top + row * index as f64;
@@ -710,67 +717,80 @@ fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, sheet: FlatSize, 
             border.clone(),
         ));
     }
-    let meta_x = block.left + block.width * 0.55;
-    for index in 0..2 {
-        let y = block.top + row * index as f64;
-        flat.push(Element::new(Shape::Line { from: FlatPoint::new(meta_x, y), to: FlatPoint::new(meta_x, y + row) }, border.clone()));
-    }
-    let third = block.width / 3.0;
-    for index in 1..3 {
-        let x = block.left + third * index as f64;
-        flat.push(Element::new(
-            Shape::Line { from: FlatPoint::new(x, block.top + row * 2.0), to: FlatPoint::new(x, block.top + row * 3.0) },
-            border.clone(),
-        ));
-    }
-
+    flat.push(Element::new(
+        Shape::Line { from: FlatPoint::new(right_x, block.top), to: FlatPoint::new(right_x, block.top + block.height) },
+        border.clone(),
+    ));
     let [title, number, byline, scale, units, sheet_count, revision, projection] = title_block_labels(drawing);
-    let baseline = |index: usize| block.top + row * (index as f64 + 1.0) - row * 0.28;
-    let cells = [
-        (title, block.left, 0usize),
-        (number, meta_x, 0),
-        (byline, block.left, 1),
-        (scale, meta_x, 1),
-        (units, block.left, 2),
-        (sheet_count, block.left + third, 2),
-        (revision, block.left + third * 2.0, 2),
-    ];
-    for (value, x, index) in cells {
-        flat.push(Element::new(Shape::Text { at: FlatPoint::new(x + pad, baseline(index)), text: value, size }, label.clone()));
+    let baseline = |index: usize, size: f64| block.top + row * (index as f64 + 0.5) + size * 0.35;
+    let base = row * 0.5;
+    let left_text_width = left_width - pad * 2.0;
+    let metadata = [(0usize, number), (1, scale), (2, sheet_count), (3, revision)];
+    for (index, value) in metadata {
+        let size = fit_text_size(&value, base, right_width - pad * 2.0);
+        flat.push(Element::new(Shape::Text { at: FlatPoint::new(right_x + pad, baseline(index, size)), text: value, size }, label.clone()));
     }
+    let title_size = fit_text_size(&title, base * 1.15, left_text_width);
+    flat.push(Element::new(
+        Shape::Text { at: FlatPoint::new(block.left + pad, baseline(0, title_size)), text: title, size: title_size },
+        label.clone(),
+    ));
+    let byline_size = fit_text_size(&byline, base, left_text_width);
+    flat.push(Element::new(
+        Shape::Text { at: FlatPoint::new(block.left + pad, baseline(1, byline_size)), text: byline, size: byline_size },
+        label.clone(),
+    ));
+    let units_size = fit_text_size(&units, base, left_text_width);
+    flat.push(Element::new(
+        Shape::Text { at: FlatPoint::new(block.left + pad, baseline(2, units_size)), text: units, size: units_size },
+        label.clone(),
+    ));
 
+    // Projection symbol plus its convention label, both measured so the label
+    // stays inside the block instead of running under the frame.
     let first_angle = projection == "FIRST ANGLE";
-    let symbol_x = block.left + pad;
+    let symbol_width = row * 2.4;
+    let half = row * 0.34;
     let center_y = block.top + row * 3.5;
-    let half = row * 0.28;
-    let width = row * 1.8;
+    let symbol_x = block.left + pad;
     let trapezoid = if first_angle {
         vec![
             FlatPoint::new(symbol_x, center_y - half),
-            FlatPoint::new(symbol_x + width * 0.5, center_y - half * 0.35),
-            FlatPoint::new(symbol_x + width * 0.5, center_y + half * 0.35),
+            FlatPoint::new(symbol_x + symbol_width * 0.5, center_y - half * 0.35),
+            FlatPoint::new(symbol_x + symbol_width * 0.5, center_y + half * 0.35),
             FlatPoint::new(symbol_x, center_y + half),
         ]
     }
     else {
         vec![
             FlatPoint::new(symbol_x, center_y - half * 0.35),
-            FlatPoint::new(symbol_x + width * 0.5, center_y - half),
-            FlatPoint::new(symbol_x + width * 0.5, center_y + half),
+            FlatPoint::new(symbol_x + symbol_width * 0.5, center_y - half),
+            FlatPoint::new(symbol_x + symbol_width * 0.5, center_y + half),
             FlatPoint::new(symbol_x, center_y + half * 0.35),
         ]
     };
-    let circle_x = symbol_x + width * 0.5 + row * 0.62;
+    let circle_x = symbol_x + symbol_width * 0.5 + row * 0.62;
     flat.push(Element::new(Shape::Line { from: trapezoid[0], to: trapezoid[1] }, border.clone()));
     flat.push(Element::new(Shape::Line { from: trapezoid[1], to: trapezoid[2] }, border.clone()));
     flat.push(Element::new(Shape::Line { from: trapezoid[2], to: trapezoid[3] }, border.clone()));
     flat.push(Element::new(Shape::Line { from: trapezoid[3], to: trapezoid[0] }, border.clone()));
     flat.push(Element::new(Shape::Circle { center: FlatPoint::new(circle_x, center_y), radius: half * 0.55 }, border.clone()));
     flat.push(Element::new(Shape::Circle { center: FlatPoint::new(circle_x, center_y), radius: half }, border));
-    flat.push(Element::new(
-        Shape::Text { at: FlatPoint::new(circle_x + half + row * 0.5, center_y - size * 0.35), text: projection, size },
-        label,
-    ));
+    let label_x = circle_x + half + row * 0.7;
+    let label_room = block.left + left_width - pad - label_x;
+    let label_size = fit_text_size(&projection, base, label_room);
+    flat.push(Element::new(Shape::Text { at: FlatPoint::new(label_x, baseline(3, label_size)), text: projection, size: label_size }, label));
+}
+
+/// Advances one text line at `size` for the shared sheet fonts.
+fn text_advance(content: &str, size: f64) -> f64 {
+    content.chars().count() as f64 * size * 0.62
+}
+
+/// Shrinks `base` until `content` fits `max_width`, keeping at least 55% of it.
+fn fit_text_size(content: &str, base: f64, max_width: f64) -> f64 {
+    let natural = text_advance(content, base);
+    if natural <= max_width || natural <= f64::EPSILON { base } else { (base * max_width / natural).max(base * 0.55) }
 }
 
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
@@ -1356,11 +1376,11 @@ fn dxf_with_flavor(drawing: &Drawing, r12: bool) -> (String, Vec<Loss>) {
 /// A4 landscape in PostScript points.
 const PDF_PAGE_WIDTH: f64 = 841.89;
 const PDF_PAGE_HEIGHT: f64 = 595.28;
-const PDF_MARGIN: f64 = 28.0;
+const PDF_MARGIN: f64 = 16.0;
 /// PostScript points per millimetre, used to place the physical sheet furniture.
 const PDF_POINTS_PER_MILLIMETRE: f64 = PDF_PAGE_WIDTH / 297.0;
 /// Gap between the inner border and the fitted geometry, in points.
-const PDF_FIT_PADDING: f64 = 8.0;
+const PDF_FIT_PADDING: f64 = 10.0;
 /// Outline width of the sheet frame and title block, in points.
 const PDF_FRAME_STROKE: f64 = 0.7;
 
@@ -1425,12 +1445,7 @@ fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
     };
     let block = FlatSize::new(TITLE_BLOCK_WIDTH_MM * PDF_POINTS_PER_MILLIMETRE, TITLE_BLOCK_HEIGHT_MM * PDF_POINTS_PER_MILLIMETRE);
     let layout = SheetLayout::of(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN, PDF_FRAME_STROKE, block, PDF_POINTS_PER_MILLIMETRE);
-    let left = layout.inner + PDF_FIT_PADDING;
-    let top = layout.inner + PDF_FIT_PADDING;
-    let right = PDF_PAGE_WIDTH - layout.inner - PDF_FIT_PADDING;
-    let bottom = layout.block.map_or(PDF_PAGE_HEIGHT - layout.inner - PDF_FIT_PADDING, |title| title.top - PDF_FIT_PADDING);
-    let area_width = (right - left).max(1.0);
-    let area_height = (bottom - top).max(1.0);
+    let [left, top, area_width, area_height] = pdf_drawable_area(&layout);
     let scale = (area_width / width).min(area_height / height);
     let origin_x = left + (area_width - width * scale) / 2.0 - min_x * scale;
     let origin_y = top + (area_height - height * scale) / 2.0 + (height + min_y) * scale;
@@ -1451,6 +1466,16 @@ fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
     let mut flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
     push_sheet_frame(&mut flat, drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), PDF_FRAME_STROKE, &layout);
     (flat, layout)
+}
+
+/// Drawable box of the fitted A4 sheet as `[left, top, width, height]` in
+/// points, excluding the borders and the title block.
+fn pdf_drawable_area(layout: &SheetLayout) -> [f64; 4] {
+    let left = layout.inner + PDF_FIT_PADDING;
+    let top = layout.inner + PDF_FIT_PADDING;
+    let right = PDF_PAGE_WIDTH - layout.inner - PDF_FIT_PADDING;
+    let bottom = layout.block.map_or(PDF_PAGE_HEIGHT - layout.inner - PDF_FIT_PADDING, |title| title.top - PDF_FIT_PADDING);
+    [left, top, (right - left).max(1.0), (bottom - top).max(1.0)]
 }
 
 /// Renders one drawing to a vector PDF and reports text losses.

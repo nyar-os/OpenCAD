@@ -211,9 +211,10 @@ fn section_view_hatches_box_at_45_degrees() {
         assert_close(dy.abs(), dx.abs(), 1e-9, "hatch angle 45°");
     }
     let indicator = lines.iter().filter(|(from, to)| (to[1] - from[1]).abs() <= 1e-9 && (to[0] - from[0]).abs() > 1e-9).count();
-    assert_eq!(indicator, 1, "one horizontal cutting-plane indicator line");
+    assert_eq!(indicator, 2, "one horizontal cutting-plane indicator split around its measured value");
     let texts = texts_on(&result, "views");
     assert!(texts.iter().any(|(content, _)| content == "SECTION A-A"));
+    assert!(texts.iter().any(|(content, _)| content == "40"), "the indicator carries the measured width");
 }
 
 #[test]
@@ -420,10 +421,8 @@ fn exploded_assembly_balloons_number_components() {
     assert!(items[1]["center"][1].as_f64().unwrap() > items[0]["center"][1].as_f64().unwrap(), "the cover explodes above the base");
     let circles = circles_on(&result, "views");
     assert_eq!(circles.len(), 2, "one balloon per component");
-    assert!(
-        (circles[0].0[0] - circles[1].0[0]).abs() > 1.0 && (circles[0].0[1] - circles[1].0[1]).abs() > 1.0,
-        "balloons sit on a ring instead of one column"
-    );
+    assert_close(circles[0].0[0], circles[1].0[0], 1e-9, "balloons share one vertical column");
+    assert!((circles[0].0[1] - circles[1].0[1]).abs() > 1.0, "balloons are spread along the column");
     let texts = texts_on(&result, "views");
     let contents: Vec<&str> = texts.iter().map(|(content, _)| content.as_str()).collect();
     for want in ["1", "2", "BASE", "COVER", "BILL OF MATERIALS", "ITEM", "PART", "QTY", "MATERIAL", "STEEL", "ALLOY"] {
