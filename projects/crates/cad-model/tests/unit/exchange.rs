@@ -28,6 +28,51 @@ fn lightened_colour_keeps_its_channel_order() {
 }
 
 #[test]
+fn png_export_is_deterministic_and_self_contained() {
+    let mut drawing = Drawing::empty(Some(String::from("Plot")), Units::Mm);
+    drawing.entities.push(Entity {
+        id: String::from("entity-1"),
+        layer: String::from("0"),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [100.0, 40.0] },
+    });
+    drawing.entities.push(Entity {
+        id: String::from("entity-2"),
+        layer: String::from("0"),
+        kind: EntityKind::Text { at: [5.0, 5.0], height: 5.0, content: String::from("HELLO 12") },
+    });
+    let first = png(&drawing, PNG_DEFAULT_DPI).expect("png");
+    let second = png(&drawing, PNG_DEFAULT_DPI).expect("png");
+    assert_eq!(first.content, second.content, "the encoding is byte-stable");
+    assert!(first.content.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]), "PNG signature");
+    let width = u32::from_be_bytes(first.content[16..20].try_into().unwrap()) as usize;
+    let height = u32::from_be_bytes(first.content[20..24].try_into().unwrap()) as usize;
+    assert_eq!(width, first.width);
+    assert_eq!(height, first.height);
+    assert!(first.width > 500 && first.height > 500, "an A4 page at {} dpi", PNG_DEFAULT_DPI);
+    let idat = first.content.windows(4).position(|window| window == b"IDAT").expect("IDAT chunk");
+    let length = u32::from_be_bytes(first.content[idat - 4..idat].try_into().unwrap()) as usize;
+    let data = &first.content[idat + 4..idat + 4 + length];
+    assert_eq!(&data[..2], &[0x78, 0x01], "zlib header");
+    assert_eq!(data[2] & 0b0000_0110, 0, "stored deflate blocks");
+    assert!(first.losses.is_empty(), "the bitmap font carries the ASCII text: {:?}", first.losses);
+}
+
+#[test]
+fn png_export_reports_missing_glyphs_and_rejects_bad_resolutions() {
+    let mut drawing = Drawing::empty(None, Units::Mm);
+    drawing.entities.push(Entity {
+        id: String::from("entity-1"),
+        layer: String::from("0"),
+        kind: EntityKind::Text { at: [5.0, 5.0], height: 5.0, content: String::from("Ω") },
+    });
+    let report = png(&drawing, 96.0).expect("png");
+    assert!(report.losses.iter().any(|loss| loss.code == "png/text-glyph"), "an unsupported glyph is reported");
+    assert!(png(&drawing, 0.0).is_err(), "zero dpi is refused");
+    assert!(png(&drawing, f64::NAN).is_err(), "a non-finite dpi is refused");
+    assert!(png(&drawing, 4000.0).is_err(), "an oversized raster is refused");
+}
+
+#[test]
 fn every_dimension_kind_lowers_solid_arrowheads() {
     let mut drawing = Drawing::empty(None, Units::Mm);
     drawing.entities.push(Entity {

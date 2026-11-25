@@ -28,8 +28,8 @@ use std::{
 
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
-    DrawOrderAction, ExplodedAssemblyRequest, ExtendSide, HatchPatternRequest, HoleTableRequest, IsometricViewRequest, JoinRequest,
-    LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis, MultiViewSheetRequest, OffsetSide, OrdinateAxis, OverkillRequest,
+    DrawOrderAction, ExplodedAssemblyRequest, ExportOptions, ExtendSide, HatchPatternRequest, HoleTableRequest, IsometricViewRequest,
+    JoinRequest, LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis, MultiViewSheetRequest, OffsetSide, OrdinateAxis, OverkillRequest,
     PolylineChamferRequest, QuantityTableRequest, SectionViewRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest,
     TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
@@ -134,7 +134,14 @@ fn drawing_export(ctx: CallContext) -> Result<JsValue> {
     let handle = handle(&ctx, 0)?;
     let format = text(&ctx, 1)?;
     let path = text(&ctx, 2)?;
-    let report = open_cad_drawing::export(handle, &format, Path::new(&path)).map_err(fail)?;
+    let options = match ctx.args().get(3) {
+        Some(value) => {
+            let request = parse_request(&value.as_string()?)?;
+            ExportOptions { thickness: optional_number(&request, "thickness"), dpi: optional_number(&request, "dpi") }
+        }
+        None => ExportOptions::default(),
+    };
+    let report = open_cad_drawing::export_with_options(handle, &format, Path::new(&path), options).map_err(fail)?;
     respond(&ctx, &report)
 }
 

@@ -698,8 +698,9 @@ cli
 
 cli
     .command('export', 'cli.cmd.export')
-    .option('--format <format>', 'cli.opt.format', { enum: ['dxf', 'dxf-r12', 'obj', 'step', 'stl', 'svg', 'pdf', 'iges'] })
+    .option('--format <format>', 'cli.opt.format', { enum: ['dxf', 'dxf-r12', 'obj', 'step', 'stl', 'svg', 'pdf', 'png', 'iges'] })
     .option('--out <file>', 'cli.opt.out')
+    .option('--dpi <number>', 'cli.opt.dpi')
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
         if (file === undefined) {
@@ -718,7 +719,7 @@ cli
         }
         const opened = await guard(ctx, () => app.open({ path: file }));
         try {
-            const report = await guard(ctx, () => opened.export({ format, target: out }));
+            const report = await guard(ctx, () => opened.export({ format, target: out, dpi: number(options, 'dpi') }));
             ctx.emitResult(report, `exported ${report.target} format=${report.format} revision=${report.revision}`);
             return 0;
         } finally {

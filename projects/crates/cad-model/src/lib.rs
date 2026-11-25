@@ -25,6 +25,7 @@ use serde_json::{Map, Value, json};
 mod exchange;
 mod import;
 mod inspection;
+mod png;
 mod schema;
 mod store;
 mod views;
@@ -48,7 +49,6 @@ pub const NOT_IMPLEMENTED: &str = "capability/not-implemented";
 
 /// Formats the product must classify.
 pub const DRAWING_FORMATS: &[&str] = &["dwg", "dxf", "step", "stp", "iges", "igs", "stl", "obj", "svg", "pdf", "png", "jpg"];
-
 /// Inspection checks exposed by [`capabilities`].
 pub const INSPECT_CHECKS: &[&str] = &[
     "units",
@@ -71,7 +71,7 @@ pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
 pub const ARRAY_MODES: &[&str] = &["rectangular", "polar"];
 
 /// Exchange formats [`export`] knows about.
-pub const EXPORT_TARGETS: &[&str] = &["dxf", "dxf-r12", "obj", "step", "stl", "svg", "pdf", "iges"];
+pub const EXPORT_TARGETS: &[&str] = &["dxf", "dxf-r12", "obj", "step", "stl", "svg", "pdf", "png", "iges"];
 
 const FILE_FORMAT: &str = "open-cad-drawing";
 const FILE_VERSION: u64 = 1;
@@ -144,7 +144,7 @@ pub fn capabilities() -> Value {
 
     let format_level = |name: &str| match name {
         "svg" | "pdf" => "supported",
-        "dxf" | "step" | "obj" | "iges" | "igs" => "partial",
+        "dxf" | "step" | "obj" | "iges" | "igs" | "png" => "partial",
         _ => "unsupported",
     };
     let check_level = |name: &str| match name {
@@ -158,7 +158,7 @@ pub fn capabilities() -> Value {
         _ => "unsupported",
     };
     let export_level = |name: &str| match name {
-        "svg" | "dxf" | "dxf-r12" | "pdf" | "stl" | "step" | "obj" | "iges" => "supported",
+        "svg" | "dxf" | "dxf-r12" | "pdf" | "png" | "stl" | "step" | "obj" | "iges" => "supported",
         _ => "unsupported",
     };
 
@@ -539,15 +539,18 @@ pub struct ExportOptions {
     /// Extrusion thickness for `stl` and `step`, in drawing units. `None` uses
     /// 1.0.
     pub thickness: Option<f64>,
+    /// Resolution of the `png` raster in pixels per inch. `None` uses 144.
+    pub dpi: Option<f64>,
 }
 
 /// Projects one drawing into an exchange format.
 ///
-/// `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj`, `step` and `iges` are written
-/// atomically and report any loss. The STL, OBJ and STEP writers extrude closed
-/// profiles with the default thickness; use [`export_with_options`] to choose
-/// another. The IGES writer projects planar geometry only and reports its
-/// `entities` count in the export report. An unknown format reports
+/// `svg`, `dxf`, `dxf-r12`, `pdf`, `png`, `stl`, `obj`, `step` and `iges` are
+/// written atomically and report any loss. The STL, OBJ and STEP writers extrude
+/// closed profiles with the default thickness; use [`export_with_options`] to
+/// choose another. The IGES writer projects planar geometry only and reports its
+/// `entities` count. The PNG writer rasterises the same sheet the PDF writer
+/// lays out and reports its `image` size. An unknown format reports
 /// `format/unsupported`.
 pub fn export(handle: u64, format: &str, path: &Path) -> Result<Value, ServiceError> {
     export_with_options(handle, format, path, ExportOptions::default())
@@ -556,49 +559,65 @@ pub fn export(handle: u64, format: &str, path: &Path) -> Result<Value, ServiceEr
 /// Projects one drawing into an exchange format with explicit options.
 ///
 /// The report carries `{ revision, format, target, path, bytes, losses,
-/// editable }` plus `triangles` for STL and OBJ and `faces` for STEP.
+/// editable }` plus `triangles` for STL and OBJ, `faces` for STEP and `image`
+/// for PNG.
 pub fn export_with_options(handle: u64, format: &str, path: &Path, options: ExportOptions) -> Result<Value, ServiceError> {
     let format = format.trim().to_ascii_lowercase();
     store::persist(handle, |drawing| {
         let mut triangles: Option<usize> = None;
         let mut faces: Option<usize> = None;
         let mut entities: Option<usize> = None;
+        let mut image: Option<(usize, usize)> = None;
         let (contents, losses) = match format.as_str() {
-            "svg" => (exchange::svg(drawing), Vec::new()),
-            "dxf" => exchange::dxf(drawing),
-            "dxf-r12" => exchange::dxf_r12(drawing),
-            "pdf" => exchange::pdf(drawing),
+            "svg" => (exchange::svg(drawing).into_bytes(), Vec::new()),
+            "dxf" => {
+                let (content, losses) = exchange::dxf(drawing);
+                (content.into_bytes(), losses)
+            }
+            "dxf-r12" => {
+                let (content, losses) = exchange::dxf_r12(drawing);
+                (content.into_bytes(), losses)
+            }
+            "pdf" => {
+                let (content, losses) = exchange::pdf(drawing);
+                (content.into_bytes(), losses)
+            }
+            "png" => {
+                let report = exchange::png(drawing, options.dpi.unwrap_or(exchange::PNG_DEFAULT_DPI)).map_err(argument)?;
+                image = Some((report.width, report.height));
+                (report.content, report.losses)
+            }
             "stl" => {
                 let report = exchange::stl(drawing, options.thickness.unwrap_or(exchange::STL_DEFAULT_THICKNESS));
                 triangles = Some(report.triangles);
-                (report.content, report.losses)
+                (report.content.into_bytes(), report.losses)
             }
             "obj" => {
                 let report = exchange::obj(drawing, options.thickness.unwrap_or(exchange::STL_DEFAULT_THICKNESS));
                 triangles = Some(report.triangles);
-                (report.content, report.losses)
+                (report.content.into_bytes(), report.losses)
             }
             "step" => {
                 let report = exchange::step(drawing, options.thickness.unwrap_or(exchange::STL_DEFAULT_THICKNESS));
                 faces = Some(report.faces);
-                (report.content, report.losses)
+                (report.content.into_bytes(), report.losses)
             }
             "iges" => {
                 let module = exchange::iges(drawing);
                 entities = Some(module.entities);
-                (module.content, module.losses)
+                (module.content.into_bytes(), module.losses)
             }
             other => {
                 return Err(ServiceError::new(
                     "format/unsupported",
                     format!(
-                        "`{other}` is not an export target of this build; use `svg`, `dxf`, `dxf-r12`, `pdf`, `stl`, `obj`, `step` or `iges`"
+                        "`{other}` is not an export target of this build; use `svg`, `dxf`, `dxf-r12`, `pdf`, `png`, `stl`, `obj`, `step` or `iges`"
                     ),
                 ));
             }
         };
         let bytes = contents.len();
-        write_atomic(path, contents.as_bytes())
+        write_atomic(path, &contents)
             .map_err(|error| ServiceError::new("drawing/io-error", format!("could not write `{}`: {error}", path.display())))?;
         let mut report = json!({
             "revision": drawing.revision,
@@ -617,6 +636,9 @@ pub fn export_with_options(handle: u64, format: &str, path: &Path, options: Expo
         }
         if let Some(entities) = entities {
             report["entities"] = json!(entities);
+        }
+        if let Some((width, height)) = image {
+            report["image"] = json!({ "width": width, "height": height });
         }
         Ok(report)
     })

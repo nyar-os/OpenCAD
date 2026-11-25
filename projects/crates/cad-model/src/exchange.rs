@@ -1496,6 +1496,46 @@ pub(crate) fn pdf(drawing: &Drawing) -> (String, Vec<Loss>) {
     (out, losses)
 }
 
+/// Default raster resolution of the PNG export, in pixels per inch.
+pub(crate) const PNG_DEFAULT_DPI: f64 = 144.0;
+
+/// One encoded PNG and the text the raster could not draw.
+pub(crate) struct PngReport {
+    /// Encoded PNG bytes.
+    pub(crate) content: Vec<u8>,
+    /// Warning losses.
+    pub(crate) losses: Vec<Loss>,
+    /// Image width in pixels.
+    pub(crate) width: usize,
+    /// Image height in pixels.
+    pub(crate) height: usize,
+}
+
+/// Rasterises one drawing onto the same page the PDF writer lays out.
+///
+/// The PNG keeps the sheet frame, the title block and every visible entity at
+/// the requested resolution. Text paints through a built-in 5x7 bitmap font;
+/// characters outside that set are left blank and reported as
+/// `png/text-glyph`. The encoding is self-contained and byte-stable, so the
+/// same drawing and resolution always produce identical bytes.
+///
+/// A non-finite or non-positive `dpi`, or one that would exceed the raster
+/// limits, returns an argument message.
+pub(crate) fn png(drawing: &Drawing, dpi: f64) -> Result<PngReport, String> {
+    let (flat, _) = pdf_page(drawing);
+    let raster = crate::png::render(&flat, dpi)?;
+    let mut losses = Vec::new();
+    if raster.missing_glyphs > 0 {
+        losses.push(Loss::warning(
+            "png/text-glyph",
+            None,
+            None,
+            format!("{} character(s) without a bitmap glyph were left blank", raster.missing_glyphs),
+        ));
+    }
+    Ok(PngReport { content: raster.content, losses, width: raster.width, height: raster.height })
+}
+
 /// Default extrusion thickness of an STL projection, in drawing units.
 pub(crate) const STL_DEFAULT_THICKNESS: f64 = 1.0;
 

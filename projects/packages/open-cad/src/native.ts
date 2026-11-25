@@ -20,7 +20,7 @@ export interface NativeBinding {
     drawing_open(path: string): string;
     drawing_save(handle: number, path: string, overwrite: boolean): string;
     drawing_inspect(handle: number, checksJson?: string): string;
-    drawing_export(handle: number, format: string, path: string): string;
+    drawing_export(handle: number, format: string, path: string, optionsJson?: string): string;
     drawing_close(handle: number): boolean;
     drawing_add_line(handle: number, requestJson: string): string;
     drawing_add_point(handle: number, requestJson: string): string;

@@ -107,6 +107,7 @@ fn capability_matrix_matches_the_implemented_surface() {
     assert_eq!(matrix["exportTargets"]["obj"], json!("supported"));
     assert_eq!(matrix["exportTargets"]["step"], json!("supported"));
     assert_eq!(matrix["exportTargets"]["iges"], json!("supported"), "the IGES export subset is wired");
+    assert_eq!(matrix["exportTargets"]["png"], json!("supported"), "the PNG raster export is wired");
     assert_eq!(matrix["formats"]["stl"], json!("unsupported"), "the STL reader stays unsupported");
     assert_eq!(matrix["formats"]["dwg"], json!("unsupported"));
 }
@@ -3053,7 +3054,7 @@ fn stl_export_extrudes_a_closed_profile() {
     assert_eq!(stl.matches("vertex").count(), 60);
 
     let thick = dir.path.join("thick.stl");
-    let thick_report = export_with_options(handle, "stl", &thick, ExportOptions { thickness: Some(2.5) }).expect("export thick stl");
+    let thick_report = export_with_options(handle, "stl", &thick, ExportOptions { thickness: Some(2.5), dpi: None }).expect("export thick stl");
     assert_eq!(thick_report["triangles"], json!(20));
     let thick_text = fs::read_to_string(&thick).expect("read thick stl");
     assert!(thick_text.contains("2.5\n"), "the configured thickness reaches the vertices");
@@ -6749,12 +6750,39 @@ fn empty_drawing_exports_every_supported_format_without_panic() {
     let dir = TempDir::new("empty-export");
     let created = create(CreateRequest::default()).expect("an empty drawing is created");
     let handle = handle_of(&created);
-    for format in ["svg", "dxf", "dxf-r12", "pdf", "stl", "obj", "step", "iges"] {
+    for format in ["svg", "dxf", "dxf-r12", "pdf", "png", "stl", "obj", "step", "iges"] {
         let target = dir.path.join(format!("empty.{format}"));
         let report = export(handle, format, &target).unwrap_or_else(|error| panic!("`{format}` failed: {}", error.message));
         let bytes = report["bytes"].as_u64().expect("the report counts bytes");
         assert!(bytes > 0, "`{format}` wrote an empty file for an empty drawing");
     }
+    close(handle).expect("close");
+}
+
+#[test]
+fn png_export_writes_a_deterministic_raster_and_reports_its_size() {
+    let dir = TempDir::new("png-export");
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    add_line(handle, "0", [0.0, 0.0], [100.0, 40.0]).expect("line");
+    add_text(handle, "0", [5.0, 5.0], 5.0, "NOTE 1").expect("text");
+    let first_path = dir.path.join("plan.png");
+    let report = export_with_options(handle, "png", &first_path, ExportOptions { thickness: None, dpi: Some(96.0) }).expect("png export");
+    assert_eq!(report["format"], "png");
+    assert_eq!(report["editable"], false);
+    let width = report["image"]["width"].as_u64().expect("image width");
+    let height = report["image"]["height"].as_u64().expect("image height");
+    assert!(width > 700 && height > 500, "an A4 raster at 96 dpi is {width}x{height}");
+    let first = fs::read(&first_path).expect("read png");
+    assert!(first.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]), "PNG signature");
+    let second_path = dir.path.join("plan-again.png");
+    export_with_options(handle, "png", &second_path, ExportOptions { thickness: None, dpi: Some(96.0) }).expect("png export again");
+    let second = fs::read(&second_path).expect("read second png");
+    assert_eq!(first, second, "the same drawing and dpi produce identical bytes");
+    assert_eq!(
+        export_with_options(handle, "png", &first_path, ExportOptions { thickness: None, dpi: Some(0.0) }).expect_err("zero dpi").code,
+        "session/argument-invalid"
+    );
     close(handle).expect("close");
 }
 

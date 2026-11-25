@@ -229,8 +229,8 @@ export function inspect(handle: number, checks?: ReadonlyArray<InspectCheck>): I
 }
 
 /** Projects one open drawing into an exchange format. */
-export function exportDrawing(handle: number, format: ExportFormat, target: string): ExportReport {
-    return decode<ExportReport>(() => binding('export').drawing_export(handle, format, target));
+export function exportDrawing(handle: number, format: ExportFormat, target: string, dpi?: number): ExportReport {
+    return decode<ExportReport>(() => binding('export').drawing_export(handle, format, target, JSON.stringify({ dpi })));
 }
 
 /** Adds a line to one layer. */

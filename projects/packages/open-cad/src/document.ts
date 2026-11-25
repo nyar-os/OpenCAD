@@ -336,7 +336,7 @@ export class DrawingDocument {
     /** Projects this document into an exchange format. */
     export(options: ExportOptions): ExportReport {
         this.assertOpen();
-        return service.exportDrawing(this.handle, options.format, options.target);
+        return service.exportDrawing(this.handle, options.format, options.target, options.dpi);
     }
 
     /** Lists every entity in this document. */

@@ -87,7 +87,7 @@ export type OperationName =
 export type RenderFormat = 'svg' | 'png' | 'pdf';
 
 /** Exchange formats `export()` can write. */
-export type ExportFormat = 'dxf' | 'dxf-r12' | 'obj' | 'step' | 'stl' | 'svg' | 'pdf' | 'iges';
+export type ExportFormat = 'dxf' | 'dxf-r12' | 'obj' | 'step' | 'stl' | 'svg' | 'pdf' | 'png' | 'iges';
 
 /** Hard limits applied before work starts. */
 export interface ResourceBudgets {
@@ -2149,6 +2149,8 @@ export interface ExportOptions {
     readonly format: ExportFormat;
     readonly target: string;
     readonly overwrite?: boolean;
+    /** Resolution of a `png` raster in pixels per inch; defaults to 144. */
+    readonly dpi?: number;
 }
 
 /** One thing a projection could not keep. */
@@ -2173,6 +2175,8 @@ export interface ExportReport {
     readonly triangles?: number;
     /** Planar faces written by a `step` projection. */
     readonly faces?: number;
+    /** Pixel size of a `png` raster. */
+    readonly image?: { readonly width: number; readonly height: number };
     readonly losses: readonly ExportLoss[];
     /** False for projections such as PDF that cannot be reopened for editing. */
     readonly editable: boolean;

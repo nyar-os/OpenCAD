@@ -113,6 +113,8 @@ test('format registry classifies the drawing format family', () => {
     assert.equal(formatInfo('svg').opensAs, 'drawing', 'the SVG import subset lets a file open as a drawing');
     assert.equal(formatInfo('pdf').family, 'document');
     assert.equal(formatInfo('png').family, 'raster');
+    assert.equal(formatInfo('png').exchangeTarget, true, 'the PNG raster export is wired');
+    assert.equal(formatInfo('jpg').exchangeTarget, false);
 
     assert.equal(formatFromPath('Site-Plan.DXF'), 'dxf');
     assert.equal(formatFromPath('plan.ocad'), undefined);
@@ -142,6 +144,8 @@ test('capability matrix matches the implemented core', { skip: withAddon }, asyn
     assert.equal(matrix.exportTargets.obj, 'supported');
     assert.equal(matrix.exportTargets.step, 'supported');
     assert.equal(matrix.exportTargets.iges, 'supported', 'the IGES export subset is wired');
+    assert.equal(matrix.exportTargets.png, 'supported', 'the PNG raster export is wired');
+    assert.equal(matrix.formats.png, 'partial', 'PNG is export-only');
     assert.equal(matrix.formats.stl, 'unsupported', 'the STL reader stays unsupported');
     assert.equal(matrix.formats.obj, 'partial', 'OBJ is export-only');
     assert.equal(matrix.formats.step, 'partial', 'STEP is export-only');
@@ -224,6 +228,21 @@ test('drawing core round trip, inspection and export', { skip: withAddon }, asyn
         assert.match(pdf, /xref/);
         assert.match(pdf, /trailer/);
         assert.ok(pdf.trimEnd().endsWith('%%EOF'));
+
+        const pngPath = path.join(dir, 'plan.png');
+        const pngReport = document.export({ format: 'png', target: pngPath, dpi: 96 });
+        assert.equal(pngReport.format, 'png');
+        assert.equal(pngReport.editable, false);
+        assert.ok((pngReport.image?.width ?? 0) > 0);
+        const png = fs.readFileSync(pngPath);
+        assert.deepEqual([...png.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const pngAgainPath = path.join(dir, 'plan-again.png');
+        document.export({ format: 'png', target: pngAgainPath, dpi: 96 });
+        assert.deepEqual(fs.readFileSync(pngAgainPath), png, 'the raster bytes are deterministic');
+        assert.throws(
+            () => document.export({ format: 'png', target: pngPath, dpi: 0 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
 
         const stepPath = path.join(dir, 'plan.step');
         const stepReport = document.export({ format: 'step', target: stepPath });
