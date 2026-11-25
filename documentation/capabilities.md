@@ -38,7 +38,8 @@ Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `offset`, `trim`, `extend`, `break`, `join`, `fillet`, `chamfer`, `align`,
 `distribute`, `stretch`, `overkill`, `hatch-pattern`, `title-block`,
 `polyline-smooth`, `polyline-chamfer`, `diff`, `quantity-table`,
-`multiview-sheet`, `section-view`, `leader-note`, `measure`,
+`multiview-sheet`, `section-view`, `leader-note`, `isometric-view`,
+`exploded-assembly`, `hole-table`, `measure`,
 `measure-entity`, `measure-points`, `stats`,
 `dimension-style`, `text-style`, `text-search`, `group`, `select`, `properties`,
 `snap`, `linetype`, `ucs`.
@@ -208,14 +209,17 @@ draw hatch boundary polygons, not the pattern definition; the line entities
 
 Both formats draw the same engineering sheet: two borders inset from the sheet
 edge and a title block in the lower-right corner of the inner border carrying
-the drawing title, the author/company/project byline, the declared units and the
-current revision. SVG is the only renderer. PDF is A4 landscape with one
-uniform fit into the area left by the inner border and the title block, so
-geometry never crosses either of them. After fitting, PDF keeps every text
-entity — notes and title-block text included, not only dimension labels — at
-the 7 pt legible print floor. A linear dimension whose span cannot hold two
-arrowheads and the label draws both arrowheads outside the extension lines
-pointing inward, so the label never sits inside crossing arrows. PDF
+the drawing title, drawing number, author/company/project byline, scale, units,
+sheet count, revision and a first- or third-angle projection symbol. SVG is the
+only renderer. PDF is A4 landscape with one uniform fit into the area left by
+the inner border and the title block, so geometry never crosses either of them.
+When the drawing already carries a `title-block` frame on the `titleblock`
+layer, both exporters plot the authored A3/A4/A2 page at 1:1 instead — no second
+frame is added and the PDF page matches the sheet size. After fitting, PDF keeps
+every text entity — notes and title-block text included, not only dimension
+labels — at the 7 pt legible print floor. A linear dimension whose span cannot
+hold two arrowheads and the label draws both arrowheads outside the extension
+lines pointing inward, so the label never sits inside crossing arrows. PDF
 approximates arcs and ellipses with cubic Bezier segments and reports
 `pdf/text-encoding` when a character cannot be
 encoded, including characters in the title block. PDF is not editable:
@@ -609,20 +613,26 @@ including locked and frozen layers
 
 ## Title block
 
-`titleBlock(request)` draws a sheet frame and a title block on one layer. The
-sheet is a rectangle at the origin (`width` × `height`, A3 landscape by
-default); the operation writes an outer border, an inner frame inset by
-`margin`, a block frame in the bottom-right corner and one row per field:
-Title, Number, Revision, Scale, Date, Author and Sheet. A label column and one
-value column sit inside the block. Values default to the drawing title, id,
-revision, `1:1`, an empty date, the drawing author and `1`; an override wins and
-an empty override renders a blank cell, so only the grid remains. Everything is
-a real `line` or `text` entity with a fresh deterministic id on `layer`
-(default `titleblock`, created with a neutral colour when missing).
+`titleBlock(request)` draws a standard sheet frame and a compact five-row title
+block on one layer. `format` selects A4, A3 (default) or A2 and `orientation`
+picks landscape or portrait; explicit `width` / `height` apply when no format is
+given. The operation writes an outer border, an inner frame inset by `margin`
+and a block frame in the bottom-right corner; the rows carry the title and
+number, revision, scale, sheet count, units, author and date, plus a first- or
+third-angle projection symbol. Values default to the drawing title, id,
+revision, `1:1`, drawing units, `1`, author and an empty date; an override wins
+and an empty override renders a blank cell, so only the grid remains. Existing
+geometry is translated into the free area above the block so the frame can be
+applied to any view; geometry that does not fit reports
+`titleblock/content-overflow` instead of being clipped. Everything is a real
+`line`, `polyline`, `circle` or `text` entity with a fresh deterministic id on
+`layer` (default `titleblock`, created with a neutral colour when missing).
+Exporters recognise that layer and plot the authored page at 1:1 without adding
+a second frame.
 
-`width`, `height`, `margin` and `textHeight` default to the A3 landscape size,
-`10` and `3.5`. The response carries `{ revision, drawing, created }`. The edit
-is one history step and one revision.
+`format`, `orientation`, `margin` and `textHeight` default to the A3 landscape
+size, `10` and `3.5`. The response carries `{ revision, drawing, created }`. The
+edit is one history step and one revision.
 
 | Code | Cause |
 | :--- | :--- |
@@ -904,6 +914,15 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
 - Drawing diff matches entities and layers by their stable id only. It does not
   compare geometry by tolerance, styles, line types, groups, layouts, draw order
   or revisions, and it does not write a merged drawing.
+- Exploded assemblies list every component as its own BOM row; identical parts
+  are not grouped or rolled up, the table has four fixed columns and the
+  balloons cover at most 64 items. Detail (enlarged) views are not generated.
+- Multi-view, section, isometric and exploded views are flat drawings: they
+  project the declared feature model and do not replace or edit the source
+  solids, and the hidden outlines are not trimmed against one another.
+- Hole tables tabulate the declared `cylinder` voids only: they do not detect
+  holes from solids, bores, countersinks or other features, and the table is a
+  static snapshot that a later edit does not refresh.
 - Valid colours are `#rrggbb`; lineweights are `0`–`10` mm; the line-type
   pattern holds at most 12 finite positive entries.
 - The model does not enforce arbitrary user metadata; only the declared

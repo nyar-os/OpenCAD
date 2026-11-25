@@ -246,18 +246,26 @@ every exporter carries the fill. A solid fill reports
 zero-area boundary reports `hatch/degenerate-boundary`; a non-positive
 `--spacing` reports `hatch/invalid-spacing`.
 
-`title-block` adds a sheet frame and a title block to a drawing and saves the
-file. The sheet defaults to A3 landscape, the frame to a 10-unit margin and the
-block to the `titleblock` layer, which is created when missing. The block
-carries Title, Number, Revision, Scale, Date, Author and Sheet; each can be
-overridden and an empty override leaves the cell blank. A sheet too small for
-the frame reports `titleblock/invalid-sheet`.
+`title-block` adds a standard sheet frame and a compact five-row title block to
+an existing drawing and saves the file. `--format a4|a3|a2` picks a standard
+sheet, `--orientation landscape|portrait` rotates it, and explicit `--width` /
+`--height` values apply when no format is given. The sheet defaults to A3
+landscape, the frame to a 10-unit margin and the block to the `titleblock`
+layer, which is created when missing. The block carries the drawing title,
+number, revision, scale, units, sheet count, author, date and a first- or
+third-angle projection symbol (`--projection first|third`); each field can be
+overridden and an empty override leaves the cell blank. Existing geometry is
+translated into the free area above the block, so the frame can be applied to
+any view; geometry that cannot fit reports `titleblock/content-overflow` and a
+sheet too small for the frame reports `titleblock/invalid-sheet`. The exporters
+recognise the `titleblock` layer and plot the authored A3/A4 page at 1:1
+instead of adding a second frame.
 
 ```bash
 open-cad entity hatch-pattern plan.ocad --id entity-7 --angle 45 --spacing 4
 open-cad entity hatch-pattern plan.ocad --id entity-7 --spacing 6 --cross on
-open-cad title-block plan.ocad --title "Pump skid" --number A-101 --revision C --scale 1:50 --date 2026-11-23
-open-cad title-block plan.ocad --layer Sheet --width 200 --height 150 --margin 8
+open-cad title-block plan.ocad --format a4 --title "Pump skid" --number A-101 --revision C --scale 1:50 --date 2026-11-23
+open-cad title-block plan.ocad --layer Sheet --width 200 --height 150 --margin 8 --projection third
 ```
 
 `polyline smooth` rounds the corners of one polyline with Chaikin corner
@@ -309,6 +317,9 @@ open-cad --json diff current.ocad baseline.ocad > diff.json
 | `multiview-sheet` | `--part '<json>'`, `--projection first\|third`, `--scale n`, `--text-height n`, `--origin x,y`, `--layer <name>` |
 | `section-view` | `--part '<json>'`, `--axis x\|y\|z`, `--at n`, `--hatch-angle deg`, `--hatch-spacing n`, `--text-height n`, `--origin x,y`, `--label <text>`, `--layer <name>` |
 | `leader-note` | `--points "x,y x,y ..."`, `--text <note>`, `--text-height n`, `--arrow on\|off`, `--layer <name>` |
+| `isometric-view` | `--part '<json>'`, `--scale n`, `--text-height n`, `--origin x,y`, `--label <text>`, `--layer <name>` |
+| `exploded-assembly` | `--components '<json>'`, `--scale n`, `--text-height n`, `--origin x,y`, `--layer <name>` |
+| `hole-table` | `--part '<json>'`, `--origin x,y`, `--text-height n`, `--title <text>`, `--layer <name>` |
 | `select` | `--box x1,y1,x2,y2`, `--crossing`, `--layer <name>` |
 | `snap` | `--modes <list>`, `--near x,y`, `--tolerance n`, `--layer <name>`, `--ids a,b` |
 | `ucs` | `--origin x,y`, `--rotation deg`, `--direction to-world\|to-ucs`, `--points "x,y ..."`, `--ids a,b` (at least one of points or ids) |
@@ -362,13 +373,13 @@ open-cad quantity-table plan.ocad --group-by type --layer Schedule --title "Bill
 `cylinder` and `cone` (`axis`, `center`, `from`, `to`, `radius` or
 `baseRadius`/`topRadius`), `sphere` (`center`, `radius`) and `wedge` (`min`,
 `max`, `topFrom`, `topTo`) — onto the sheet as first- or third-angle front,
-top and left views plus an isometric view, each with a label, and draws the
-ISO projection symbol; void features project as dashed hidden outlines on a
-`hidden` layer. `--scale` scales every view, `--origin` places the lower-left
-corner of the group and `--layer` (default `views`, created when missing)
-carries the outlines, labels and symbol; the result reports the placed view
-boxes. A part without solids, a non-positive `--scale` or a malformed `--part`
-reports `session/argument-invalid`.
+top and left views plus an isometric view, each with a label and a `SCALE n:n`
+line beneath it, and draws the ISO projection symbol; void features project as
+dashed hidden outlines on a `hidden` layer. `--scale` scales every view,
+`--origin` places the lower-left corner of the group and `--layer` (default
+`views`, created when missing) carries the outlines, labels and symbol; the
+result reports the placed view boxes. A part without solids, a non-positive
+`--scale` or a malformed `--part` reports `session/argument-invalid`.
 
 `section-view` cuts the same part model by a plane perpendicular to `--axis`
 at `--at` and draws the cut outline with hatch lines at `--hatch-angle`
@@ -385,10 +396,44 @@ points, repeated consecutive points, a blank note or a non-positive
 `--text-height` reports `session/argument-invalid`; a locked or frozen target
 layer reports `drawing/layer-locked` or `drawing/layer-frozen`.
 
+`isometric-view` projects the same part model into a single standalone
+isometric view with a caption (`--label`, default `ISOMETRIC`) centred below
+it and a three-line `X`/`Y`/`Z` axis indicator at its upper right; solids land
+on `--layer` (default `views`) and voids as dashed outlines on a `hidden`
+layer. `--scale`, `--origin` and the part validation behave as for
+`multiview-sheet`.
+
+`exploded-assembly` takes `--components` as a JSON array
+`[{"name":"...","part":{...},"position":[x,y,z],"explode":[x,y,z],"quantity":n,"material":"..."}]`
+of at most 64 parts, projects each one isometrically at `position + explode`
+and places its numbered balloon on a ring around the group, evenly spaced by
+angle so the balloons clear the outlines. Each balloon carries the 1-based
+index, leads to the nearest point of its component outline and shows the
+optional `name` outside the ring. A framed `BILL OF MATERIALS` table is drawn
+below the group with `ITEM`, `PART`, `QTY` and `MATERIAL` columns from the
+component order, `quantity` (default `1`) and material; the columns share fixed
+fractions of the table width so header and cells align. `--scale`, `--origin`
+and `--layer` (default `views`) behave as for `isometric-view`.
+
+`hole-table` tabulates every `cylinder` void of the part model as one row —
+`No.`, `Axis`, `Pos A`, `Pos B`, `Dia`, `Depth`, where the two positions are
+the coordinates transverse to the hole axis in ascending axis order — inside a
+framed table with a caption row (`--title`, default `HOLE TABLE`, suppressed
+by `--title ""`). The bottom-left corner comes from `--origin`, the width is
+`70 × --text-height` (default `3.5`) and every row is `2.5 × --text-height`
+tall, all on `--layer` (default `holes`, created when missing). A part without
+cylindrical voids reports `hole-table/empty`; an empty or malformed
+`--components` array, a non-positive `--text-height` and a non-finite
+`--origin` report `session/argument-invalid`; a locked or frozen layer reports
+`drawing/layer-locked` or `drawing/layer-frozen`.
+
 ```bash
 open-cad multiview-sheet bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --projection third
 open-cad section-view bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --axis z --at 4
 open-cad leader-note bracket.ocad --points "10,4 26,4 26,14" --text "R5"
+open-cad isometric-view bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --origin 90,0
+open-cad exploded-assembly bracket.ocad --components '[{"name":"BASE","part":{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,10]}]}},{"name":"PLATE","part":{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,2]}]},"position":[0,0,10],"explode":[0,0,30]}]'
+open-cad hole-table bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,10]}],"voids":[{"kind":"cylinder","axis":"z","center":[10,10],"from":0,"to":10,"radius":3}]}'
 ```
 
 ## Layers
