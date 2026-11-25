@@ -20,7 +20,7 @@ Every unsupported route answers with `capability/not-implemented`.
 | :--- | :--- | :--- |
 | `.ocad` project JSON | partial | Format version 1, create/open/save/reopen. The same file is the CLI's unit of work. |
 | DXF | partial | Declared ASCII import subset plus `dxf` and `dxf-r12` export. |
-| SVG | supported | Preview renderer and export target. |
+| SVG | supported | Preview renderer, export target and a declared import subset. |
 | PDF | supported | Export target only; not a renderer and not editable. |
 | STEP | partial | Export direction only (AP203 solids and faces). |
 | OBJ | partial | Export direction only (triangle meshes). |
@@ -95,6 +95,42 @@ dropped silently.
 Not read: `DWG`, `MLEADER` geometry, `MLINE`, `3DSOLID`, `REGION`, `WIPEOUT`,
 `IMAGE`, `XREF`, proxy entities, and every other entity type outside the list
 above. A two-line angular dimension (DXF type 2) is skipped.
+
+## SVG import subset
+
+The reader accepts an `<svg>` document and keeps the geometry elements `line`,
+`circle`, `ellipse`, `rect`, `polyline`, `polygon`, `path` and `text` on the
+default layer. Coordinates are read as authored in user units.
+
+- `line`, `circle` and `ellipse` stay analytic; an `ellipse` is imported as a
+  full ellipse.
+- `rect` becomes a closed polyline; `polyline` and `polygon` become open and
+  closed polylines.
+- Path moves, lines and closes (`M`, `L`, `H`, `V`, `Z` and their relative
+  forms) become polylines. Cubic and quadratic commands (`C`, `S`, `Q`, `T`)
+  are sampled into sixteen segments per span. An elliptical arc (`A`) or any
+  other command truncates the path at that command.
+- `text` becomes a text entity at its `x`/`y` position with the `font-size`
+  height; inner markup such as `tspan` is flattened into the string.
+- Definition subtrees (`defs`, `symbol`, `marker`, `pattern`, `filter`, `mask`,
+  `clipPath`, `style`, `script`, `title` and `desc`) are skipped.
+- `transform` attributes, nested viewports and presentation styling are not
+  applied; the SVG y-axis is kept as authored.
+
+Losses use the same `{ code, severity, detail }` shape as DXF import.
+
+| Code | Severity | Meaning |
+| :--- | :--- | :--- |
+| `svg/assumed-units` | notice | SVG carries no unit metadata; user units were read as millimetres. |
+| `svg/transform` | warning | A `transform` attribute was ignored; geometry was read as authored. |
+| `svg/path-curve-flattened` | notice | Curve commands were sampled into line segments. |
+| `svg/path-unsupported-command` | warning | A path was truncated at an unsupported command such as `A`. |
+| `svg/rect-corner` | notice | A rounded rectangle was written with sharp corners. |
+| `svg/element-invalid` | warning | An element was skipped for missing or non-finite geometry. |
+| `svg/element-unsupported` | warning | One message per element tag the reader does not implement. |
+
+Not read: raster content, text styling, animation, nested viewports and every
+element outside the list above.
 
 ## DXF export
 
@@ -172,8 +208,9 @@ current revision. SVG is the only renderer. PDF is A4 landscape with one
 uniform fit into the area left by the inner border and the title block, so
 geometry never crosses either of them. PDF approximates arcs and ellipses with
 cubic Bezier segments and reports `pdf/text-encoding` when a character cannot be
-encoded, including characters in the title block. Neither format is editable:
-reopening it is not supported.
+encoded, including characters in the title block. PDF is not editable:
+reopening it is not supported. SVG can be reopened through the declared import
+subset above.
 
 ## STL, OBJ and STEP
 
@@ -786,6 +823,7 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
 - No DWG, PNG or JPG reading or writing. IGES is export-only; there is no
   reader.
 - No full DXF reader or writer; only the subset above.
+- No full SVG reader; only the declared element subset above.
 - No interactive viewport, zoom/pan canvas or hover picking. The studio is a
   shell; SVG is the preview.
 - No constraint solver, parameterisation or associativity between entities or

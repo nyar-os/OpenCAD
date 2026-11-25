@@ -21,7 +21,7 @@ standard output; a domain failure prints its stable error code and exits `1`
 | `export <file>` | `--format dxf\|dxf-r12\|obj\|step\|stl\|svg\|pdf\|iges` (required), `--out <file>` (required) | Writes the format and prints its losses. |
 | `undo <file>` | — | Restores the previous snapshot; persists through the sidecar history. |
 | `redo <file>` | — | Reapplies the next snapshot. |
-| `import <source.dxf>` | `--out <file>` (required), `--title <text>`, `--overwrite` | Imports the declared ASCII DXF subset and prints entity counts and losses. |
+| `import <source>` | `--out <file>` (required), `--title <text>`, `--overwrite` | Imports the declared ASCII DXF subset, or the declared SVG subset for a `.svg` source, and prints entity counts and losses. |
 | `gui` | — | Opens the studio window and waits for it to close. |
 
 ## Entities

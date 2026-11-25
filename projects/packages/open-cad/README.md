@@ -51,7 +51,7 @@ types.
 
 | Task | Methods |
 | :--- | :--- |
-| Session | `cad.capabilities()`, `cad.create()`, `cad.open()`, `cad.importDxf()`, `cad.inspect()`, `cad.dispose()` |
+| Session | `cad.capabilities()`, `cad.create()`, `cad.open()`, `cad.importDxf()`, `cad.importSvg()`, `cad.inspect()`, `cad.dispose()` |
 | Draw | `addLine`, `addPoint`, `addCircle`, `addArc`, `addEllipse`, `addPolyline`, `addSpline`, `addRectangle`, `addPolygon`, `addText`, `addHatch`, `addDimension`, `addRadialDimension`, `addOrdinateDimension`, `addAngularDimension` |
 | Edit | `moveEntity`, `updateEntity`, `updateArc`, `updateEllipse`, `updateDimension`, `updatePolyline`, `updateSpline`, `assignEntityLayer`, `deleteEntity`, `transform`, `copy`, `array`, `explode`, `offset`, `offsetBySide`, `trim`, `extend`, `breakEntity`, `joinEntities`, `fillet`, `chamfer`, `polylineChamfer`, `reorderEntity` |
 | Layers and styles | `addLayer`, `updateLayer`, `mergeLayer`, `deleteLayer`, `addLinetype`, `updateLinetype`, `deleteLinetype`, `addDimStyle`, `updateDimStyle`, `deleteDimStyle`, `addTextStyle`, `updateTextStyle`, `deleteTextStyle` |
@@ -69,6 +69,9 @@ successful export does not imply a lossless file. `convertUnits` switches a draw
 
 - DXF import covers a declared ASCII subset. Every approximation is returned as a
   loss with a stable code; unsupported entity types are skipped with a warning.
+- SVG import covers a declared element subset (`line`, `circle`, `ellipse`,
+  `rect`, `polyline`, `polygon`, `path`, `text`); transforms and styling are
+  not applied and path curves are sampled.
 - No interactive viewport, DWG reader, full DXF reader or constraint solver.
   `capabilities()` reports these as unsupported, and operations that need them
   answer `capability/not-implemented`.
