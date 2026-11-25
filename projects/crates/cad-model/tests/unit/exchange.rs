@@ -206,7 +206,10 @@ fn pdf_export_handles_an_empty_drawing() {
 }
 
 /// Parses a generated IGES deck back into `(entity type, parameter data)` pairs,
-/// checking the fixed card layout, the section order and the pointer bookkeeping.
+/// checking the fixed card layout, the section order and the pointer bookkeeping
+/// against the ANSI X3.172 deck conventions: parameter data fills columns 1-72,
+/// the last parameter card of an entity is numbered negatively, and the
+/// terminate card locates every section by size and pointer.
 fn parse_iges_deck(content: &str) -> Vec<(usize, String)> {
     let lines: Vec<&str> = content.lines().collect();
     assert!(!lines.is_empty(), "the deck carries cards");
@@ -216,14 +219,14 @@ fn parse_iges_deck(content: &str) -> Vec<(usize, String)> {
         assert_eq!(line.chars().count(), 80, "every card is exactly 80 columns: {line:?}");
         let letter = line.as_bytes()[72] as char;
         assert!(matches!(letter, 'S' | 'G' | 'D' | 'P' | 'T'), "unknown section `{letter}`");
-        let number = line[73..].trim().parse::<usize>().expect("section sequence number");
+        let number = line[73..].trim().parse::<i64>().expect("section sequence number");
         if sections.last().is_some_and(|(current, _)| *current == letter) {
             let cards = &mut sections.last_mut().expect("section").1;
-            assert_eq!(number, cards.len() + 1, "sequence numbers count lines within the section");
+            assert_eq!(number.unsigned_abs() as usize, cards.len() + 1, "sequence numbers count lines within the section");
             cards.push(line);
         }
         else {
-            assert_eq!(number, 1, "a new section starts at line 1");
+            assert_eq!(number.unsigned_abs(), 1, "a new section starts at line 1");
             sections.push((letter, vec![line]));
         }
     }
@@ -247,18 +250,20 @@ fn parse_iges_deck(content: &str) -> Vec<(usize, String)> {
     let mut card = 0usize;
     let mut parameter_card = 0usize;
     while card < directory.len() {
-        let pointer = directory[card][64..72].trim().parse::<i64>().expect("parameter pointer");
+        let pointer = directory[card][64..72].trim().parse::<i64>().expect("element pointer");
         assert_eq!(pointer as usize, card + 2, "the first directory line points at the structure line of its entry");
         let structure = directory[card + 1];
         let entity_type = structure[..8].trim().parse::<usize>().expect("entity type");
         let structure_pointer = structure[8..16].trim().parse::<i64>().expect("structure pointer");
+        assert!(structure_pointer < 0, "an exported entity roots its own structure");
         assert_eq!(structure_pointer.unsigned_abs() as usize, card + 1, "the structure line points back at the entry");
-        let line_count = structure[16..23].trim().parse::<usize>().expect("line count");
+        let line_count = structure[16..24].trim().parse::<usize>().expect("parameter line count");
         let mut data = String::new();
         for offset in 0..line_count {
-            let back = parameter[parameter_card + offset][64..72].trim().parse::<i64>().expect("parameter back pointer");
-            assert_eq!(back.unsigned_abs() as usize, card + 1, "every parameter card points back at its directory entry");
-            data.push_str(parameter[parameter_card + offset][..64].trim_end());
+            let line = parameter[parameter_card + offset];
+            let sequence = line[73..].trim().parse::<i64>().expect("parameter sequence");
+            assert_eq!(sequence < 0, offset + 1 == line_count, "only the last parameter card of an entity is numbered negatively");
+            data.push_str(line[..72].trim_end());
         }
         parameter_card += line_count;
         entities.push((entity_type, data));
@@ -269,9 +274,27 @@ fn parse_iges_deck(content: &str) -> Vec<(usize, String)> {
 
     let terminate_line = section('T')[0];
     let terminate: Vec<&str> = terminate_line[..72].trim_end().split(',').map(str::trim).collect();
-    assert_eq!(terminate[0].parse::<usize>().expect("entity count"), entities.len(), "the terminate section counts entities");
-    assert_eq!(terminate[2].parse::<usize>().expect("D line count"), directory.len(), "the terminate section counts directory lines");
-    assert_eq!(terminate[16].parse::<usize>().expect("P1"), parameter.len(), "the terminate section points at the last parameter line");
+    assert_eq!(terminate[0], "S", "the terminate section opens with the section marker");
+    assert_eq!(terminate[1].parse::<usize>().expect("entity count"), entities.len(), "n1 counts the entities");
+    assert_eq!(terminate[2].parse::<usize>().expect("G size"), section('G').len(), "n2 carries the global section size");
+    assert_eq!(terminate[3].parse::<usize>().expect("D size"), directory.len(), "n3 carries the directory size");
+    assert_eq!(terminate[4].parse::<usize>().expect("P size"), parameter.len(), "n4 carries the parameter size");
+    assert_eq!(terminate[5].parse::<usize>().expect("T size"), 1, "n5 carries the terminate size");
+    assert_eq!(terminate[6].parse::<usize>().expect("S size"), section('S').len(), "n6 carries the start section size");
+    assert_eq!(terminate[7].parse::<usize>().expect("G pointer"), section('S').len() + 1, "n7 points at the first global card");
+    assert_eq!(
+        terminate[8].parse::<usize>().expect("D pointer"),
+        section('S').len() + section('G').len() + 1,
+        "n8 points at the first directory card"
+    );
+    assert_eq!(
+        terminate[9].parse::<usize>().expect("P pointer"),
+        section('S').len() + section('G').len() + directory.len() + 1,
+        "n9 points at the first parameter card"
+    );
+    assert_eq!(terminate[10].parse::<usize>().expect("T pointer"), lines.len(), "n10 points at the terminate card");
+    assert_eq!(terminate[11].parse::<usize>().expect("S pointer"), 1, "n11 points at the first start card");
+    assert_eq!(terminate[12].parse::<usize>().expect("DE size"), 2, "n12 declares the two-card directory entry");
     entities
 }
 
@@ -444,6 +467,21 @@ fn iges_empty_drawing_is_a_valid_deck() {
     assert_eq!(module.entities, 0);
     assert!(module.losses.is_empty(), "nothing is dropped: {:?}", module.losses);
     assert!(parse_iges_deck(&module.content).is_empty());
+}
+
+#[test]
+fn iges_parameter_section_terminates_each_entity() {
+    let mut drawing = Drawing::empty(Some("Spline".to_string()), Units::Mm);
+    drawing.entities.push(iges_entity(
+        "spline-1",
+        EntityKind::Spline { points: (0..12).map(|index| [index as f64 * 7.0, (index % 3) as f64 * 5.0]).collect(), closed: false },
+    ));
+    let deck = iges(&drawing).content;
+    let cards = deck.lines().filter(|line| line.as_bytes().get(72) == Some(&b'P')).collect::<Vec<_>>();
+    assert!(cards.len() > 1, "the cubic data spans several parameter cards: {cards:?}");
+    let negatives = cards.iter().filter(|line| line[73..].trim().starts_with('-')).count();
+    assert_eq!(negatives, 1, "exactly the last card of the entity is numbered negatively");
+    assert_eq!(cards.last().expect("last card")[73..].trim(), format!("-{}", cards.len()), "the negative number is the card's sequence");
 }
 
 #[test]

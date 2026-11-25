@@ -1955,7 +1955,10 @@ fn iges_global_cards(parameters: &[String], width: usize) -> Vec<String> {
 }
 
 /// Pads one section body to column 72 and appends the 8-column section tag.
-fn iges_card(body: &str, section: char, number: usize) -> String {
+///
+/// Sequence numbers are positive except for the last parameter card of an
+/// entity, where the negative number marks the end of its data.
+fn iges_card(body: &str, section: char, number: i64) -> String {
     let padding = 72usize.saturating_sub(body.chars().count());
     format!("{}{}{}{:>7}", body, " ".repeat(padding), section, number)
 }
@@ -2247,52 +2250,72 @@ pub(crate) fn iges(drawing: &Drawing) -> IgesModule {
     let entities = entries.len();
     let mut directory_cards: Vec<String> = Vec::new();
     let mut parameter_cards: Vec<String> = Vec::new();
+    let mut parameter_sequence = 0i64;
     for (index, (entity_type, data)) in entries.iter().enumerate() {
         let element = index + 1;
-        let chunks = iges_chunks(data, 64);
+        let characters: Vec<char> = data.chars().collect();
+        let head: String = characters.iter().take(64).collect();
         // The first directory line carries the opening 64 columns of the parameter
         // data and points forward at the structure line of the entry.
-        directory_cards.push(format!("{:<64}{:>8}", chunks[0], 2 * element));
-        // The structure line points back at the entry, negatively when the
-        // parameter data continues, and counts the parameter lines.
-        let structure_pointer = if chunks.len() == 1 { 2 * element as i64 - 1 } else { -(2 * element as i64 - 1) };
-        directory_cards.push(format!("{:>8}{:>8}{:>7}", entity_type, structure_pointer, chunks.len()));
-        for (chunk_index, chunk) in chunks.iter().enumerate() {
-            let pointer = if chunk_index == 0 { 2 * element as i64 - 1 } else { -(2 * element as i64 - 1) };
-            parameter_cards.push(format!("{:<64}{:>8}", chunk, pointer));
+        directory_cards.push(format!("{:<64}{:>8}", head, 2 * element));
+        // The structure line names the entity type, points back at the element
+        // line of its own entry — negatively, because every exported entity is
+        // the root of its structure — and counts the parameter lines.
+        let line_count = characters.len().div_ceil(72);
+        directory_cards.push(format!("{:>8}{:>8}{:>8}", entity_type, -(2 * element as i64 - 1), line_count));
+        // Parameter data fills columns 1-72; the last card of each entity is
+        // numbered negatively so a reader finds the end of its data.
+        for (chunk_index, chunk) in characters.chunks(72).enumerate() {
+            parameter_sequence += 1;
+            let body: String = chunk.iter().collect();
+            let number = if chunk_index + 1 == line_count { -parameter_sequence } else { parameter_sequence };
+            parameter_cards.push(iges_card(&body, 'P', number));
         }
     }
 
     let start_cards = iges_chunks(&iges_string("OpenCAD IGES export deck"), 72);
-    let global_cards = iges_global_cards(&globals, 72);
+    let mut global_cards = iges_global_cards(&globals, 72);
+    // The global section is terminated by a semicolon.
+    match global_cards.last_mut() {
+        Some(last) if last.chars().count() < 72 => last.push(';'),
+        _ => global_cards.push(String::from(";")),
+    }
+    // Terminate card: S, last entity, the four section sizes, the terminate
+    // size, the start size and the pointers to the first card of every
+    // section, then the two-card directory entry marker.
+    let global_pointer = start_cards.len() + 1;
+    let directory_pointer = global_pointer + global_cards.len();
+    let parameter_pointer = directory_pointer + directory_cards.len();
+    let terminate_pointer = parameter_pointer + parameter_cards.len();
     let terminate = format!(
-        "{},{},{},{},{},0,0,0,0,1,,1.0,0.0833333,{},{},{},{},1",
+        "S,{},{},{},{},1,{},{},{},{},{},{},2,0,,OpenCAD,open-cad-drawing",
         entities,
-        entities,
-        directory_cards.len(),
-        directory_cards.len(),
-        start_cards.len(),
-        start_cards.len(),
         global_cards.len(),
         directory_cards.len(),
-        parameter_cards.len()
+        parameter_cards.len(),
+        start_cards.len(),
+        global_pointer,
+        directory_pointer,
+        parameter_pointer,
+        terminate_pointer,
+        1
     );
 
     let mut content = String::new();
     for (index, card) in start_cards.iter().enumerate() {
-        content.push_str(&iges_card(card, 'S', index + 1));
+        content.push_str(&iges_card(card, 'S', index as i64 + 1));
         content.push('\n');
     }
     for (index, card) in global_cards.iter().enumerate() {
-        content.push_str(&iges_card(card, 'G', index + 1));
+        content.push_str(&iges_card(card, 'G', index as i64 + 1));
         content.push('\n');
     }
     for (index, card) in directory_cards.iter().enumerate() {
-        content.push_str(&iges_card(card, 'D', index + 1));
+        content.push_str(&iges_card(card, 'D', index as i64 + 1));
         content.push('\n');
     }
-    for (index, card) in parameter_cards.iter().enumerate() {
-        content.push_str(&iges_card(card, 'P', index + 1));
+    for card in &parameter_cards {
+        content.push_str(card);
         content.push('\n');
     }
     content.push_str(&iges_card(&terminate, 'T', 1));
