@@ -50,6 +50,7 @@ export const errorCodes = [
     'titleblock/invalid-sheet',
     'titleblock/content-overflow',
     'hole-table/empty',
+    'detail-view/empty',
     'dimension/unsupported-entity',
     'polyline/invalid-iterations',
     'polyline/invalid-ratio',

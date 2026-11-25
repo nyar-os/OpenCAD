@@ -39,9 +39,9 @@ pub use schema::{
 };
 
 pub use views::{
-    AssemblyComponent, Axis3, ExplodedAssemblyRequest, Feature3d, HoleTableRequest, IsometricViewRequest, LeaderNoteRequest,
-    MultiViewSheetRequest, PartSpec, SectionViewRequest, add_exploded_assembly, add_hole_table, add_isometric_view, add_leader_note,
-    add_multiview_sheet, add_section_view,
+    AssemblyComponent, AuxiliaryViewRequest, Axis3, DetailViewRequest, ExplodedAssemblyRequest, Feature3d, HoleTableRequest,
+    IsometricViewRequest, LeaderNoteRequest, MultiViewSheetRequest, PartSpec, SectionViewRequest, add_auxiliary_view, add_detail_view,
+    add_exploded_assembly, add_hole_table, add_isometric_view, add_leader_note, add_multiview_sheet, add_section_view,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -233,6 +233,8 @@ pub fn capabilities() -> Value {
                 "isometric-view",
                 "exploded-assembly",
                 "hole-table",
+                "detail-view",
+                "auxiliary-view",
                 "constraints",
                 "kernel3d",
             ],
@@ -241,7 +243,7 @@ pub fn capabilities() -> Value {
                 | "distribute" | "stretch" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
                 | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth"
                 | "polyline-chamfer" | "diff" | "quantity-table" | "multiview-sheet" | "section-view" | "leader-note" | "isometric-view"
-                | "exploded-assembly" | "hole-table" => {
+                | "exploded-assembly" | "hole-table" | "detail-view" | "auxiliary-view" => {
                     "supported"
                 }
                 _ => "unsupported",

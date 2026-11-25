@@ -1680,6 +1680,47 @@ test('isometric views, exploded assemblies and hole tables draw new sheet conten
     }
 });
 
+test('detail and auxiliary views draw the new sheet content', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'View types' });
+        const part: PartSpec = {
+            solids: [
+                { kind: 'box', min: [0, 0, 0], max: [40, 24, 12] },
+                { kind: 'cylinder', axis: 'z', center: [20, 12], from: 12, to: 20, radius: 8 },
+            ],
+            voids: [{ kind: 'cylinder', axis: 'z', center: [20, 12], from: 0, to: 20, radius: 4 }],
+        };
+
+        const detail = document.detailView({ part, center: [20, 12], radius: 12, view: 'top', scale: 3 });
+        assert.ok(detail.created.length > 0);
+        assert.equal(detail.detail.center[0], 20);
+        assert.equal(detail.detail.scale, 3);
+        assert.ok(detail.detail.placedRadius > 0);
+        assert.ok(detail.created.some((entity) => entity.kind.type === 'text' && entity.kind.content === 'DETAIL A'));
+        assert.ok(detail.created.some((entity) => entity.kind.type === 'text' && entity.kind.content === 'SCALE 3:1'));
+
+        const auxiliary = document.auxiliaryView({ part, angle: 45, plane: 'front' });
+        assert.ok(auxiliary.created.length > 0);
+        assert.equal(auxiliary.view.angle, 45);
+        assert.equal(auxiliary.view.plane, 'front');
+        assert.ok(auxiliary.view.width > 0 && auxiliary.view.height > 0);
+        assert.ok(auxiliary.created.some((entity) => entity.kind.type === 'text' && entity.kind.content === 'VIEW A'));
+
+        assert.throws(
+            () => document.detailView({ part, center: [500, 500], radius: 2 }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'detail-view/empty',
+        );
+        assert.throws(
+            () => document.auxiliaryView({ part, plane: 'side' as 'front' }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
 test('the leader-note CLI accepts a multi-point --points list', { skip: withAddon || (cliBuilt ? false : 'no built CLI is installed') }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-cli-leader-'));
     try {

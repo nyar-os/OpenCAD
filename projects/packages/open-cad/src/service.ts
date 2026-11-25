@@ -71,6 +71,10 @@ import type {
     GroupMembersRequest,
     ExplodedAssemblyRequest,
     ExplodedAssemblyResult,
+    AuxiliaryViewRequest,
+    AuxiliaryViewResult,
+    DetailViewRequest,
+    DetailViewResult,
     HatchPatternRequest,
     HatchPatternResult,
     HistoryResult,
@@ -1260,9 +1264,47 @@ export function holeTable(handle: number, request: HoleTableRequest): HoleTableR
     );
 }
 
+/** Draws an enlarged, circled detail of one base view with the `DETAIL A` caption. */
+export function detailView(handle: number, request: DetailViewRequest): DetailViewResult {
+    return decode<DetailViewResult>(() =>
+        binding('drawing.detailView').drawing_detail_view(
+            handle,
+            JSON.stringify({
+                part: request.part,
+                center: request.center,
+                radius: request.radius,
+                view: request.view,
+                scale: request.scale,
+                textHeight: request.textHeight,
+                origin: request.origin,
+                label: request.label,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
+/** Draws an auxiliary view projected along a plan angle with a direction arrow. */
+export function auxiliaryView(handle: number, request: AuxiliaryViewRequest): AuxiliaryViewResult {
+    return decode<AuxiliaryViewResult>(() =>
+        binding('drawing.auxiliaryView').drawing_auxiliary_view(
+            handle,
+            JSON.stringify({
+                part: request.part,
+                angle: request.angle,
+                plane: request.plane,
+                scale: request.scale,
+                textHeight: request.textHeight,
+                origin: request.origin,
+                label: request.label,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
 /** Imports the declared ASCII DXF subset into a new drawing handle. */
-export function importDxf(request: ImportDxfRequest): ImportDxfResult {
-    return decode<ImportDxfResult>(() =>
+export function importDxf(request: ImportDxfRequest): ImportDxfResult {    return decode<ImportDxfResult>(() =>
         binding('drawing.importDxf').drawing_import_dxf(JSON.stringify({ source: request.source, title: request.title })),
     );
 }

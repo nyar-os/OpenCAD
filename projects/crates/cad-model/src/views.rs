@@ -581,6 +581,59 @@ fn project_iso(feature: &Feature3d) -> Vec<Shape2> {
     }
 }
 
+/// Isometric image of the part projected onto an arbitrary pair of view axes.
+///
+/// `u` and `v` are orthogonal, unit-length directions in part coordinates; the
+/// silhouette samples are taken along `u` and `v` so an auxiliary view can look
+/// at the part from a plan angle instead of an axis.
+fn project_along(feature: &Feature3d, u: [f64; 3], v: [f64; 3]) -> Vec<Shape2> {
+    let project = |point: [f64; 3]| [point[0] * u[0] + point[1] * u[1] + point[2] * u[2], point[0] * v[0] + point[1] * v[1] + point[2] * v[2]];
+    let corners = |points: [[f64; 3]; 8]| vec![Shape2::Poly(convex_hull(&points.iter().map(|p| project(*p)).collect::<Vec<_>>()))];
+    match feature {
+        Feature3d::Box { min, max } => corners([
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], max[1], min[2]],
+            [min[0], max[1], min[2]],
+            [min[0], min[1], max[2]],
+            [max[0], min[1], max[2]],
+            [max[0], max[1], max[2]],
+            [min[0], max[1], max[2]],
+        ]),
+        Feature3d::Sphere { center, radius } => vec![Shape2::Disc(project(*center), *radius)],
+        Feature3d::Cylinder { axis, center, from, to, radius } => {
+            let mut samples: Vec<[f64; 2]> = rim_points(*axis, center, *from, *radius).iter().map(|p| project(*p)).collect();
+            samples.extend(rim_points(*axis, center, *to, *radius).iter().map(|p| project(*p)));
+            vec![Shape2::Poly(convex_hull(&samples))]
+        }
+        Feature3d::Cone { axis, center, from, to, base_radius, top_radius } => {
+            let mut samples: Vec<[f64; 2]> = rim_points(*axis, center, *from, *base_radius).iter().map(|p| project(*p)).collect();
+            if *top_radius > 0.0 {
+                samples.extend(rim_points(*axis, center, *to, *top_radius).iter().map(|p| project(*p)));
+            }
+            else {
+                let [t0, t1] = axis.transverse();
+                let mut apex = [0.0; 3];
+                apex[axis.index()] = *to;
+                apex[t0.index()] = center[0];
+                apex[t1.index()] = center[1];
+                samples.push(project(apex));
+            }
+            vec![Shape2::Poly(convex_hull(&samples))]
+        }
+        Feature3d::Wedge { min, max, top_from, top_to } => corners([
+            [min[0], min[1], min[2]],
+            [max[0], min[1], min[2]],
+            [max[0], max[1], min[2]],
+            [min[0], max[1], min[2]],
+            [min[0], min[1], *top_from],
+            [max[0], min[1], *top_to],
+            [max[0], max[1], *top_to],
+            [min[0], max[1], *top_from],
+        ]),
+    }
+}
+
 /// Projection convention of a multiview sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Projection {
@@ -721,6 +774,82 @@ fn segment_hits_rect(from: [f64; 2], to: [f64; 2], min: [f64; 2], max: [f64; 2],
         }
     }
     true
+}
+
+/// Splits a closed outline into the runs that lie inside a circle, so a detail
+/// view can crop projected geometry without drawing outside its boundary.
+fn clip_outline_to_circle(points: &[[f64; 2]], center: [f64; 2], radius: f64) -> Vec<Vec<[f64; 2]>> {
+    if points.len() < 2 || !radius.is_finite() || radius <= 0.0 {
+        return Vec::new();
+    }
+    let inside = |point: [f64; 2]| (point[0] - center[0]).powi(2) + (point[1] - center[1]).powi(2) <= radius * radius + 1e-9;
+    let mut runs: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut current: Vec<[f64; 2]> = Vec::new();
+    for index in 0..points.len() {
+        let from = points[index];
+        let to = points[(index + 1) % points.len()];
+        let delta = [to[0] - from[0], to[1] - from[1]];
+        let offset = [from[0] - center[0], from[1] - center[1]];
+        let a = delta[0] * delta[0] + delta[1] * delta[1];
+        let mut cuts = vec![0.0_f64, 1.0_f64];
+        if a > f64::EPSILON {
+            let b = 2.0 * (offset[0] * delta[0] + offset[1] * delta[1]);
+            let c = offset[0] * offset[0] + offset[1] * offset[1] - radius * radius;
+            let discriminant = b * b - 4.0 * a * c;
+            if discriminant > 0.0 {
+                let root = discriminant.sqrt();
+                for t in [(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)] {
+                    if t > 1e-9 && t < 1.0 - 1e-9 {
+                        cuts.push(t);
+                    }
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        for window in cuts.windows(2) {
+            let (t0, t1) = (window[0], window[1]);
+            let mid = [from[0] + delta[0] * (t0 + t1) / 2.0, from[1] + delta[1] * (t0 + t1) / 2.0];
+            if !inside(mid) {
+                if current.len() > 1 {
+                    runs.push(std::mem::take(&mut current));
+                }
+                else {
+                    current.clear();
+                }
+                continue;
+            }
+            let start = [from[0] + delta[0] * t0, from[1] + delta[1] * t0];
+            let end = [from[0] + delta[0] * t1, from[1] + delta[1] * t1];
+            if current.last().is_none_or(|last| (last[0] - start[0]).abs() > 1e-9 || (last[1] - start[1]).abs() > 1e-9) {
+                if current.len() > 1 {
+                    runs.push(std::mem::take(&mut current));
+                }
+                else {
+                    current.clear();
+                }
+                current.push(start);
+            }
+            current.push(end);
+        }
+    }
+    if current.len() > 1 {
+        runs.push(current);
+    }
+    runs
+}
+
+/// The closed outline of a shape as a point list, so it can be clipped.
+fn shape_outline(shape: &Shape2) -> Vec<[f64; 2]> {
+    match shape {
+        Shape2::Rect(a, b) => vec![*a, [b[0], a[1]], *b, [a[0], b[1]]],
+        Shape2::Poly(points) => points.clone(),
+        Shape2::Disc(center, radius) => (0..RIM_SAMPLES)
+            .map(|step| {
+                let angle = TAU * step as f64 / RIM_SAMPLES as f64;
+                [center[0] + radius * angle.cos(), center[1] + radius * angle.sin()]
+            })
+            .collect(),
+    }
 }
 
 /// One placed view: its centre, size and outlines in view-local coordinates.
@@ -2099,6 +2228,370 @@ pub fn add_hole_table(handle: u64, request: HoleTableRequest) -> Result<Value, S
             "columns": HOLE_COLUMNS,
             "rows": rows,
             "created": created,
+        })
+    })
+}
+
+/// Looks up one of the three orthographic base views by name.
+fn base_view(name: &str) -> Option<View> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "front" => Some(View::Front),
+        "top" => Some(View::Top),
+        "left" => Some(View::Left),
+        _ => None,
+    }
+}
+
+/// Solids and voids of a part projected into one named base view.
+fn project_view(part: &PartSpec, view: &str) -> Option<(Vec<Shape2>, Vec<Shape2>)> {
+    if view.trim().eq_ignore_ascii_case("iso") {
+        return Some((part.solids.iter().flat_map(project_iso).collect(), part.voids.iter().flat_map(project_iso).collect()));
+    }
+    let view = base_view(view)?;
+    Some((
+        part.solids.iter().flat_map(|feature| project_feature(feature, view)).collect(),
+        part.voids.iter().flat_map(|feature| project_feature(feature, view)).collect(),
+    ))
+}
+
+/// Arguments of [`add_detail_view`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DetailViewRequest {
+    /// The detailed part; needs at least one solid feature.
+    pub part: PartSpec,
+    /// Centre of the detail circle in the base view; defaults to the view centre.
+    pub center: Option<[f64; 2]>,
+    /// Radius of the detail circle in base-view units; defaults to 40% of the
+    /// larger view extent.
+    pub radius: Option<f64>,
+    /// Base view the detail is taken from: `front`, `top`, `left` or `iso`;
+    /// defaults to `top`.
+    pub view: Option<String>,
+    /// Enlargement factor of the detail; defaults to `2`.
+    pub scale: Option<f64>,
+    /// Height of the labels; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Lower-left corner of the placed pair; defaults to the origin.
+    pub origin: Option<[f64; 2]>,
+    /// Caption under the enlarged view; defaults to `DETAIL A`.
+    pub label: Option<String>,
+    /// Layer carrying the views; defaults to `views`.
+    pub layer: Option<String>,
+}
+
+/// Draws a circled detail of a base view enlarged at a separate scale.
+///
+/// The base view is drawn at 1:1 with the callout circle marked on it, and the
+/// enlarged copy sits to its right: projected geometry is clipped to the circle
+/// and scaled about the detail centre by `scale` (default 2:1). The enlarged
+/// view carries its boundary circle, centre marks, the `DETAIL A` caption and
+/// the scale annotation. The edit is one history step and one revision, and the
+/// response carries `{ revision, drawing, created, detail }` where `detail`
+/// reports the source centre, radius and scale.
+///
+/// A part without solids, an unknown base view, a non-finite or negative
+/// radius, a non-positive scale or text height, a non-finite origin and a
+/// locked or frozen layer report `session/argument-invalid`,
+/// `drawing/layer-locked` or `drawing/layer-frozen`; a circle that misses every
+/// outline reports `detail-view/empty`.
+pub fn add_detail_view(handle: u64, request: DetailViewRequest) -> Result<Value, ServiceError> {
+    validate_part(&request.part)?;
+    let view_name = request.view.as_deref().map(str::trim).unwrap_or("top").to_string();
+    let (solids, voids) = project_view(&request.part, &view_name)
+        .ok_or_else(|| argument(format!("`{view_name}` is not a base view; use front, top, left or iso")))?;
+    let (bounds_min, bounds_max) = require_bounds(&solids, "detail view")?;
+    let center = request.center.unwrap_or([(bounds_min[0] + bounds_max[0]) / 2.0, (bounds_min[1] + bounds_max[1]) / 2.0]);
+    if !finite2(&center) {
+        return Err(argument("`center` must contain finite coordinates"));
+    }
+    let extent = (bounds_max[0] - bounds_min[0]).max(bounds_max[1] - bounds_min[1]);
+    let radius = request.radius.unwrap_or(extent * 0.4);
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(argument("`radius` must be a positive finite number"));
+    }
+    let scale = request.scale.unwrap_or(2.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(argument("`scale` must be a positive finite number"));
+    }
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !text_height.is_finite() || text_height <= 0.0 {
+        return Err(argument("`textHeight` must be a positive finite number"));
+    }
+    let origin = request.origin.unwrap_or([0.0, 0.0]);
+    if !finite2(&origin) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    let label = request.label.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).unwrap_or_else(|| "DETAIL A".to_string());
+    if label.chars().count() > PROPERTY_VALUE_LIMIT {
+        return Err(argument("the detail label is too long"));
+    }
+    let layer = request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| VIEWS_LAYER.to_string());
+    let has_voids = !voids.is_empty();
+    let result = store::edit(handle, |drawing| {
+        ensure_layer(drawing, &layer);
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if has_voids {
+            ensure_hidden_layer(drawing);
+            if let Some(error) = locked_layer(drawing, HIDDEN_LAYER) {
+                return Err(error);
+            }
+        }
+        let base_shift = [origin[0] - bounds_min[0], origin[1] - bounds_min[1]];
+        let base_width = bounds_max[0] - bounds_min[0];
+        let mut kinds: Vec<(String, EntityKind)> = Vec::new();
+        for shape in &solids {
+            kinds.push((layer.clone(), shape.translated(base_shift).kind()));
+        }
+        for shape in &voids {
+            kinds.push((HIDDEN_LAYER.to_string(), shape.translated(base_shift).kind()));
+        }
+        kinds.push((layer.clone(), EntityKind::Circle { center: [center[0] + base_shift[0], center[1] + base_shift[1]], radius }));
+        let detail_radius = radius * scale;
+        let detail_center = [origin[0] + base_width + VIEW_GAP + detail_radius, origin[1] + detail_radius];
+        let mut drawn = 0usize;
+        let place = |shape: &Shape2| -> Vec<Vec<[f64; 2]>> {
+            clip_outline_to_circle(&shape_outline(shape), center, radius)
+                .into_iter()
+                .map(|run| {
+                    run.into_iter()
+                        .map(|point| [(point[0] - center[0]) * scale + detail_center[0], (point[1] - center[1]) * scale + detail_center[1]])
+                        .collect()
+                })
+                .collect()
+        };
+        for shape in &solids {
+            for run in place(shape) {
+                drawn += 1;
+                kinds.push((layer.clone(), EntityKind::Polyline { points: run, closed: false }));
+            }
+        }
+        for shape in &voids {
+            for run in place(shape) {
+                drawn += 1;
+                kinds.push((HIDDEN_LAYER.to_string(), EntityKind::Polyline { points: run, closed: false }));
+            }
+        }
+        if drawn == 0 {
+            return Err(ServiceError::new("detail-view/empty", "the detail circle misses every projected outline"));
+        }
+        kinds.push((layer.clone(), EntityKind::Circle { center: detail_center, radius: detail_radius }));
+        let tick = detail_radius * 0.35;
+        kinds.push((
+            layer.clone(),
+            EntityKind::Line { from: [detail_center[0] - tick, detail_center[1]], to: [detail_center[0] + tick, detail_center[1]] },
+        ));
+        kinds.push((
+            layer.clone(),
+            EntityKind::Line { from: [detail_center[0], detail_center[1] - tick], to: [detail_center[0], detail_center[1] + tick] },
+        ));
+        let caption_y = detail_center[1] - detail_radius - text_height * 1.7;
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text {
+                at: [detail_center[0] - text_width(&label, text_height) / 2.0, caption_y],
+                height: text_height,
+                content: label.clone(),
+            },
+        ));
+        let scale_text = scale_annotation(scale);
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text {
+                at: [detail_center[0] - text_width(&scale_text, text_height) / 2.0, caption_y - text_height * 1.4],
+                height: text_height,
+                content: scale_text,
+            },
+        ));
+        let mut created = Vec::with_capacity(kinds.len());
+        for (view_layer, kind) in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: view_layer, kind };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok((created, (detail_center, detail_radius, scale)))
+    })?;
+    let (created, (placed, placed_radius, placed_scale)) = result;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": created,
+            "detail": {
+                "center": center,
+                "radius": radius,
+                "scale": placed_scale,
+                "placed": placed,
+                "placedRadius": placed_radius,
+            },
+        })
+    })
+}
+
+/// Arguments of [`add_auxiliary_view`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AuxiliaryViewRequest {
+    /// The projected part; needs at least one solid feature.
+    pub part: PartSpec,
+    /// Plan angle of the projection plane, in degrees, measured from X towards
+    /// Y; defaults to `45`.
+    pub angle: Option<f64>,
+    /// How the auxiliary view is unfolded: `front` keeps Z vertical, `top`
+    /// keeps the plan; defaults to `front`.
+    pub plane: Option<String>,
+    /// Linear scale factor of the view; defaults to `1`.
+    pub scale: Option<f64>,
+    /// Height of the labels; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Lower-left corner of the placed view; defaults to the origin.
+    pub origin: Option<[f64; 2]>,
+    /// Caption under the view; defaults to `VIEW A`.
+    pub label: Option<String>,
+    /// Layer carrying the view; defaults to `views`.
+    pub layer: Option<String>,
+}
+
+/// Draws an auxiliary view projected along a plan angle.
+///
+/// The projection plane turns `angle` degrees about Z, so the view is a rotated
+/// elevation (`plane` = `front`, default) or a rotated plan (`plane` = `top`).
+/// Every feature projects to its silhouette in that plane, projected geometry
+/// lands on `layer` and voids on a generated `hidden` layer, and the view
+/// carries a direction arrow with the `A` marker, the `VIEW A` caption and the
+/// scale annotation. The edit is one history step and one revision, and the
+/// response carries `{ revision, drawing, created, view }`.
+///
+/// A part without solids, a non-finite angle, an unknown plane, a non-finite or
+/// non-positive scale or text height, a non-finite origin and a locked or frozen
+/// layer report `session/argument-invalid`, `drawing/layer-locked` or
+/// `drawing/layer-frozen`.
+pub fn add_auxiliary_view(handle: u64, request: AuxiliaryViewRequest) -> Result<Value, ServiceError> {
+    validate_part(&request.part)?;
+    let angle = request.angle.unwrap_or(45.0);
+    if !angle.is_finite() {
+        return Err(argument("`angle` must be finite"));
+    }
+    let plane = match request.plane.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        None | Some("front") => "front",
+        Some("top") => "top",
+        Some(other) => return Err(argument(format!("`{other}` is not an auxiliary plane; use `front` or `top`"))),
+    };
+    let scale = request.scale.unwrap_or(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(argument("`scale` must be a positive finite number"));
+    }
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !text_height.is_finite() || text_height <= 0.0 {
+        return Err(argument("`textHeight` must be a positive finite number"));
+    }
+    let origin = request.origin.unwrap_or([0.0, 0.0]);
+    if !finite2(&origin) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    let label = request.label.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).unwrap_or_else(|| "VIEW A".to_string());
+    if label.chars().count() > PROPERTY_VALUE_LIMIT {
+        return Err(argument("the view label is too long"));
+    }
+    let layer = request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| VIEWS_LAYER.to_string());
+    let radians = angle.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    let u = [cos, sin, 0.0];
+    let w = if plane == "front" { [0.0, 0.0, 1.0] } else { [-sin, cos, 0.0] };
+    let solids: Vec<Shape2> = request.part.solids.iter().flat_map(|feature| project_along(feature, u, w)).collect();
+    let voids: Vec<Shape2> = request.part.voids.iter().flat_map(|feature| project_along(feature, u, w)).collect();
+    let (min, max) = require_bounds(&solids, "auxiliary view")?;
+    let has_voids = !voids.is_empty();
+    let size = [max[0] - min[0], max[1] - min[1]];
+    let result = store::edit(handle, |drawing| {
+        ensure_layer(drawing, &layer);
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if has_voids {
+            ensure_hidden_layer(drawing);
+            if let Some(error) = locked_layer(drawing, HIDDEN_LAYER) {
+                return Err(error);
+            }
+        }
+        let shift = [origin[0] - min[0] * scale, origin[1] - min[1] * scale];
+        let mut kinds: Vec<(String, EntityKind)> = Vec::new();
+        for shape in &solids {
+            kinds.push((layer.clone(), shape.scaled(scale).translated(shift).kind()));
+        }
+        for shape in &voids {
+            kinds.push((HIDDEN_LAYER.to_string(), shape.scaled(scale).translated(shift).kind()));
+        }
+        let placed_width = size[0] * scale;
+        let center = origin[0] + placed_width / 2.0;
+        let caption_y = origin[1] - text_height * 1.7;
+        let scale_text = scale_annotation(scale);
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text { at: [center - text_width(&label, text_height) / 2.0, caption_y], height: text_height, content: label.clone() },
+        ));
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text {
+                at: [center - text_width(&scale_text, text_height) / 2.0, caption_y - text_height * 1.4],
+                height: text_height,
+                content: scale_text,
+            },
+        ));
+        // Direction arrow grouped with the caption so it reads as part of the
+        // annotation: a short sight line at the plan angle with the `A` marker
+        // at its head.
+        let arrow_length = text_height * 3.2;
+        let arrow_start =
+            [center - text_width(&label, text_height) / 2.0 - text_height * 3.0 - cos * arrow_length, caption_y - sin * arrow_length];
+        let arrow_end = [arrow_start[0] + cos * arrow_length, arrow_start[1] + sin * arrow_length];
+        kinds.push((layer.clone(), EntityKind::Line { from: arrow_start, to: arrow_end }));
+        let wing = text_height * 1.2;
+        for sign in [-1.0, 1.0] {
+            let (wing_sin, wing_cos) = (30f64.to_radians() * sign).sin_cos();
+            kinds.push((
+                layer.clone(),
+                EntityKind::Line {
+                    from: arrow_end,
+                    to: [arrow_end[0] - (cos * wing_cos - sin * wing_sin) * wing, arrow_end[1] - (sin * wing_cos + cos * wing_sin) * wing],
+                },
+            ));
+        }
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text {
+                at: [
+                    arrow_end[0] - sin * text_height * 0.8 + cos * text_height * 0.3,
+                    arrow_end[1] + cos * text_height * 0.8 + sin * text_height * 0.3,
+                ],
+                height: text_height,
+                content: String::from("A"),
+            },
+        ));
+        let mut created = Vec::with_capacity(kinds.len());
+        for (view_layer, kind) in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: view_layer, kind };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok(created)
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": result,
+            "view": {
+                "center": [origin[0] + size[0] * scale / 2.0, origin[1] + size[1] * scale / 2.0],
+                "width": size[0] * scale,
+                "height": size[1] * scale,
+                "angle": angle,
+                "plane": plane,
+            },
         })
     })
 }

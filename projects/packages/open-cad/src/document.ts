@@ -99,6 +99,10 @@ import type {
     LeaderNoteResult,
     ExplodedAssemblyRequest,
     ExplodedAssemblyResult,
+    AuxiliaryViewRequest,
+    AuxiliaryViewResult,
+    DetailViewRequest,
+    DetailViewResult,
     HoleTableRequest,
     HoleTableResult,
     IsometricViewRequest,
@@ -1090,6 +1094,32 @@ export class DrawingDocument {
     /** Tabulates the cylindrical voids of a declarative part model as a framed hole table. */
     holeTable(request: HoleTableRequest): HoleTableResult {
         return this.edit((handle) => service.holeTable(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Draws an enlarged, circled detail of one base view.
+     *
+     * The base view is drawn at 1:1 with its callout circle and the enlarged
+     * copy sits to the right, clipped to the circle and labelled `DETAIL A`.
+     * `center` and `radius` pick the region; `view` names the base view.
+     */
+    detailView(request: DetailViewRequest): DetailViewResult {
+        return this.edit((handle) => service.detailView(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /**
+     * Draws an auxiliary view projected along a plan angle.
+     *
+     * `angle` turns the projection plane about Z and `plane` chooses whether
+     * the result keeps Z vertical or the plan. The view carries its direction
+     * arrow and the `VIEW A` caption.
+     */
+    auxiliaryView(request: AuxiliaryViewRequest): AuxiliaryViewResult {
+        return this.edit((handle) => service.auxiliaryView(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

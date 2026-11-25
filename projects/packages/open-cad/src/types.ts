@@ -1749,6 +1749,76 @@ export interface HoleTableResult {
     readonly created: readonly Entity[];
 }
 
+/** Base views a detail or auxiliary view may unfold from. */
+export type DetailBaseView = 'front' | 'top' | 'left' | 'iso';
+
+/** Arguments of `detailView()`. */
+export interface DetailViewRequest {
+    /** The detailed part; needs at least one solid feature. */
+    readonly part: PartSpec;
+    /** Centre of the detail circle in the base view; defaults to the view centre. */
+    readonly center?: Point;
+    /** Radius of the detail circle in base-view units; defaults to 40% of the larger extent. */
+    readonly radius?: number;
+    /** Base view the detail is taken from; defaults to `top`. */
+    readonly view?: DetailBaseView;
+    /** Enlargement factor of the detail; defaults to 2. */
+    readonly scale?: number;
+    /** Height of the labels; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Lower-left corner of the placed pair; defaults to the origin. */
+    readonly origin?: Point;
+    /** Caption under the enlarged view; defaults to `DETAIL A`. */
+    readonly label?: string;
+    /** Layer carrying the views; defaults to `views`. */
+    readonly layer?: LayerId;
+}
+
+/** Result of `detailView()`. `detail` reports the source circle and placement. */
+export interface DetailViewResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+    readonly detail: {
+        readonly center: Point;
+        readonly radius: number;
+        readonly scale: number;
+        readonly placed: Point;
+        readonly placedRadius: number;
+    };
+}
+
+/** Arguments of `auxiliaryView()`. */
+export interface AuxiliaryViewRequest {
+    /** The projected part; needs at least one solid feature. */
+    readonly part: PartSpec;
+    /** Plan angle of the projection plane in degrees; defaults to 45. */
+    readonly angle?: number;
+    /** How the view is unfolded: `front` keeps Z vertical, `top` keeps the plan; defaults to `front`. */
+    readonly plane?: 'front' | 'top';
+    /** Linear scale factor of the view; defaults to 1. */
+    readonly scale?: number;
+    /** Height of the labels; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Lower-left corner of the placed view; defaults to the origin. */
+    readonly origin?: Point;
+    /** Caption under the view; defaults to `VIEW A`. */
+    readonly label?: string;
+    /** Layer carrying the view; defaults to `views`. */
+    readonly layer?: LayerId;
+}
+
+/** Result of `auxiliaryView()`. `view` reports the placed box and angle. */
+export interface AuxiliaryViewResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+    readonly view: PlacedView & {
+        readonly angle: number;
+        readonly plane: 'front' | 'top';
+    };
+}
+
 /** Arguments of `moveEntity()`. Exactly one of the offset and `to` forms. */
 export interface MoveEntityRequest {
     readonly entityId: EntityId;

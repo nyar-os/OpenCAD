@@ -27,11 +27,11 @@ use std::{
 };
 
 use open_cad_drawing::{
-    AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
-    DrawOrderAction, ExplodedAssemblyRequest, ExportOptions, ExtendSide, HatchPatternRequest, HoleTableRequest, IsometricViewRequest,
-    JoinRequest, LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis, MultiViewSheetRequest, OffsetSide, OrdinateAxis, OverkillRequest,
-    PolylineChamferRequest, QuantityTableRequest, SectionViewRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest,
-    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
+    AlignMode, AlignRequest, ArrayMode, ArrayRequest, AuxiliaryViewRequest, BreakRequest, CopyRequest, CreateRequest, DetailViewRequest,
+    DistributeAxis, DistributeRequest, DrawOrderAction, ExplodedAssemblyRequest, ExportOptions, ExtendSide, HatchPatternRequest,
+    HoleTableRequest, IsometricViewRequest, JoinRequest, LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis, MultiViewSheetRequest,
+    OffsetSide, OrdinateAxis, OverkillRequest, PolylineChamferRequest, QuantityTableRequest, SectionViewRequest, ServiceError,
+    SmoothPolylineRequest, StatsGroup, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -1166,6 +1166,28 @@ fn drawing_hole_table(ctx: CallContext) -> Result<JsValue> {
     let request: HoleTableRequest =
         serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
     let result = open_cad_drawing::add_hole_table(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Draws an enlarged detail of a base view with its callout circle and caption.
+#[function]
+fn drawing_detail_view(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: DetailViewRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_detail_view(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Draws an auxiliary view projected along a plan angle with a direction arrow.
+#[function]
+fn drawing_auxiliary_view(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: AuxiliaryViewRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_auxiliary_view(handle, request).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2830,6 +2852,8 @@ register_module![
     drawing_isometric_view,
     drawing_exploded_assembly,
     drawing_hole_table,
+    drawing_detail_view,
+    drawing_auxiliary_view,
     drawing_import_dxf,
     drawing_import_svg,
     open_gui,

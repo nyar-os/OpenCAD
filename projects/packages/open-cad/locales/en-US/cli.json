@@ -56,6 +56,8 @@
             "isometric-view": "Project a JSON part model into a standalone isometric view with an axis indicator and save the file",
             "exploded-assembly": "Space JSON assembly components apart into an exploded isometric view with numbered balloons and save the file",
             "hole-table": "Tabulate the cylindrical voids of a JSON part model as a framed hole table and save the file",
+            "detail-view": "Draw an enlarged, circled detail of one base view with a DETAIL A caption and save the file",
+            "auxiliary-view": "Project a JSON part model along a plan angle into an auxiliary view with a direction arrow and save the file",
             "select": "Select entities inside or crossing a rectangular window without changing the drawing",
             "snap": "Compute endpoint, midpoint, centre and line-intersection snap points without changing the drawing",
             "ucs": "Convert points and entities between world and user coordinates and save the file",
@@ -291,7 +293,14 @@
             "notes-layer": "Layer carrying the leader note; defaults to notes",
             "iso-label": "Caption under the isometric view; defaults to ISOMETRIC",
             "components": "JSON array of assembly components as [{\"name\":\"...\",\"part\":{...},\"position\":[x,y,z],\"explode\":[x,y,z]}]; at least one",
-            "hole-table-layer": "Target layer for the hole table; defaults to holes"
+            "hole-table-layer": "Target layer for the hole table; defaults to holes",
+            "detail-view": "Base view the detail is taken from: front, top, left or iso; defaults to top",
+            "detail-center": "Centre of the detail circle as x,y in base-view coordinates; defaults to the view centre",
+            "detail-radius": "Radius of the detail circle in base-view units; defaults to 40% of the larger extent",
+            "detail-label": "Caption under the enlarged view; defaults to DETAIL A",
+            "aux-angle": "Plan angle of the projection plane in degrees, from X towards Y; defaults to 45",
+            "aux-plane": "How the auxiliary view unfolds: front (default) keeps Z vertical, top keeps the plan",
+            "aux-label": "Caption under the auxiliary view; defaults to VIEW A"
         },
         "error": {
             "hatch-pattern-required": "`--id <entity>` is required",

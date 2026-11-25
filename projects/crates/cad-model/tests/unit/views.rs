@@ -496,7 +496,292 @@ fn hole_table_reports_empty_without_cylinders() {
 #[test]
 fn capabilities_matrix_lists_the_new_operations() {
     let matrix = crate::capabilities();
-    for name in ["multiview-sheet", "section-view", "leader-note", "isometric-view", "exploded-assembly", "hole-table"] {
+    for name in
+        ["multiview-sheet", "section-view", "leader-note", "isometric-view", "exploded-assembly", "hole-table", "detail-view", "auxiliary-view"]
+    {
         assert_eq!(matrix["operations"][name].as_str().unwrap(), "supported", "operation `{name}`");
     }
+}
+
+/// Column rules of the hole table: the left and right borders plus the inner
+/// separators, sorted left to right.
+fn hole_table_columns(result: &Value) -> Vec<f64> {
+    let mut verticals: Vec<(f64, f64)> = lines_on(result, "holes")
+        .into_iter()
+        .filter(|(from, to)| (from[0] - to[0]).abs() < 1e-9)
+        .map(|(from, to)| (from[0], (to[1] - from[1]).abs()))
+        .collect();
+    assert_eq!(verticals.len(), 7, "two borders and five separators");
+    verticals.sort_by(|left, right| left.0.total_cmp(&right.0));
+    verticals.into_iter().map(|(x, _)| x).collect()
+}
+
+#[test]
+fn hole_table_keeps_every_cell_inside_its_column() {
+    let handle = open_drawing();
+    let part = PartSpec {
+        solids: vec![Feature3d::Box { min: [0.0, 0.0, 0.0], max: [60.0, 40.0, 10.0] }],
+        voids: vec![
+            Feature3d::Cylinder { axis: Axis3::Z, center: [10.0, 10.0], from: 0.0, to: 10.0, radius: 3.0 },
+            Feature3d::Cylinder { axis: Axis3::Z, center: [50.0, 10.0], from: 0.0, to: 10.0, radius: 3.0 },
+            Feature3d::Cylinder { axis: Axis3::Z, center: [30.0, 30.0], from: 0.0, to: 5.0, radius: 5.0 },
+        ],
+    };
+    let text_height = 4.0;
+    let result =
+        add_hole_table(handle, HoleTableRequest { part, text_height: Some(text_height), origin: Some([0.0, 0.0]), ..Default::default() })
+            .expect("hole table");
+    let columns = hole_table_columns(&result);
+    let padding = text_height * CELL_PADDING;
+    let cells: Vec<(String, [f64; 2], f64)> = created(&result)
+        .iter()
+        .filter(|entity| entity["layer"] == "holes" && entity["kind"]["type"] == "text")
+        .map(|entity| {
+            (
+                entity["kind"]["content"].as_str().unwrap().to_string(),
+                [entity["kind"]["at"][0].as_f64().unwrap(), entity["kind"]["at"][1].as_f64().unwrap()],
+                entity["kind"]["height"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    for (content, at, height) in &cells {
+        if content == "HOLE TABLE" {
+            continue;
+        }
+        let width = text_width(content, *height);
+        let index = columns.windows(2).position(|pair| at[0] + 1e-9 >= pair[0] && at[0] + width <= pair[1] + 1e-9);
+        assert!(index.is_some(), "`{content}` at {at:?} (width {width}) escapes every column in {columns:?}");
+    }
+    // Derivative checks: headers are centred, numbers are flush right.
+    let headers = ["No.", "Axis", "Pos A", "Pos B", "Dia", "Depth"];
+    for (index, header) in headers.iter().enumerate() {
+        let (_, at, height) = cells.iter().find(|(content, _, _)| content == header).expect("header");
+        let center = at[0] + text_width(header, *height) / 2.0;
+        assert_close(center, (columns[index] + columns[index + 1]) / 2.0, 1e-9, &format!("{header} centre"));
+    }
+    for (content, at, height) in cells.iter().filter(|(content, _, _)| content == "50" || content == "10") {
+        let right = at[0] + text_width(content, *height);
+        assert!(
+            columns.iter().any(|edge| (right - (edge - padding)).abs() < 1e-9),
+            "`{content}` right edge {right} is not flush with a column minus padding"
+        );
+    }
+}
+
+#[test]
+fn exploded_balloon_leaders_avoid_the_other_components() {
+    let handle = open_drawing();
+    let plate = |height: f64| PartSpec { solids: vec![Feature3d::Box { min: [0.0, 0.0, 0.0], max: [40.0, 24.0, height] }], voids: Vec::new() };
+    let components = vec![
+        AssemblyComponent {
+            name: Some(String::from("BASE")),
+            part: plate(6.0),
+            position: None,
+            explode: None,
+            quantity: Some(1),
+            material: None,
+        },
+        AssemblyComponent {
+            name: Some(String::from("GASKET")),
+            part: plate(2.0),
+            position: Some([0.0, 0.0, 6.0]),
+            explode: Some([0.0, 0.0, 30.0]),
+            quantity: Some(2),
+            material: Some(String::from("RUBBER")),
+        },
+        AssemblyComponent {
+            name: Some(String::from("COVER")),
+            part: plate(8.0),
+            position: Some([0.0, 0.0, 8.0]),
+            explode: Some([0.0, 0.0, 60.0]),
+            quantity: Some(1),
+            material: Some(String::from("STEEL")),
+        },
+    ];
+    let text_height = 3.5;
+    let result = add_exploded_assembly(
+        handle,
+        ExplodedAssemblyRequest { components: components.clone(), text_height: Some(text_height), ..Default::default() },
+    )
+    .expect("exploded");
+    let items = result["items"].as_array().expect("items");
+    let leaders: Vec<Vec<[f64; 2]>> = polylines_on(&result, "views")
+        .into_iter()
+        .map(|(points, _)| points)
+        .filter(|points| {
+            points.len() == 4
+                && items.iter().any(|item| {
+                    (points[3][0] - item["center"][0].as_f64().unwrap()).abs() < 1e-9
+                        && (points[3][1] - item["center"][1].as_f64().unwrap()).abs() < 1e-9
+                })
+        })
+        .collect();
+    assert_eq!(leaders.len(), components.len(), "one elbow leader per component");
+
+    // Component boxes in placed coordinates, from the same projection and
+    // placement the op uses.
+    let placed_shapes: Vec<Vec<Shape2>> = components
+        .iter()
+        .map(|component| {
+            let delta =
+                [0, 1, 2].map(|axis| component.position.map(|p| p[axis]).unwrap_or(0.0) + component.explode.map(|e| e[axis]).unwrap_or(0.0));
+            let shift2 = iso_point(&delta);
+            component.part.solids.iter().flat_map(project_iso).map(|shape| shape.translated(shift2)).collect()
+        })
+        .collect();
+    let projected: Vec<([f64; 2], [f64; 2])> = placed_shapes.iter().map(|shapes| shapes_bounds(shapes).expect("bounds")).collect();
+    let group_min = projected.iter().fold([f64::INFINITY; 2], |acc, (min, _)| [acc[0].min(min[0]), acc[1].min(min[1])]);
+    let shift = [-group_min[0], -group_min[1]];
+    let boxes: Vec<([f64; 2], [f64; 2])> =
+        projected.iter().map(|(min, max)| ([min[0] + shift[0], min[1] + shift[1]], [max[0] + shift[0], max[1] + shift[1]])).collect();
+
+    let radius = text_height * 1.4;
+    for (index, item) in items.iter().enumerate() {
+        let center = [item["center"][0].as_f64().unwrap(), item["center"][1].as_f64().unwrap()];
+        let leader = leaders
+            .iter()
+            .find(|points| (points[points.len() - 1][0] - center[0]).abs() < 1e-9 && (points[points.len() - 1][1] - center[1]).abs() < 1e-9);
+        let leader = leader.unwrap_or_else(|| panic!("leader for item {index}"));
+        assert_eq!(leader.len(), 4, "balloon edge, knee, knee turn and target");
+        // The tip must land on its own outline, not in open space.
+        let owner_shapes = &placed_shapes[index];
+        let owner_bounds = projected[index];
+        let local_target = [leader[3][0] - shift[0], leader[3][1] - shift[1]];
+        let nearest = owner_shapes.iter().map(|shape| nearest_on_shape(shape, local_target)).min_by(|left, right| {
+            ((left[0] - local_target[0]).powi(2) + (left[1] - local_target[1]).powi(2))
+                .total_cmp(&((right[0] - local_target[0]).powi(2) + (right[1] - local_target[1]).powi(2)))
+        });
+        let nearest = nearest.expect("outline");
+        let miss = ((nearest[0] - local_target[0]).powi(2) + (nearest[1] - local_target[1]).powi(2)).sqrt();
+        assert!(miss < 1e-9, "leader {index} ends {miss} away from its outline (bounds {owner_bounds:?})");
+        for segment in leader.windows(2).take(3) {
+            for (other, (min, max)) in boxes.iter().enumerate() {
+                if other == index {
+                    continue;
+                }
+                assert!(
+                    !segment_hits_rect(segment[0], segment[1], *min, *max, 1e-6),
+                    "leader {index} segment {:?} crosses component {other}",
+                    segment
+                );
+            }
+        }
+        // Leaders must not cross each other either.
+        for (other_index, other) in leaders.iter().enumerate() {
+            if other_index <= index {
+                continue;
+            }
+            for left in leader.windows(2) {
+                for right in other.windows(2) {
+                    assert!(!segments_cross(left[0], left[1], right[0], right[1]), "leader {index} crosses leader {other_index}");
+                }
+            }
+        }
+        for (other, item) in items.iter().enumerate() {
+            if other == index {
+                continue;
+            }
+            let balloon = [item["balloon"][0].as_f64().unwrap(), item["balloon"][1].as_f64().unwrap()];
+            let distance = distance_to_segment(balloon, leader[0], leader[1]).min(distance_to_segment(balloon, leader[1], leader[2]));
+            assert!(distance > radius - 1e-9, "leader {index} runs through balloon {other} (distance {distance})");
+        }
+    }
+}
+
+/// Distance from `point` to the segment `from`-`to`.
+fn distance_to_segment(point: [f64; 2], from: [f64; 2], to: [f64; 2]) -> f64 {
+    let delta = [to[0] - from[0], to[1] - from[1]];
+    let length = delta[0] * delta[0] + delta[1] * delta[1];
+    let t = if length <= f64::EPSILON {
+        0.0
+    }
+    else {
+        (((point[0] - from[0]) * delta[0] + (point[1] - from[1]) * delta[1]) / length).clamp(0.0, 1.0)
+    };
+    let nearest = [from[0] + delta[0] * t, from[1] + delta[1] * t];
+    ((point[0] - nearest[0]).powi(2) + (point[1] - nearest[1]).powi(2)).sqrt()
+}
+
+/// Whether two segments cross at a proper interior point.
+fn segments_cross(a0: [f64; 2], a1: [f64; 2], b0: [f64; 2], b1: [f64; 2]) -> bool {
+    let cross = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    let d0 = cross(b0, b1, a0);
+    let d1 = cross(b0, b1, a1);
+    let d2 = cross(a0, a1, b0);
+    let d3 = cross(a0, a1, b1);
+    ((d0 > 1e-9 && d1 < -1e-9) || (d0 < -1e-9 && d1 > 1e-9)) && ((d2 > 1e-9 && d3 < -1e-9) || (d2 < -1e-9 && d3 > 1e-9))
+}
+
+#[test]
+fn detail_view_clips_to_the_circle_and_annotates_the_scale() {
+    let handle = open_drawing();
+    let part = PartSpec {
+        solids: vec![Feature3d::Box { min: [0.0, 0.0, 0.0], max: [40.0, 20.0, 10.0] }],
+        voids: vec![Feature3d::Cylinder { axis: Axis3::Z, center: [20.0, 10.0], from: 0.0, to: 10.0, radius: 4.0 }],
+    };
+    let result = add_detail_view(
+        handle,
+        DetailViewRequest {
+            part,
+            center: Some([20.0, 10.0]),
+            radius: Some(6.0),
+            view: Some(String::from("top")),
+            scale: Some(3.0),
+            ..Default::default()
+        },
+    )
+    .expect("detail");
+    let circles = circles_on(&result, "views");
+    assert!(circles.iter().any(|(_, radius)| (radius - 6.0).abs() < 1e-9), "callout circle");
+    assert!(circles.iter().any(|(_, radius)| (radius - 18.0).abs() < 1e-9), "enlarged circle");
+    let placed = result["detail"]["placed"].as_array().unwrap();
+    let detail_center = [placed[0].as_f64().unwrap(), placed[1].as_f64().unwrap()];
+    let texts = texts_on(&result, "views");
+    assert!(texts.iter().any(|(content, _)| content == "DETAIL A"));
+    assert!(texts.iter().any(|(content, _)| content == "SCALE 3:1"));
+    for (points, _) in polylines_on(&result, "views") {
+        // The base view is drawn at 1:1 on the left; only the runs right of the
+        // gap belong to the enlarged detail.
+        if points.iter().all(|point| point[0] < detail_center[0] - 18.0 - 1e-6) {
+            continue;
+        }
+        for point in points {
+            let offset = ((point[0] - detail_center[0]).powi(2) + (point[1] - detail_center[1]).powi(2)).sqrt();
+            assert!(offset <= 18.0 + 1e-6, "detail geometry escapes its boundary at {offset}");
+        }
+    }
+    let err = add_detail_view(
+        handle,
+        DetailViewRequest {
+            part: PartSpec { solids: vec![Feature3d::Box { min: [0.0, 0.0, 0.0], max: [10.0, 10.0, 10.0] }], voids: Vec::new() },
+            center: Some([500.0, 500.0]),
+            radius: Some(2.0),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "detail-view/empty");
+}
+
+#[test]
+fn auxiliary_view_turns_the_projection_plane_about_z() {
+    let handle = open_drawing();
+    let part = PartSpec { solids: vec![Feature3d::Box { min: [0.0, 0.0, 0.0], max: [40.0, 20.0, 10.0] }], voids: Vec::new() };
+    let result = add_auxiliary_view(handle, AuxiliaryViewRequest { part, angle: Some(45.0), ..Default::default() }).expect("auxiliary view");
+    let view = &result["view"];
+    assert_close(view["width"].as_f64().unwrap(), (40.0 + 20.0) * std::f64::consts::FRAC_1_SQRT_2, 1e-9, "rotated width");
+    assert_close(view["height"].as_f64().unwrap(), 10.0, 1e-9, "auxiliary height keeps Z");
+    let texts = texts_on(&result, "views");
+    assert!(texts.iter().any(|(content, _)| content == "VIEW A"));
+    assert!(texts.iter().any(|(content, _)| content == "A"), "direction marker");
+    let err = add_auxiliary_view(
+        handle,
+        AuxiliaryViewRequest {
+            part: PartSpec { solids: vec![Feature3d::Box { min: [0.0, 0.0, 0.0], max: [1.0, 1.0, 1.0] }], voids: Vec::new() },
+            plane: Some(String::from("side")),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "session/argument-invalid");
 }

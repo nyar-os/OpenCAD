@@ -48,6 +48,8 @@ import type {
     ExtendSide,
     GroupDeletion,
     ExplodedAssemblyResult,
+    AuxiliaryViewResult,
+    DetailViewResult,
     HatchPatternResult,
     HistoryResult,
     HoleTableResult,
@@ -504,6 +506,15 @@ function describeHoleTable(result: HoleTableResult): string {
         lines.push(`  ${row.no} axis=${row.axis} pos=${row.posA},${row.posB} dia=${row.diameter} depth=${row.depth}`);
     }
     return lines.join('\n');
+}
+
+function describeDetailView(result: DetailViewResult): string {
+    const detail = result.detail;
+    return `detail view revision=${result.revision}\n  source: center=${detail.center[0]},${detail.center[1]} radius=${detail.radius}\n  placed: center=${detail.placed[0]},${detail.placed[1]} radius=${detail.placedRadius} scale=${detail.scale}\n  created: ${result.created.length} entities`;
+}
+
+function describeAuxiliaryView(result: AuxiliaryViewResult): string {
+    return `auxiliary view revision=${result.revision}\n  view: angle=${result.view.angle} plane=${result.view.plane} width=${result.view.width} height=${result.view.height}\n  created: ${result.created.length} entities`;
 }
 
 function describeTextMatches(result: TextMatchResult): string {
@@ -2866,6 +2877,107 @@ cli
                 }),
             );
             ctx.emitResult(result, describeHoleTable(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('detail-view', 'cli.cmd.detail-view')
+    .option('--part <json>', 'cli.opt.part-spec')
+    .option('--view <name>', 'cli.opt.detail-view')
+    .option('--center <x,y>', 'cli.opt.detail-center')
+    .option('--radius <number>', 'cli.opt.detail-radius')
+    .option('--scale <number>', 'cli.opt.view-scale')
+    .option('--text-height <number>', 'cli.opt.view-text-height')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--label <text>', 'cli.opt.detail-label')
+    .option('--layer <layer>', 'cli.opt.views-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const spec = part(options, 'part');
+        if (spec === undefined) {
+            ctx.fail('open-cad.cli.part-invalid', { message: '`--part <json>` needs a JSON object with a non-empty `solids` list' });
+            return 2;
+        }
+        const center = point(options, 'center');
+        if (text(options, 'center') !== undefined && center === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--center x,y` needs two numbers' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.detailView({
+                    part: spec,
+                    view: text(options, 'view') as 'front' | 'top' | 'left' | 'iso' | undefined,
+                    center,
+                    radius: number(options, 'radius'),
+                    scale: number(options, 'scale'),
+                    textHeight: number(options, 'text-height'),
+                    origin,
+                    label: text(options, 'label'),
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeDetailView(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('auxiliary-view', 'cli.cmd.auxiliary-view')
+    .option('--part <json>', 'cli.opt.part-spec')
+    .option('--angle <number>', 'cli.opt.aux-angle')
+    .option('--plane <name>', 'cli.opt.aux-plane')
+    .option('--scale <number>', 'cli.opt.view-scale')
+    .option('--text-height <number>', 'cli.opt.view-text-height')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--label <text>', 'cli.opt.aux-label')
+    .option('--layer <layer>', 'cli.opt.views-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const spec = part(options, 'part');
+        if (spec === undefined) {
+            ctx.fail('open-cad.cli.part-invalid', { message: '`--part <json>` needs a JSON object with a non-empty `solids` list' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.auxiliaryView({
+                    part: spec,
+                    angle: number(options, 'angle'),
+                    plane: text(options, 'plane') as 'front' | 'top' | undefined,
+                    scale: number(options, 'scale'),
+                    textHeight: number(options, 'text-height'),
+                    origin,
+                    label: text(options, 'label'),
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeAuxiliaryView(result));
             return 0;
         } finally {
             opened.close();

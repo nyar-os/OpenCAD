@@ -345,6 +345,19 @@ fn generated_drawings_are_framed_inside_their_page() {
         crate::add_exploded_assembly(handle, crate::ExplodedAssemblyRequest { components, ..Default::default() }).expect("exploded");
         drawings.push(("exploded", crate::store::read(handle, |session| session.drawing.clone()).expect("read")));
     }
+    {
+        let created = crate::create(crate::CreateRequest::default()).expect("create");
+        let handle = created["handle"].as_u64().expect("handle");
+        crate::add_detail_view(handle, crate::DetailViewRequest { part: part.clone(), radius: Some(20.0), ..Default::default() })
+            .expect("detail");
+        drawings.push(("detail", crate::store::read(handle, |session| session.drawing.clone()).expect("read")));
+    }
+    {
+        let created = crate::create(crate::CreateRequest::default()).expect("create");
+        let handle = created["handle"].as_u64().expect("handle");
+        crate::add_auxiliary_view(handle, crate::AuxiliaryViewRequest { part, angle: Some(30.0), ..Default::default() }).expect("auxiliary");
+        drawings.push(("auxiliary", crate::store::read(handle, |session| session.drawing.clone()).expect("read")));
+    }
     for (name, drawing) in drawings {
         let frame = Frame::of(&drawing);
         let margin = frame_margin(drawing.units);
