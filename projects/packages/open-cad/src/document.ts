@@ -144,9 +144,9 @@ export interface DrawingDocumentOptions {
     readonly sourcePath?: string;
     /** Sidecar helpers; present only in a `sidecar` session. */
     readonly historyModule?: HistoryModule;
-    /** Import statistics when the document came from `importDxf()`. */
+    /** Import statistics when the document came from `importDxf()` or `importSvg()`. */
     readonly imported?: { readonly entities: number; readonly layers: number };
-    /** Import losses reported by `importDxf()`. */
+    /** Import losses reported by `importDxf()` or `importSvg()`. */
     readonly losses?: readonly ImportLoss[];
 }
 
@@ -252,12 +252,12 @@ export class DrawingDocument {
         return this.closed;
     }
 
-    /** Import statistics when this document came from `importDxf()`. */
+    /** Import statistics when this document came from `importDxf()` or `importSvg()`. */
     get imported(): { readonly entities: number; readonly layers: number } | undefined {
         return this.importedCounts;
     }
 
-    /** Import losses when this document came from `importDxf()`. */
+    /** Import losses when this document came from `importDxf()` or `importSvg()`. */
     get losses(): readonly ImportLoss[] | undefined {
         return this.importLosses;
     }

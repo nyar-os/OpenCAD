@@ -480,3 +480,203 @@ fn three_dimensional_polyline_is_projected_onto_the_plane() {
     assert_eq!(points.as_slice(), &[[0.0, 0.0], [10.0, 0.0]]);
     assert!(codes(&losses).contains(&"dxf/projected-3d"));
 }
+
+#[test]
+fn svg_reads_basic_shapes() {
+    let source = "<svg xmlns=\"http://www.w3.org/2000/svg\">\
+        <line x1=\"0\" y1=\"0\" x2=\"10\" y2=\"5\"/>\
+        <circle cx=\"5\" cy=\"5\" r=\"2\"/>\
+        <ellipse cx=\"0\" cy=\"0\" rx=\"4\" ry=\"2\"/>\
+        <rect x=\"1\" y=\"1\" width=\"4\" height=\"2\"/>\
+        <polyline points=\"0,0 1,2 3,4\"/>\
+        <polygon points=\"0,0 2,0 2,2\"/>\
+    </svg>";
+    let (drawing, losses) = svg(source, Some("Plan".to_string())).expect("read svg");
+
+    assert_eq!(drawing.title.as_deref(), Some("Plan"));
+    assert_eq!(drawing.entities.len(), 6);
+    let EntityKind::Line { from, to } = &drawing.entities[0].kind
+    else {
+        panic!("expected a line")
+    };
+    assert_eq!((*from, *to), ([0.0, 0.0], [10.0, 5.0]));
+    let EntityKind::Circle { center, radius } = &drawing.entities[1].kind
+    else {
+        panic!("expected a circle")
+    };
+    assert_eq!((*center, *radius), ([5.0, 5.0], 2.0));
+    let EntityKind::Ellipse { center, rx, ry, rotation, start_angle, end_angle } = &drawing.entities[2].kind
+    else {
+        panic!("expected an ellipse")
+    };
+    assert_eq!((*center, *rx, *ry, *rotation, *start_angle, *end_angle), ([0.0, 0.0], 4.0, 2.0, 0.0, 0.0, 360.0));
+    let EntityKind::Polyline { points, closed } = &drawing.entities[3].kind
+    else {
+        panic!("expected a rect polyline")
+    };
+    assert_eq!(points.as_slice(), &[[1.0, 1.0], [5.0, 1.0], [5.0, 3.0], [1.0, 3.0]]);
+    assert!(closed);
+    let EntityKind::Polyline { points, closed } = &drawing.entities[4].kind
+    else {
+        panic!("expected a polyline")
+    };
+    assert_eq!(points.as_slice(), &[[0.0, 0.0], [1.0, 2.0], [3.0, 4.0]]);
+    assert!(!closed);
+    let EntityKind::Polyline { points, closed } = &drawing.entities[5].kind
+    else {
+        panic!("expected a polygon")
+    };
+    assert_eq!(points.as_slice(), &[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]);
+    assert!(closed);
+    assert!(drawing.entities.iter().all(|entity| entity.layer == "0"));
+    assert_eq!(codes(&losses), ["svg/assumed-units"]);
+}
+
+#[test]
+fn svg_rect_rounding_is_reported() {
+    let (drawing, losses) = svg("<svg><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\" rx=\"2\"/></svg>", None).expect("read rounded rect");
+    assert_eq!(drawing.entities.len(), 1);
+    assert!(codes(&losses).contains(&"svg/rect-corner"), "{:?}", codes(&losses));
+}
+
+#[test]
+fn svg_path_moves_lines_and_closes() {
+    let source = "<svg><path d=\"M0,0 L10,0 L10,10 Z M20,20 L25,25\"/></svg>";
+    let (drawing, _losses) = svg(source, None).expect("read path");
+    assert_eq!(drawing.entities.len(), 2);
+    let EntityKind::Polyline { points, closed } = &drawing.entities[0].kind
+    else {
+        panic!("expected a closed subpath")
+    };
+    assert_eq!(points.as_slice(), &[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
+    assert!(closed);
+    let EntityKind::Polyline { points, closed } = &drawing.entities[1].kind
+    else {
+        panic!("expected an open subpath")
+    };
+    assert_eq!(points.as_slice(), &[[20.0, 20.0], [25.0, 25.0]]);
+    assert!(!closed);
+}
+
+#[test]
+fn svg_path_relative_commands_match_absolute() {
+    let source = "<svg><path d=\"M1,1 l2,0 h3 v2\"/><path d=\"M1,1 L3,1 H6 V3\"/></svg>";
+    let (drawing, _losses) = svg(source, None).expect("read relative path");
+    assert_eq!(drawing.entities.len(), 2);
+    let EntityKind::Polyline { points, .. } = &drawing.entities[0].kind
+    else {
+        panic!("expected a polyline")
+    };
+    let EntityKind::Polyline { points: absolute, .. } = &drawing.entities[1].kind
+    else {
+        panic!("expected a polyline")
+    };
+    assert_eq!(points.as_slice(), &[[1.0, 1.0], [3.0, 1.0], [6.0, 1.0], [6.0, 3.0]]);
+    assert_eq!(points, absolute);
+}
+
+#[test]
+fn svg_path_curves_are_flattened() {
+    let source = "<svg><path d=\"M0,0 C10,0 10,10 0,10\"/><path d=\"M0,0 Q10,0 10,10\"/><path d=\"M0,0 C4,0 6,2 10,2 S16,4 20,4\"/></svg>";
+    let (drawing, losses) = svg(source, None).expect("read curved paths");
+    assert_eq!(drawing.entities.len(), 3);
+    for entity in &drawing.entities {
+        let EntityKind::Polyline { points, closed } = &entity.kind
+        else {
+            panic!("expected a flattened polyline")
+        };
+        assert!(points.len() > 2, "a curve keeps its samples");
+        assert!(!closed);
+    }
+    let EntityKind::Polyline { points, .. } = &drawing.entities[0].kind
+    else {
+        panic!("expected a polyline")
+    };
+    assert_eq!((points.len(), points[points.len() - 1]), (17, [0.0, 10.0]));
+    let EntityKind::Polyline { points, .. } = &drawing.entities[1].kind
+    else {
+        panic!("expected a polyline")
+    };
+    assert_eq!((points.len(), points[points.len() - 1]), (17, [10.0, 10.0]));
+    let EntityKind::Polyline { points, .. } = &drawing.entities[2].kind
+    else {
+        panic!("expected a polyline")
+    };
+    assert_eq!((points.len(), points[points.len() - 1]), (33, [20.0, 4.0]));
+    let flattened = losses.iter().find(|loss| loss.code == "svg/path-curve-flattened").expect("flattened loss");
+    assert_eq!(flattened.severity, "notice");
+    assert!(flattened.detail.contains('4'), "{}", flattened.detail);
+}
+
+#[test]
+fn svg_path_arc_command_truncates_the_path() {
+    let source = "<svg><path d=\"M0,0 L5,5 A2,2 0 0 1 10,10 L20,20\"/></svg>";
+    let (drawing, losses) = svg(source, None).expect("read truncated path");
+    assert_eq!(drawing.entities.len(), 1);
+    let EntityKind::Polyline { points, .. } = &drawing.entities[0].kind
+    else {
+        panic!("expected a polyline")
+    };
+    assert_eq!(points.as_slice(), &[[0.0, 0.0], [5.0, 5.0]]);
+    let truncated = losses.iter().find(|loss| loss.code == "svg/path-unsupported-command").expect("truncated loss");
+    assert_eq!(truncated.severity, "warning");
+}
+
+#[test]
+fn svg_text_becomes_a_text_entity() {
+    let source = "<svg><text x=\"3\" y=\"4\" font-size=\"12\">Site <tspan>t</tspan> plan</text><text>hello</text></svg>";
+    let (drawing, _losses) = svg(source, None).expect("read text");
+    assert_eq!(drawing.entities.len(), 2);
+    let EntityKind::Text { at, height, content } = &drawing.entities[0].kind
+    else {
+        panic!("expected text")
+    };
+    assert_eq!((*at, *height, content.as_str()), ([3.0, 4.0], 12.0, "Site t plan"));
+    let EntityKind::Text { at, height, content } = &drawing.entities[1].kind
+    else {
+        panic!("expected text")
+    };
+    assert_eq!((*at, *height, content.as_str()), ([0.0, 0.0], 16.0, "hello"));
+}
+
+#[test]
+fn svg_transforms_and_unsupported_elements_are_reported() {
+    let source = "<svg><g transform=\"translate(1,1)\"><line x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"/></g>\
+        <image href=\"a.png\"/><use href=\"#b\"/><defs><circle cx=\"0\" cy=\"0\" r=\"5\"/></defs></svg>";
+    let (drawing, losses) = svg(source, None).expect("read svg with losses");
+    assert_eq!(drawing.entities.len(), 1, "defs content is not imported");
+    let EntityKind::Line { from, to } = &drawing.entities[0].kind
+    else {
+        panic!("expected a line")
+    };
+    assert_eq!((*from, *to), ([0.0, 0.0], [1.0, 1.0]), "transforms are not applied");
+    let codes = codes(&losses);
+    assert!(codes.contains(&"svg/transform"), "{codes:?}");
+    assert_eq!(codes.iter().filter(|code| **code == "svg/element-unsupported").count(), 2, "{codes:?}");
+    assert!(losses.iter().any(|loss| loss.code == "svg/element-unsupported" && loss.detail.contains("image")));
+    assert!(losses.iter().any(|loss| loss.code == "svg/element-unsupported" && loss.detail.contains("use")));
+}
+
+#[test]
+fn svg_degenerate_geometry_is_skipped() {
+    let source = "<svg><circle cx=\"1\" cy=\"1\"/><line/><line x2=\"4\" y2=\"3\"/></svg>";
+    let (drawing, losses) = svg(source, None).expect("read svg");
+    assert_eq!(drawing.entities.len(), 1);
+    let EntityKind::Line { from, to } = &drawing.entities[0].kind
+    else {
+        panic!("expected a line")
+    };
+    assert_eq!((*from, *to), ([0.0, 0.0], [4.0, 3.0]));
+    let invalid = losses.iter().find(|loss| loss.code == "svg/element-invalid").expect("invalid loss");
+    assert_eq!(invalid.severity, "warning");
+    assert!(invalid.detail.contains('2'), "{}", invalid.detail);
+}
+
+#[test]
+fn svg_rejects_non_svg_text_and_imports_an_empty_deck() {
+    let error = svg("0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n", None).expect_err("not svg");
+    assert_eq!(error.code, "format/invalid");
+    let (drawing, losses) = svg("<svg></svg>", None).expect("empty svg");
+    assert_eq!(drawing.entities.len(), 0);
+    assert_eq!(codes(&losses), ["svg/assumed-units"]);
+}

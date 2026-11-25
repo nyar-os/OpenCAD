@@ -110,8 +110,9 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// The matrix only claims what the test suite exercises: the native `.ocad`
 /// project is partial, SVG, PDF, STEP, STL, OBJ and IGES export are supported,
 /// DXF export plus the declared ASCII import subset are partial, and the
-/// supported document checks run. SVG is the only preview renderer; DWG and the
-/// STL reader stay unsupported. STEP, OBJ and IGES are partial overall because
+/// supported document checks run. SVG is the only preview renderer and also has
+/// a declared import subset; DWG and the STL reader stay unsupported. STEP,
+/// OBJ and IGES are partial overall because
 /// only their export direction is implemented: `exportTargets.step`,
 /// `exportTargets.obj` and `exportTargets.iges` are supported and there is no
 /// STEP, OBJ or IGES reader.
@@ -7207,6 +7208,41 @@ pub fn import_dxf(source: &Path, title: Option<String>) -> Result<Value, Service
     let title =
         title.filter(|value| !value.trim().is_empty()).or_else(|| source.file_stem().and_then(|stem| stem.to_str()).map(str::to_string));
     let (drawing, losses) = import::dxf(&text, title)?;
+    drawing.validate().map_err(|message| invalid(format!("`{}` imports an invalid drawing: {message}", source.display())))?;
+    let imported = json!({ "entities": drawing.entities.len(), "layers": drawing.layers.len() });
+    let handle = store::insert(drawing);
+    store::read(handle, |session| {
+        json!({
+            "handle": handle,
+            "source": source.display().to_string(),
+            "drawing": session.summary(),
+            "imported": imported,
+            "losses": losses,
+        })
+    })
+}
+
+/// Imports the declared SVG subset and returns `{ handle, drawing, ... }`.
+///
+/// The reader keeps `line`, `circle`, `ellipse`, `rect`, `polyline`, `polygon`,
+/// `path` and `text` on the default layer. Path moves, lines and closes stay as
+/// polylines; cubic and quadratic commands are sampled into line segments.
+/// Transforms, viewports and presentation styling are not applied, definition
+/// subtrees are skipped, and every approximation or omission is reported in
+/// `losses` with `{ code, severity, detail }`.
+pub fn import_svg(source: &Path, title: Option<String>) -> Result<Value, ServiceError> {
+    let bytes = fs::read(source).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            ServiceError::new("drawing/not-found", format!("`{}` does not exist", source.display()))
+        }
+        else {
+            ServiceError::new("drawing/io-error", format!("could not read `{}`: {error}", source.display()))
+        }
+    })?;
+    let text = String::from_utf8(bytes).map_err(|_| invalid(format!("`{}` is not UTF-8 text", source.display())))?;
+    let title =
+        title.filter(|value| !value.trim().is_empty()).or_else(|| source.file_stem().and_then(|stem| stem.to_str()).map(str::to_string));
+    let (drawing, losses) = import::svg(&text, title)?;
     drawing.validate().map_err(|message| invalid(format!("`{}` imports an invalid drawing: {message}", source.display())))?;
     let imported = json!({ "entities": drawing.entities.len(), "layers": drawing.layers.len() });
     let handle = store::insert(drawing);

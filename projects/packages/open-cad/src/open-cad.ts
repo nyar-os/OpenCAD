@@ -19,6 +19,7 @@ import type {
     DrawingInput,
     HistoryMode,
     ImportDxfRequest,
+    ImportSvgRequest,
     InspectOptions,
     InspectReport,
     OpenCADCapabilities,
@@ -109,6 +110,34 @@ export class OpenCAD {
         }
         const historyModule = await this.loadHistory();
         const imported = service.importDxf({ source: candidate.source, title: typeof candidate.title === 'string' ? candidate.title : undefined });
+        const document = new DrawingDocument(imported.handle, imported.drawing, {
+            history: this.history,
+            historyModule,
+            imported: imported.imported,
+            losses: imported.losses,
+        });
+        this.documents.add(document);
+        return document;
+    }
+
+    /**
+     * Imports the declared SVG subset into a new document.
+     *
+     * The new handle starts with an empty history. The returned document
+     * exposes the imported counts and the losses through its `imported` and
+     * `losses` getters.
+     */
+    async importSvg(input: ImportSvgRequest): Promise<DrawingDocument> {
+        this.assertActive();
+        const candidate = input as unknown as Record<string, unknown> | null;
+        if (typeof candidate !== 'object' || candidate === null) {
+            throw new OpenCADError('session/argument-invalid', 'ImportSvgRequest must contain `source`');
+        }
+        if (typeof candidate.source !== 'string' || candidate.source.length === 0) {
+            throw new OpenCADError('session/argument-invalid', '`source` must be a non-empty string');
+        }
+        const historyModule = await this.loadHistory();
+        const imported = service.importSvg({ source: candidate.source, title: typeof candidate.title === 'string' ? candidate.title : undefined });
         const document = new DrawingDocument(imported.handle, imported.drawing, {
             history: this.history,
             historyModule,

@@ -4,8 +4,9 @@
  * The registry classifies extensions the product must recognise and fixes what
  * each one is. Classification is **not** a support claim: what the installed
  * engine can read, write or project is reported by `OpenCAD.capabilities()`.
- * Today SVG, DXF, PDF, STL, OBJ and STEP are supported export targets, and DXF
- * has a declared ASCII import subset. Classification of the other extensions
+ * Today SVG, DXF, PDF, STL, OBJ and STEP are supported export targets, DXF
+ * has a declared ASCII import subset and SVG has a declared element subset.
+ * Classification of the other extensions
  * remains a description of the format, not a promise.
  */
 
@@ -59,7 +60,7 @@ export const formatRegistry: Readonly<Record<DrawingFormat, FormatRegistryEntry>
     igs: { family: 'exchange', markup: 'text', opensAs: 'drawing', exchangeTarget: true },
     stl: { family: 'mesh', markup: 'binary', opensAs: 'reference', exchangeTarget: true },
     obj: { family: 'mesh', markup: 'text', opensAs: 'reference', exchangeTarget: true },
-    svg: { family: 'vector', markup: 'xml', opensAs: 'reference', exchangeTarget: true },
+    svg: { family: 'vector', markup: 'xml', opensAs: 'drawing', exchangeTarget: true },
     pdf: { family: 'document', markup: 'fixed', opensAs: 'reference', exchangeTarget: true },
     png: { family: 'raster', markup: 'raster', opensAs: 'reference', exchangeTarget: false },
     jpg: { family: 'raster', markup: 'raster', opensAs: 'reference', exchangeTarget: false },

@@ -110,6 +110,7 @@ export interface NativeBinding {
     drawing_stats(handle: number, groupBy?: string): string;
     drawing_quantity_table(handle: number, requestJson: string): string;
     drawing_import_dxf(requestJson: string): string;
+    drawing_import_svg(requestJson: string): string;
     openGui(options?: { title?: string; contentDir?: string; width?: number; height?: number }): string;
     pumpEvents(): string;
     closeGui(): string;

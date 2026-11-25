@@ -1807,6 +1807,14 @@ export interface ImportDxfRequest {
     readonly title?: string;
 }
 
+/** Arguments of `OpenCAD.importSvg()`. */
+export interface ImportSvgRequest {
+    /** Path of the SVG file. */
+    readonly source: string;
+    /** Title of the new drawing; defaults to the source file stem. */
+    readonly title?: string;
+}
+
 /** One item the DXF reader assumed, approximated or skipped. */
 export interface ImportLoss {
     readonly code: string;
@@ -1817,6 +1825,15 @@ export interface ImportLoss {
 
 /** Result of `OpenCAD.importDxf()`. */
 export interface ImportDxfResult {
+    readonly handle: number;
+    readonly source: string;
+    readonly drawing: Drawing;
+    readonly imported: { readonly entities: number; readonly layers: number };
+    readonly losses: readonly ImportLoss[];
+}
+
+/** Result of `OpenCAD.importSvg()`. */
+export interface ImportSvgResult {
     readonly handle: number;
     readonly source: string;
     readonly drawing: Drawing;

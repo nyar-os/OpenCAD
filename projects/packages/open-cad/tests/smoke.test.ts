@@ -110,6 +110,7 @@ test('format registry classifies the drawing format family', () => {
     assert.equal(formatInfo('stl').family, 'mesh');
     assert.equal(formatInfo('obj').exchangeTarget, true);
     assert.equal(formatInfo('svg').markup, 'xml');
+    assert.equal(formatInfo('svg').opensAs, 'drawing', 'the SVG import subset lets a file open as a drawing');
     assert.equal(formatInfo('pdf').family, 'document');
     assert.equal(formatInfo('png').family, 'raster');
 
@@ -1509,6 +1510,40 @@ test('DXF import keeps arcs analytic and reports losses', { skip: withAddon }, a
         assert.ok(imported.losses.every((loss) => loss.severity === 'notice' || loss.severity === 'warning'));
     } finally {
         service.close(imported.handle);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+const sampleSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="10" y2="0"/><circle cx="5" cy="5" r="2"/><path d="M0,0 L4,0 A1,1 0 0 0 4,2"/><image href="a.png"/></svg>';
+
+test('SVG import keeps the element subset and reports losses', { skip: withAddon }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-svg-'));
+    const source = path.join(dir, 'plan.svg');
+    fs.writeFileSync(source, sampleSvg, 'utf8');
+    const cad = new OpenCAD();
+    try {
+        const imported = service.importSvg({ source, title: 'SVG plan' });
+        try {
+            assert.equal(imported.drawing.title, 'SVG plan');
+            assert.equal(imported.imported.entities, 3);
+            assert.ok(imported.losses.some((loss) => loss.code === 'svg/assumed-units'), JSON.stringify(imported.losses));
+            assert.ok(imported.losses.some((loss) => loss.code === 'svg/path-unsupported-command'));
+            assert.ok(imported.losses.some((loss) => loss.code === 'svg/element-unsupported'));
+            assert.ok(imported.losses.every((loss) => loss.severity === 'notice' || loss.severity === 'warning'));
+        } finally {
+            service.close(imported.handle);
+        }
+        const document = await cad.importSvg({ source });
+        try {
+            assert.equal(document.entities, 3);
+            assert.equal(document.canUndo, false);
+            assert.ok((document.losses?.length ?? 0) > 0);
+        } finally {
+            document.close();
+        }
+    } finally {
+        await cad.dispose();
         fs.rmSync(dir, { recursive: true, force: true });
     }
 });

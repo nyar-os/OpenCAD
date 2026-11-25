@@ -74,6 +74,8 @@ import type {
     HistoryResult,
     ImportDxfRequest,
     ImportDxfResult,
+    ImportSvgRequest,
+    ImportSvgResult,
     InspectCheck,
     InspectReport,
     JoinResult,
@@ -1145,6 +1147,13 @@ export function quantityTable(handle: number, request: QuantityTableRequest): Qu
 export function importDxf(request: ImportDxfRequest): ImportDxfResult {
     return decode<ImportDxfResult>(() =>
         binding('drawing.importDxf').drawing_import_dxf(JSON.stringify({ source: request.source, title: request.title })),
+    );
+}
+
+/** Imports the declared SVG subset into a new drawing handle. */
+export function importSvg(request: ImportSvgRequest): ImportSvgResult {
+    return decode<ImportSvgResult>(() =>
+        binding('drawing.importSvg').drawing_import_svg(JSON.stringify({ source: request.source, title: request.title })),
     );
 }
 

@@ -1156,6 +1156,14 @@ fn drawing_import_dxf(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &result)
 }
 
+/// Imports the declared SVG subset into a new drawing.
+#[function]
+fn drawing_import_svg(ctx: CallContext) -> Result<JsValue> {
+    let request = parse_request(&text(&ctx, 0)?)?;
+    let result = call_import_svg(&request).map_err(Error::new)?;
+    respond(&ctx, &result)
+}
+
 fn service_failure(error: ServiceError) -> String {
     format!("{}: {}", error.code, error.message)
 }
@@ -1770,6 +1778,12 @@ fn call_import_dxf(request: &Value) -> std::result::Result<Value, String> {
     open_cad_drawing::import_dxf(Path::new(&source), title).map_err(service_failure)
 }
 
+fn call_import_svg(request: &Value) -> std::result::Result<Value, String> {
+    let source = request_string(request, "source")?;
+    let title = request.get("title").and_then(Value::as_str).map(str::to_string);
+    open_cad_drawing::import_svg(Path::new(&source), title).map_err(service_failure)
+}
+
 fn handle_of(value: &Value) -> Option<u64> {
     value.get("handle").and_then(Value::as_u64)
 }
@@ -2378,6 +2392,13 @@ impl IpcHandler for StudioIpcHandler {
                     Err(message) => failure(id, "importDxfError", message),
                 }
             }
+            "drawing.importSvg" => {
+                let request = value.get("request").cloned().unwrap_or_else(|| value.clone());
+                match call_import_svg(&request) {
+                    Ok(result) => reply(id, "importSvgResult", result),
+                    Err(message) => failure(id, "importSvgError", message),
+                }
+            }
             _ => IpcOutcome::Ignored,
         }
     }
@@ -2727,6 +2748,7 @@ register_module![
     drawing_stats,
     drawing_quantity_table,
     drawing_import_dxf,
+    drawing_import_svg,
     open_gui,
     pump_events,
     close_gui,

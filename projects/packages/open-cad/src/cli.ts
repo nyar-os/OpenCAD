@@ -689,7 +689,7 @@ cli
     .actionCtx(async (options, _args, ctx) => {
         const source = input(options);
         if (source === undefined) {
-            ctx.fail('open-cad.cli.file-required', { message: 'a source DXF file is required' });
+            ctx.fail('open-cad.cli.file-required', { message: 'a source DXF or SVG file is required' });
             return 2;
         }
         const out = text(options, 'out');
@@ -697,7 +697,10 @@ cli
             ctx.fail('open-cad.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        const imported = await guard(ctx, () => app.importDxf({ source, title: text(options, 'title') }));
+        const title = text(options, 'title');
+        const imported = await guard(ctx, () =>
+            path.extname(source).toLowerCase() === '.svg' ? app.importSvg({ source, title }) : app.importDxf({ source, title }),
+        );
         try {
             const report = await guard(ctx, () => imported.save({ target: out, overwrite: flag(options, 'overwrite') }));
             const counts = imported.imported ?? { entities: imported.entities, layers: imported.layers.length };

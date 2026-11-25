@@ -1556,6 +1556,714 @@ pub(crate) fn dxf(text: &str, title: Option<String>) -> Result<(Drawing, Vec<Los
     Ok(reader.finish())
 }
 
+/// One SVG tag with its attributes and its byte span in the source text.
+struct SvgTag<'a> {
+    name: &'a str,
+    attrs: Vec<(&'a str, &'a str)>,
+    self_closing: bool,
+    closing: bool,
+    start: usize,
+    end: usize,
+}
+
+/// Finds one byte sequence inside a byte slice.
+fn svg_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+/// Advances past ASCII whitespace.
+fn svg_skip_ws(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i
+}
+
+/// Splits SVG markup into tags, skipping declarations, comments and doctypes.
+fn svg_tags(text: &str) -> Vec<SvgTag<'_>> {
+    let bytes = text.as_bytes();
+    let mut tags: Vec<SvgTag> = Vec::new();
+    let mut i = 0usize;
+    while let Some(offset) = bytes[i..].iter().position(|&byte| byte == b'<') {
+        i += offset + 1;
+        if i >= bytes.len() {
+            break;
+        }
+        match bytes[i] {
+            b'?' => {
+                let Some(offset) = svg_find(&bytes[i..], b"?>")
+                else {
+                    break;
+                };
+                i += offset + 2;
+            }
+            b'!' => {
+                if bytes[i..].starts_with(b"!--") {
+                    let Some(offset) = svg_find(&bytes[i..], b"-->")
+                    else {
+                        break;
+                    };
+                    i += offset + 3;
+                }
+                else {
+                    let Some(offset) = bytes[i..].iter().position(|&byte| byte == b'>')
+                    else {
+                        break;
+                    };
+                    i += offset + 1;
+                }
+            }
+            b'/' => {
+                let tag_start = i - 1;
+                i += 1;
+                let name_start = i;
+                while i < bytes.len() && !matches!(bytes[i], b'>' | b' ' | b'\t' | b'\n' | b'\r') {
+                    i += 1;
+                }
+                let name = &text[name_start..i];
+                let Some(offset) = bytes[i..].iter().position(|&byte| byte == b'>')
+                else {
+                    break;
+                };
+                i += offset + 1;
+                tags.push(SvgTag { name, attrs: Vec::new(), self_closing: false, closing: true, start: tag_start, end: i });
+            }
+            _ => {
+                let tag_start = i - 1;
+                let name_start = i;
+                while i < bytes.len() && !matches!(bytes[i], b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r') {
+                    i += 1;
+                }
+                let name = &text[name_start..i];
+                let mut attrs = Vec::new();
+                let mut self_closing = false;
+                loop {
+                    i = svg_skip_ws(bytes, i);
+                    if i >= bytes.len() {
+                        break;
+                    }
+                    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'>') {
+                        self_closing = true;
+                        i += 2;
+                        break;
+                    }
+                    if bytes[i] == b'>' {
+                        i += 1;
+                        break;
+                    }
+                    let key_start = i;
+                    while i < bytes.len() && !matches!(bytes[i], b'=' | b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r') {
+                        i += 1;
+                    }
+                    let key = &text[key_start..i];
+                    if key.is_empty() {
+                        i += 1;
+                        continue;
+                    }
+                    i = svg_skip_ws(bytes, i);
+                    if i >= bytes.len() || bytes[i] != b'=' {
+                        continue;
+                    }
+                    i = svg_skip_ws(bytes, i + 1);
+                    if i >= bytes.len() {
+                        break;
+                    }
+                    let quote = bytes[i];
+                    if quote != b'"' && quote != b'\'' {
+                        let value_start = i;
+                        while i < bytes.len() && !matches!(bytes[i], b'>' | b' ' | b'\t' | b'\n' | b'\r') {
+                            i += 1;
+                        }
+                        attrs.push((key, &text[value_start..i]));
+                        continue;
+                    }
+                    i += 1;
+                    let value_start = i;
+                    let Some(offset) = bytes[i..].iter().position(|&byte| byte == quote)
+                    else {
+                        break;
+                    };
+                    attrs.push((key, &text[value_start..i + offset]));
+                    i += offset + 1;
+                }
+                tags.push(SvgTag { name, attrs, self_closing, closing: false, start: tag_start, end: i });
+            }
+        }
+    }
+    tags
+}
+
+/// Scans the SVG number grammar used by points lists and path data, so a sign
+/// starts a new number and `1e-5` stays one number.
+struct Numbers<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+impl<'a> Numbers<'a> {
+    fn new(text: &'a str) -> Self {
+        Self { text, pos: 0 }
+    }
+
+    fn bytes(&self) -> &'a [u8] {
+        self.text.as_bytes()
+    }
+
+    /// Advances past whitespace and comma separators.
+    fn skip(&mut self) {
+        let bytes = self.bytes();
+        while self.pos < bytes.len() && matches!(bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r' | b',') {
+            self.pos += 1;
+        }
+    }
+
+    fn done(&mut self) -> bool {
+        self.skip();
+        self.pos >= self.text.len()
+    }
+
+    /// Reads one path command letter, if the next token is one.
+    fn command(&mut self) -> Option<char> {
+        self.skip();
+        let byte = *self.bytes().get(self.pos)?;
+        if byte.is_ascii_alphabetic() {
+            self.pos += 1;
+            Some(byte as char)
+        }
+        else {
+            None
+        }
+    }
+
+    /// Whether the next token is a command letter rather than a number.
+    fn command_ahead(&mut self) -> bool {
+        self.skip();
+        self.bytes().get(self.pos).is_some_and(u8::is_ascii_alphabetic)
+    }
+
+    /// Reads one number, returning `None` when the next token is not one.
+    fn number(&mut self) -> Option<f64> {
+        self.skip();
+        let bytes = self.bytes();
+        let start = self.pos;
+        if self.pos < bytes.len() && matches!(bytes[self.pos], b'+' | b'-') {
+            self.pos += 1;
+        }
+        let mut digits = false;
+        while self.pos < bytes.len() && bytes[self.pos].is_ascii_digit() {
+            self.pos += 1;
+            digits = true;
+        }
+        if self.pos < bytes.len() && bytes[self.pos] == b'.' {
+            self.pos += 1;
+            while self.pos < bytes.len() && bytes[self.pos].is_ascii_digit() {
+                self.pos += 1;
+                digits = true;
+            }
+        }
+        if !digits {
+            self.pos = start;
+            return None;
+        }
+        if self.pos < bytes.len() && matches!(bytes[self.pos], b'e' | b'E') {
+            let mark = self.pos;
+            self.pos += 1;
+            if self.pos < bytes.len() && matches!(self.bytes()[self.pos], b'+' | b'-') {
+                self.pos += 1;
+            }
+            let mut exponent = false;
+            while self.pos < self.bytes().len() && self.bytes()[self.pos].is_ascii_digit() {
+                self.pos += 1;
+                exponent = true;
+            }
+            if !exponent {
+                self.pos = mark;
+            }
+        }
+        self.text[start..self.pos].parse::<f64>().ok().filter(|value| value.is_finite())
+    }
+}
+
+/// Samples one cubic Bezier span into sixteen points, excluding the start and
+/// ending exactly on the end point.
+fn svg_cubic(from: [f64; 2], c1: [f64; 2], c2: [f64; 2], to: [f64; 2]) -> Vec<[f64; 2]> {
+    const STEPS: usize = 16;
+    (1..=STEPS)
+        .map(|step| {
+            let t = step as f64 / STEPS as f64;
+            let u = 1.0 - t;
+            [
+                u * u * u * from[0] + 3.0 * u * u * t * c1[0] + 3.0 * u * t * t * c2[0] + t * t * t * to[0],
+                u * u * u * from[1] + 3.0 * u * u * t * c1[1] + 3.0 * u * t * t * c2[1] + t * t * t * to[1],
+            ]
+        })
+        .collect()
+}
+
+/// Reads one attribute of a tag.
+fn svg_attr<'a>(tag: &SvgTag<'a>, name: &str) -> Option<&'a str> {
+    tag.attrs.iter().find(|(key, _)| *key == name).map(|(_, value)| *value)
+}
+
+/// Reads one geometry attribute, defaulting to zero and refusing a value that
+/// is not a finite number.
+fn svg_number(tag: &SvgTag<'_>, name: &str, default: f64) -> Option<f64> {
+    match svg_attr(tag, name) {
+        None => Some(default),
+        Some(value) => value.trim().parse::<f64>().ok().filter(|value| value.is_finite()),
+    }
+}
+
+/// Collects the declared SVG subset into a drawing.
+struct SvgImport {
+    drawing: Drawing,
+    transforms: usize,
+    curves: usize,
+    rounded: usize,
+    truncated: usize,
+    invalid: usize,
+    unsupported: BTreeMap<String, usize>,
+}
+
+impl SvgImport {
+    fn new(title: Option<String>) -> Self {
+        Self {
+            drawing: Drawing::empty(title, Units::Mm),
+            transforms: 0,
+            curves: 0,
+            rounded: 0,
+            truncated: 0,
+            invalid: 0,
+            unsupported: BTreeMap::new(),
+        }
+    }
+
+    fn push(&mut self, kind: EntityKind) {
+        let id = self.drawing.take_entity_id();
+        self.drawing.entities.push(Entity { id, layer: "0".to_string(), kind });
+    }
+
+    fn note_transform(&mut self, tag: &SvgTag<'_>) {
+        if svg_attr(tag, "transform").is_some_and(|value| !value.trim().is_empty()) {
+            self.transforms += 1;
+        }
+    }
+
+    fn invalid(&mut self) {
+        self.invalid += 1;
+    }
+
+    /// Reads the elements of one document in order, skipping definition
+    /// subtrees and the content of a captured `<text>` element.
+    fn run(&mut self, text: &str) {
+        let mut skip_until = 0usize;
+        for tag in svg_tags(text) {
+            if tag.closing || tag.start < skip_until {
+                continue;
+            }
+            match tag.name {
+                "svg" | "g" | "a" | "switch" => self.note_transform(&tag),
+                "defs" | "symbol" | "marker" | "pattern" | "filter" | "mask" | "clipPath" | "style" | "script" | "title" | "desc" => {
+                    if !tag.self_closing {
+                        let needle = format!("</{}", tag.name);
+                        skip_until = svg_find(&text.as_bytes()[tag.end..], needle.as_bytes())
+                            .map_or(text.len(), |offset| tag.end + offset + needle.len());
+                    }
+                }
+                "line" => self.line(&tag),
+                "circle" => self.circle(&tag),
+                "ellipse" => self.ellipse(&tag),
+                "rect" => self.rect(&tag),
+                "polyline" => self.poly_points(&tag, false),
+                "polygon" => self.poly_points(&tag, true),
+                "path" => self.path(&tag),
+                "text" => {
+                    if tag.self_closing {
+                        continue;
+                    }
+                    let close = svg_find(&text.as_bytes()[tag.end..], b"</text>").map_or(text.len(), |offset| tag.end + offset);
+                    skip_until = (close + 7).min(text.len());
+                    let raw = &text[tag.end..close];
+                    let stripped: String = {
+                        let mut out = String::with_capacity(raw.len());
+                        let mut inside = false;
+                        for ch in raw.chars() {
+                            match ch {
+                                '<' => inside = true,
+                                '>' => inside = false,
+                                _ if !inside => out.push(ch),
+                                _ => {}
+                            }
+                        }
+                        out
+                    };
+                    let content = stripped
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&quot;", "\"")
+                        .replace("&apos;", "'")
+                        .replace("&amp;", "&")
+                        .trim()
+                        .to_string();
+                    if content.is_empty() {
+                        continue;
+                    }
+                    let height = svg_attr(&tag, "font-size").and_then(|value| Numbers::new(value).number()).unwrap_or(16.0);
+                    match (svg_number(&tag, "x", 0.0), svg_number(&tag, "y", 0.0)) {
+                        (Some(x), Some(y)) if height > 0.0 => self.push(EntityKind::Text { at: [x, y], height, content }),
+                        _ => self.invalid(),
+                    }
+                }
+                _ => {
+                    *self.unsupported.entry(tag.name.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    fn line(&mut self, tag: &SvgTag<'_>) {
+        self.note_transform(tag);
+        let (Some(x1), Some(y1), Some(x2), Some(y2)) =
+            (svg_number(tag, "x1", 0.0), svg_number(tag, "y1", 0.0), svg_number(tag, "x2", 0.0), svg_number(tag, "y2", 0.0))
+        else {
+            self.invalid();
+            return;
+        };
+        if x1 == x2 && y1 == y2 {
+            self.invalid();
+            return;
+        }
+        self.push(EntityKind::Line { from: [x1, y1], to: [x2, y2] });
+    }
+
+    fn circle(&mut self, tag: &SvgTag<'_>) {
+        self.note_transform(tag);
+        let (Some(cx), Some(cy), Some(r)) = (svg_number(tag, "cx", 0.0), svg_number(tag, "cy", 0.0), svg_number(tag, "r", 0.0))
+        else {
+            self.invalid();
+            return;
+        };
+        if r <= 0.0 {
+            self.invalid();
+            return;
+        }
+        self.push(EntityKind::Circle { center: [cx, cy], radius: r });
+    }
+
+    fn ellipse(&mut self, tag: &SvgTag<'_>) {
+        self.note_transform(tag);
+        let (Some(cx), Some(cy), Some(rx), Some(ry)) =
+            (svg_number(tag, "cx", 0.0), svg_number(tag, "cy", 0.0), svg_number(tag, "rx", 0.0), svg_number(tag, "ry", 0.0))
+        else {
+            self.invalid();
+            return;
+        };
+        if rx <= 0.0 || ry <= 0.0 {
+            self.invalid();
+            return;
+        }
+        self.push(EntityKind::Ellipse { center: [cx, cy], rx, ry, rotation: 0.0, start_angle: 0.0, end_angle: 360.0 });
+    }
+
+    fn rect(&mut self, tag: &SvgTag<'_>) {
+        self.note_transform(tag);
+        let (Some(x), Some(y), Some(w), Some(h)) =
+            (svg_number(tag, "x", 0.0), svg_number(tag, "y", 0.0), svg_number(tag, "width", 0.0), svg_number(tag, "height", 0.0))
+        else {
+            self.invalid();
+            return;
+        };
+        if w <= 0.0 || h <= 0.0 {
+            self.invalid();
+            return;
+        }
+        if svg_number(tag, "rx", 0.0).is_some_and(|rx| rx > 0.0) || svg_number(tag, "ry", 0.0).is_some_and(|ry| ry > 0.0) {
+            self.rounded += 1;
+        }
+        self.push(EntityKind::Polyline { points: vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]], closed: true });
+    }
+
+    fn poly_points(&mut self, tag: &SvgTag<'_>, closed: bool) {
+        self.note_transform(tag);
+        let Some(list) = svg_attr(tag, "points")
+        else {
+            self.invalid();
+            return;
+        };
+        let mut scanner = Numbers::new(list);
+        let mut points = Vec::new();
+        while !scanner.done() {
+            let Some(x) = scanner.number()
+            else {
+                break;
+            };
+            let Some(y) = scanner.number()
+            else {
+                break;
+            };
+            points.push([x, y]);
+        }
+        if points.len() < 2 {
+            self.invalid();
+            return;
+        }
+        self.push(EntityKind::Polyline { points, closed });
+    }
+
+    /// Reads one `d` attribute: moves, lines and closes become polylines, cubic
+    /// and quadratic curves are sampled, and an unsupported command truncates
+    /// the path.
+    fn path(&mut self, tag: &SvgTag<'_>) {
+        self.note_transform(tag);
+        let Some(d) = svg_attr(tag, "d")
+        else {
+            self.invalid();
+            return;
+        };
+        let mut scanner = Numbers::new(d);
+        let mut subpaths: Vec<(Vec<[f64; 2]>, bool)> = Vec::new();
+        let mut points: Vec<[f64; 2]> = Vec::new();
+        let mut current = [0.0; 2];
+        let mut start = [0.0; 2];
+        let mut pending: Option<char> = None;
+        let mut reflect: Option<[f64; 2]> = None;
+        let mut reflect_quad = false;
+        let mut truncated = false;
+        'path: loop {
+            if scanner.done() {
+                break;
+            }
+            let c = match scanner.command() {
+                Some(c) => c,
+                None => match pending {
+                    Some('M') => 'L',
+                    Some('m') => 'l',
+                    Some(c) => c,
+                    None => {
+                        truncated = true;
+                        break;
+                    }
+                },
+            };
+            let relative = c.is_ascii_lowercase();
+            match c {
+                'M' | 'm' => {
+                    let (Some(x), Some(y)) = (scanner.number(), scanner.number())
+                    else {
+                        truncated = true;
+                        break;
+                    };
+                    let point = if relative { [current[0] + x, current[1] + y] } else { [x, y] };
+                    if points.len() >= 2 {
+                        subpaths.push((std::mem::take(&mut points), false));
+                    }
+                    points.clear();
+                    current = point;
+                    start = point;
+                    points.push(point);
+                    reflect = None;
+                    pending = Some(c);
+                }
+                'L' | 'l' | 'H' | 'h' | 'V' | 'v' => {
+                    loop {
+                        if scanner.done() || scanner.command_ahead() {
+                            break;
+                        }
+                        current = match c {
+                            'L' => {
+                                let (Some(x), Some(y)) = (scanner.number(), scanner.number())
+                                else {
+                                    truncated = true;
+                                    break 'path;
+                                };
+                                [x, y]
+                            }
+                            'l' => {
+                                let (Some(x), Some(y)) = (scanner.number(), scanner.number())
+                                else {
+                                    truncated = true;
+                                    break 'path;
+                                };
+                                [current[0] + x, current[1] + y]
+                            }
+                            'H' => {
+                                let Some(x) = scanner.number()
+                                else {
+                                    truncated = true;
+                                    break 'path;
+                                };
+                                [x, current[1]]
+                            }
+                            'h' => {
+                                let Some(x) = scanner.number()
+                                else {
+                                    truncated = true;
+                                    break 'path;
+                                };
+                                [current[0] + x, current[1]]
+                            }
+                            'V' => {
+                                let Some(y) = scanner.number()
+                                else {
+                                    truncated = true;
+                                    break 'path;
+                                };
+                                [current[0], y]
+                            }
+                            _ => {
+                                let Some(y) = scanner.number()
+                                else {
+                                    truncated = true;
+                                    break 'path;
+                                };
+                                [current[0], current[1] + y]
+                            }
+                        };
+                        points.push(current);
+                    }
+                    reflect = None;
+                    pending = Some(c);
+                }
+                'C' | 'c' | 'S' | 's' => {
+                    loop {
+                        if scanner.done() || scanner.command_ahead() {
+                            break;
+                        }
+                        let first = if matches!(c, 'S' | 's') {
+                            reflect.filter(|_| !reflect_quad).unwrap_or(current)
+                        }
+                        else {
+                            let (Some(x), Some(y)) = (scanner.number(), scanner.number())
+                            else {
+                                truncated = true;
+                                break 'path;
+                            };
+                            if relative { [current[0] + x, current[1] + y] } else { [x, y] }
+                        };
+                        let (Some(x2), Some(y2), Some(x3), Some(y3)) = (scanner.number(), scanner.number(), scanner.number(), scanner.number())
+                        else {
+                            truncated = true;
+                            break 'path;
+                        };
+                        let c2 = if relative { [current[0] + x2, current[1] + y2] } else { [x2, y2] };
+                        let to = if relative { [current[0] + x3, current[1] + y3] } else { [x3, y3] };
+                        points.extend(svg_cubic(current, first, c2, to));
+                        self.curves += 1;
+                        current = to;
+                        reflect = Some(c2);
+                        reflect_quad = false;
+                    }
+                    pending = Some(c);
+                }
+                'Q' | 'q' | 'T' | 't' => {
+                    loop {
+                        if scanner.done() || scanner.command_ahead() {
+                            break;
+                        }
+                        let control = if matches!(c, 'T' | 't') {
+                            reflect.filter(|_| reflect_quad).unwrap_or(current)
+                        }
+                        else {
+                            let (Some(x), Some(y)) = (scanner.number(), scanner.number())
+                            else {
+                                truncated = true;
+                                break 'path;
+                            };
+                            if relative { [current[0] + x, current[1] + y] } else { [x, y] }
+                        };
+                        let (Some(x), Some(y)) = (scanner.number(), scanner.number())
+                        else {
+                            truncated = true;
+                            break 'path;
+                        };
+                        let to = if relative { [current[0] + x, current[1] + y] } else { [x, y] };
+                        let c1 = [current[0] + (2.0 / 3.0) * (control[0] - current[0]), current[1] + (2.0 / 3.0) * (control[1] - current[1])];
+                        let c2 = [to[0] + (2.0 / 3.0) * (control[0] - to[0]), to[1] + (2.0 / 3.0) * (control[1] - to[1])];
+                        points.extend(svg_cubic(current, c1, c2, to));
+                        self.curves += 1;
+                        current = to;
+                        reflect = Some(control);
+                        reflect_quad = true;
+                    }
+                    pending = Some(c);
+                }
+                'Z' | 'z' => {
+                    if points.len() >= 2 {
+                        subpaths.push((std::mem::take(&mut points), true));
+                    }
+                    points.clear();
+                    current = start;
+                    points.push(current);
+                    reflect = None;
+                    pending = None;
+                }
+                _ => {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+        if points.len() >= 2 {
+            subpaths.push((points, false));
+        }
+        if truncated {
+            self.truncated += 1;
+        }
+        for (points, closed) in subpaths {
+            self.push(EntityKind::Polyline { points, closed });
+        }
+    }
+
+    fn finish(self) -> (Drawing, Vec<Loss>) {
+        let mut losses =
+            vec![Loss::notice("svg/assumed-units", "SVG carries no unit metadata; user units were read as millimetres.".to_string())];
+        if self.transforms > 0 {
+            losses.push(Loss::warning(
+                "svg/transform",
+                format!("{} transform attribute(s) were ignored; geometry was read as authored.", self.transforms),
+            ));
+        }
+        if self.curves > 0 {
+            losses.push(Loss::notice("svg/path-curve-flattened", format!("{} curve command(s) were sampled into line segments.", self.curves)));
+        }
+        if self.truncated > 0 {
+            losses.push(Loss::warning(
+                "svg/path-unsupported-command",
+                format!("{} path(s) were truncated at an unsupported command.", self.truncated),
+            ));
+        }
+        if self.rounded > 0 {
+            losses.push(Loss::notice("svg/rect-corner", format!("{} rounded rectangle(s) were written with sharp corners.", self.rounded)));
+        }
+        if self.invalid > 0 {
+            losses.push(Loss::warning(
+                "svg/element-invalid",
+                format!("{} element(s) were skipped for missing or non-finite geometry.", self.invalid),
+            ));
+        }
+        for (name, count) in self.unsupported {
+            losses.push(Loss::warning("svg/element-unsupported", format!("the <{name}> element is not implemented ({count} occurrence(s)).")));
+        }
+        (self.drawing, losses)
+    }
+}
+
+/// Reads the declared SVG subset into a new drawing.
+///
+/// The reader keeps the geometry elements `line`, `circle`, `ellipse`, `rect`,
+/// `polyline`, `polygon`, `path` and `text` on the default layer. Path moves,
+/// lines and closes stay as polylines; cubic and quadratic commands are sampled
+/// and reported. Presentation attributes, transforms, viewports and definition
+/// subtrees are not applied, and every omission is reported as a loss.
+pub(crate) fn svg(text: &str, title: Option<String>) -> Result<(Drawing, Vec<Loss>), ServiceError> {
+    if !text.contains("<svg") {
+        return Err(invalid("the file has no <svg element; it is not an SVG drawing"));
+    }
+    let mut reader = SvgImport::new(title);
+    reader.run(text);
+    Ok(reader.finish())
+}
+
 #[cfg(test)]
 #[path = "../tests/unit/import.rs"]
 mod tests;

@@ -2471,6 +2471,45 @@ fn dxf_import_reads_the_declared_subset() {
 }
 
 #[test]
+fn svg_import_reads_the_declared_subset() {
+    let dir = TempDir::new("svg-import");
+    let source = dir.path.join("plan.svg");
+    fs::write(
+        &source,
+        "<svg><g transform=\"translate(1,1)\"><line x1=\"0\" y1=\"0\" x2=\"10\" y2=\"0\"/><circle cx=\"5\" cy=\"5\" r=\"2\"/></g>\
+         <path d=\"M0,0 L4,0 A1,1 0 0 0 4,2\"/><image href=\"a.png\"/></svg>",
+    )
+    .expect("write svg");
+
+    let imported = import_svg(&source, Some("Plan".to_string())).expect("import svg");
+    assert_eq!(imported["drawing"]["title"], json!("Plan"));
+    assert_eq!(imported["drawing"]["units"], json!("mm"));
+    assert_eq!(imported["imported"]["entities"], json!(3));
+    assert_eq!(imported["drawing"]["entities"], json!(3));
+    let losses = imported["losses"].as_array().expect("losses");
+    let codes = losses.iter().map(|loss| loss["code"].as_str().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(codes.contains(&"svg/assumed-units"), "{codes:?}");
+    assert!(codes.contains(&"svg/transform"), "{codes:?}");
+    assert!(codes.contains(&"svg/path-unsupported-command"), "{codes:?}");
+    assert!(codes.contains(&"svg/element-unsupported"), "{codes:?}");
+    assert!(losses.iter().all(|loss| loss["severity"] == json!("warning") || loss["severity"] == json!("notice")));
+
+    let handle = handle_of(&imported);
+    let listed = list_entities(handle).expect("list");
+    assert_eq!(listed["entities"][2]["kind"]["type"], json!("polyline"));
+    close(handle).expect("close");
+
+    let titled = import_svg(&source, None).expect("default title");
+    assert_eq!(titled["drawing"]["title"], json!("plan"));
+    close(handle_of(&titled)).expect("close");
+
+    let broken = dir.path.join("broken.svg");
+    fs::write(&broken, "not svg").expect("write");
+    assert_eq!(import_svg(&broken, None).expect_err("invalid svg").code, "format/invalid");
+    assert_eq!(import_svg(&dir.path.join("missing.svg"), None).expect_err("missing").code, "drawing/not-found");
+}
+
+#[test]
 fn pdf_export_writes_a_minimal_document() {
     let dir = TempDir::new("pdf");
     let path = dir.path.join("plan.pdf");
