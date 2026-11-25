@@ -69,9 +69,15 @@ import type {
     GroupDeletion,
     GroupList,
     GroupMembersRequest,
+    ExplodedAssemblyRequest,
+    ExplodedAssemblyResult,
     HatchPatternRequest,
     HatchPatternResult,
     HistoryResult,
+    HoleTableRequest,
+    HoleTableResult,
+    IsometricViewRequest,
+    IsometricViewResult,
     ImportDxfRequest,
     ImportDxfResult,
     ImportSvgRequest,
@@ -1052,6 +1058,8 @@ export function titleBlock(handle: number, request: TitleBlockRequest): TitleBlo
             handle,
             JSON.stringify({
                 layer: request.layer,
+                format: request.format,
+                orientation: request.orientation,
                 width: request.width,
                 height: request.height,
                 margin: request.margin,
@@ -1063,6 +1071,7 @@ export function titleBlock(handle: number, request: TitleBlockRequest): TitleBlo
                 date: request.date,
                 author: request.author,
                 sheet: request.sheet,
+                projection: request.projection,
             }),
         ),
     );
@@ -1197,6 +1206,55 @@ export function leaderNote(handle: number, request: LeaderNoteRequest): LeaderNo
                 text: request.text,
                 textHeight: request.textHeight,
                 arrow: request.arrow,
+            }),
+        ),
+    );
+}
+
+/** Draws a standalone isometric view of a declarative part model with an axis indicator. */
+export function isometricView(handle: number, request: IsometricViewRequest): IsometricViewResult {
+    return decode<IsometricViewResult>(() =>
+        binding('drawing.isometricView').drawing_isometric_view(
+            handle,
+            JSON.stringify({
+                part: request.part,
+                scale: request.scale,
+                textHeight: request.textHeight,
+                origin: request.origin,
+                label: request.label,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
+/** Draws an exploded assembly view of declarative components with numbered balloons. */
+export function explodedAssembly(handle: number, request: ExplodedAssemblyRequest): ExplodedAssemblyResult {
+    return decode<ExplodedAssemblyResult>(() =>
+        binding('drawing.explodedAssembly').drawing_exploded_assembly(
+            handle,
+            JSON.stringify({
+                components: request.components,
+                scale: request.scale,
+                textHeight: request.textHeight,
+                origin: request.origin,
+                layer: request.layer,
+            }),
+        ),
+    );
+}
+
+/** Tabulates the cylindrical voids of a declarative part model as a framed hole table. */
+export function holeTable(handle: number, request: HoleTableRequest): HoleTableResult {
+    return decode<HoleTableResult>(() =>
+        binding('drawing.holeTable').drawing_hole_table(
+            handle,
+            JSON.stringify({
+                part: request.part,
+                origin: request.origin,
+                textHeight: request.textHeight,
+                title: request.title,
+                layer: request.layer,
             }),
         ),
     );

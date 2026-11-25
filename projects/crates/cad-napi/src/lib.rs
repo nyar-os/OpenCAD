@@ -28,10 +28,10 @@ use std::{
 
 use open_cad_drawing::{
     AlignMode, AlignRequest, ArrayMode, ArrayRequest, BreakRequest, CopyRequest, CreateRequest, DistributeAxis, DistributeRequest,
-    DrawOrderAction, ExtendSide, HatchPatternRequest, JoinRequest, LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis,
-    MultiViewSheetRequest, OffsetSide, OrdinateAxis, OverkillRequest, PolylineChamferRequest, QuantityTableRequest, SectionViewRequest,
-    ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest, TransformOp, TransformRequest, TransformTarget, UcsDirection,
-    UcsRequest,
+    DrawOrderAction, ExplodedAssemblyRequest, ExtendSide, HatchPatternRequest, HoleTableRequest, IsometricViewRequest, JoinRequest,
+    LayoutRequest, LayoutUpdate, LeaderNoteRequest, MirrorAxis, MultiViewSheetRequest, OffsetSide, OrdinateAxis, OverkillRequest,
+    PolylineChamferRequest, QuantityTableRequest, SectionViewRequest, ServiceError, SmoothPolylineRequest, StatsGroup, TitleBlockRequest,
+    TransformOp, TransformRequest, TransformTarget, UcsDirection, UcsRequest,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -988,6 +988,8 @@ fn drawing_title_block(ctx: CallContext) -> Result<JsValue> {
         handle,
         TitleBlockRequest {
             layer: optional_string(&request, "layer"),
+            format: optional_string(&request, "format"),
+            orientation: optional_string(&request, "orientation"),
             width: optional_number(&request, "width"),
             height: optional_number(&request, "height"),
             margin: optional_number(&request, "margin"),
@@ -999,6 +1001,7 @@ fn drawing_title_block(ctx: CallContext) -> Result<JsValue> {
             date: optional_string(&request, "date"),
             author: optional_string(&request, "author"),
             sheet: optional_string(&request, "sheet"),
+            projection: optional_string(&request, "projection"),
         },
     )
     .map_err(fail)?;
@@ -1123,6 +1126,39 @@ fn drawing_leader_note(ctx: CallContext) -> Result<JsValue> {
     let request: LeaderNoteRequest =
         serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
     let result = open_cad_drawing::add_leader_note(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Draws a standalone isometric view of a declarative part model with an axis indicator.
+#[function]
+fn drawing_isometric_view(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: IsometricViewRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_isometric_view(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Draws an exploded assembly view of declarative components with numbered balloons.
+#[function]
+fn drawing_exploded_assembly(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: ExplodedAssemblyRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_exploded_assembly(handle, request).map_err(fail)?;
+    respond(&ctx, &result)
+}
+
+/// Tabulates the cylindrical voids of a declarative part model as a framed hole table.
+#[function]
+fn drawing_hole_table(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = parse_request(&text(&ctx, 1)?)?;
+    let request: HoleTableRequest =
+        serde_json::from_value(request).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))?;
+    let result = open_cad_drawing::add_hole_table(handle, request).map_err(fail)?;
     respond(&ctx, &result)
 }
 
@@ -2784,6 +2820,9 @@ register_module![
     drawing_multiview_sheet,
     drawing_section_view,
     drawing_leader_note,
+    drawing_isometric_view,
+    drawing_exploded_assembly,
+    drawing_hole_table,
     drawing_import_dxf,
     drawing_import_svg,
     open_gui,

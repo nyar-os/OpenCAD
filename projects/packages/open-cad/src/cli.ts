@@ -24,6 +24,7 @@ import type {
     AlignMode,
     AlignResult,
     ArrayPlacement,
+    AssemblyComponent,
     ArrayResult,
     Axis3,
     BreakResult,
@@ -46,8 +47,11 @@ import type {
     ExtendResult,
     ExtendSide,
     GroupDeletion,
+    ExplodedAssemblyResult,
     HatchPatternResult,
     HistoryResult,
+    HoleTableResult,
+    IsometricViewResult,
     ImportLoss,
     InspectCheck,
     InspectReport,
@@ -476,6 +480,30 @@ function describeSectionView(result: SectionViewResult): string {
 
 function describeLeaderNote(result: LeaderNoteResult): string {
     return [`leader note revision=${result.revision}`, `  created: ${result.created.length} entities`].join('\n');
+}
+
+function describeIsometricView(result: IsometricViewResult): string {
+    return [
+        `isometric view revision=${result.revision}`,
+        `  created: ${result.created.length} entities`,
+        `  view: width=${result.view.width} height=${result.view.height} center=${result.view.center[0]},${result.view.center[1]}`,
+    ].join('\n');
+}
+
+function describeExplodedAssembly(result: ExplodedAssemblyResult): string {
+    const lines = [`exploded assembly revision=${result.revision}`, `  created: ${result.created.length} entities`];
+    for (const item of result.items) {
+        lines.push(`  ${item.number} ${item.name ?? ''} center=${item.center[0]},${item.center[1]} balloon=${item.balloon[0]},${item.balloon[1]}`);
+    }
+    return lines.join('\n');
+}
+
+function describeHoleTable(result: HoleTableResult): string {
+    const lines = [`hole table revision=${result.revision}`, `  rows: ${result.rows.length}`, `  created: ${result.created.length} entities`];
+    for (const row of result.rows) {
+        lines.push(`  ${row.no} axis=${row.axis} pos=${row.posA},${row.posB} dia=${row.diameter} depth=${row.depth}`);
+    }
+    return lines.join('\n');
 }
 
 function describeTextMatches(result: TextMatchResult): string {
@@ -2348,6 +2376,8 @@ cli
 cli
     .command('title-block', 'cli.cmd.title-block')
     .option('--layer <layer>', 'cli.opt.title-block-layer')
+    .option('--format <format>', 'cli.opt.title-block-format', { enum: ['a4', 'a3', 'a2'] })
+    .option('--orientation <orientation>', 'cli.opt.title-block-orientation', { enum: ['landscape', 'portrait'] })
     .option('--width <number>', 'cli.opt.width')
     .option('--height <number>', 'cli.opt.sheet-height')
     .option('--margin <number>', 'cli.opt.margin')
@@ -2359,6 +2389,7 @@ cli
     .option('--date <text>', 'cli.opt.date')
     .option('--author <text>', 'cli.opt.author')
     .option('--sheet <text>', 'cli.opt.title-block-sheet')
+    .option('--projection <projection>', 'cli.opt.title-block-projection', { enum: ['first', 'third'] })
     .actionCtx(async (options, _args, ctx) => {
         const file = input(options);
         if (file === undefined) {
@@ -2370,6 +2401,8 @@ cli
             const result = await guard(ctx, () =>
                 opened.titleBlock({
                     layer: text(options, 'layer'),
+                    format: text(options, 'format') as 'a4' | 'a3' | 'a2' | undefined,
+                    orientation: text(options, 'orientation') as 'landscape' | 'portrait' | undefined,
                     width: number(options, 'width'),
                     height: number(options, 'height'),
                     margin: number(options, 'margin'),
@@ -2381,6 +2414,7 @@ cli
                     date: text(options, 'date'),
                     author: text(options, 'author'),
                     sheet: text(options, 'sheet'),
+                    projection: text(options, 'projection') as 'first' | 'third' | undefined,
                 }),
             );
             ctx.emitResult(result, describeTitleBlock(result));
@@ -2663,7 +2697,7 @@ cli
 
 cli
     .command('leader-note', 'cli.cmd.leader-note')
-    .option('--points <x,y ...>', 'cli.opt.leader-points')
+    .option('--points <list>', 'cli.opt.leader-points')
     .option('--text <note>', 'cli.opt.leader-text')
     .option('--text-height <number>', 'cli.opt.leader-text-height')
     .option('--arrow <on|off>', 'cli.opt.leader-arrow')
@@ -2694,6 +2728,143 @@ cli
                 }),
             );
             ctx.emitResult(result, describeLeaderNote(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('isometric-view', 'cli.cmd.isometric-view')
+    .option('--part <json>', 'cli.opt.part-spec')
+    .option('--scale <number>', 'cli.opt.view-scale')
+    .option('--text-height <number>', 'cli.opt.view-text-height')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--label <text>', 'cli.opt.iso-label')
+    .option('--layer <layer>', 'cli.opt.views-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const spec = part(options, 'part');
+        if (spec === undefined) {
+            ctx.fail('open-cad.cli.part-invalid', { message: '`--part <json>` needs a JSON object with a non-empty `solids` list' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.isometricView({
+                    part: spec,
+                    scale: number(options, 'scale'),
+                    textHeight: number(options, 'text-height'),
+                    origin,
+                    label: text(options, 'label'),
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeIsometricView(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('exploded-assembly', 'cli.cmd.exploded-assembly')
+    .option('--components <json>', 'cli.opt.components')
+    .option('--scale <number>', 'cli.opt.view-scale')
+    .option('--text-height <number>', 'cli.opt.view-text-height')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--layer <layer>', 'cli.opt.views-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        let components: AssemblyComponent[] | undefined;
+        const rawComponents = text(options, 'components');
+        if (rawComponents !== undefined) {
+            try {
+                const value = JSON.parse(rawComponents) as AssemblyComponent[];
+                components = Array.isArray(value) && value.length > 0 ? value : undefined;
+            }
+            catch {
+                components = undefined;
+            }
+        }
+        if (components === undefined) {
+            ctx.fail('open-cad.cli.components-invalid', {
+                message: '`--components <json>` needs a non-empty JSON array of {name, part, position, explode}',
+            });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.explodedAssembly({
+                    components,
+                    scale: number(options, 'scale'),
+                    textHeight: number(options, 'text-height'),
+                    origin,
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeExplodedAssembly(result));
+            return 0;
+        } finally {
+            opened.close();
+        }
+    });
+
+cli
+    .command('hole-table', 'cli.cmd.hole-table')
+    .option('--part <json>', 'cli.opt.part-spec')
+    .option('--origin <x,y>', 'cli.opt.origin-point')
+    .option('--text-height <number>', 'cli.opt.quantity-text-height')
+    .option('--title <text>', 'cli.opt.quantity-title')
+    .option('--layer <layer>', 'cli.opt.hole-table-layer')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-cad.cli.file-required', { message: 'a drawing file is required' });
+            return 2;
+        }
+        const spec = part(options, 'part');
+        if (spec === undefined) {
+            ctx.fail('open-cad.cli.part-invalid', { message: '`--part <json>` needs a JSON object with a non-empty `solids` list' });
+            return 2;
+        }
+        const origin = point(options, 'origin');
+        if (text(options, 'origin') !== undefined && origin === undefined) {
+            ctx.fail('open-cad.cli.origin-invalid', { message: '`--origin x,y` needs two numbers' });
+            return 2;
+        }
+        const opened = await guard(ctx, () => app.open({ path: file }));
+        try {
+            const result = await guard(ctx, () =>
+                opened.holeTable({
+                    part: spec,
+                    origin,
+                    textHeight: number(options, 'text-height'),
+                    title: text(options, 'title'),
+                    layer: text(options, 'layer'),
+                }),
+            );
+            ctx.emitResult(result, describeHoleTable(result));
             return 0;
         } finally {
             opened.close();

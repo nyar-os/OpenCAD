@@ -1599,6 +1599,106 @@ test('SVG import keeps the element subset and reports losses', { skip: withAddon
     }
 });
 
+test('isometric views, exploded assemblies and hole tables draw new sheet content', { skip: withAddon }, async () => {
+    const cad = new OpenCAD();
+    try {
+        const document = await cad.create({ title: 'Drawing types' });
+        const bracket: PartSpec = {
+            solids: [{ kind: 'box', min: [0, 0, 0], max: [40, 20, 12] }],
+            voids: [
+                { kind: 'cylinder', axis: 'z', center: [10, 10], from: 0, to: 12, radius: 3 },
+                { kind: 'cylinder', axis: 'z', center: [30, 10], from: 0, to: 12, radius: 3 },
+                { kind: 'cylinder', axis: 'z', center: [20, 10], from: 0, to: 6, radius: 5 },
+            ],
+        };
+
+        const iso = document.isometricView({ part: bracket, origin: [5, 5], label: 'ISO A' });
+        assert.ok(iso.created.length > 0);
+        assert.ok(iso.view.width > 0 && iso.view.height > 0);
+        assert.ok(iso.created.every((entity) => entity.layer === 'views' || entity.layer === 'hidden'));
+        assert.ok(iso.created.some((entity) => entity.kind.type === 'text' && entity.kind.content === 'ISO A'));
+        assert.ok(iso.created.some((entity) => entity.kind.type === 'text' && entity.kind.content === 'Z'));
+
+        const exploded = document.explodedAssembly({
+            components: [
+                { name: 'BASE', part: { solids: [{ kind: 'box', min: [0, 0, 0], max: [40, 20, 10] }] } },
+                {
+                    name: 'PLATE',
+                    part: { solids: [{ kind: 'box', min: [0, 0, 0], max: [40, 20, 2] }], voids: [{ kind: 'cylinder', axis: 'z', center: [10, 10], from: 0, to: 2, radius: 3 }] },
+                    position: [0, 0, 10],
+                    explode: [0, 0, 30],
+                },
+            ],
+        });
+        assert.equal(exploded.items.length, 2);
+        assert.equal(exploded.items[1]?.name, 'PLATE');
+        assert.ok((exploded.items[1]?.center[1] ?? 0) > (exploded.items[0]?.center[1] ?? 0), 'the plate explodes above the base');
+        assert.equal(exploded.created.filter((entity) => entity.kind.type === 'circle').length, 2, 'one balloon per component');
+        assert.ok(exploded.created.some((entity) => entity.kind.type === 'text' && entity.kind.content === 'BASE'));
+
+        const table = document.holeTable({ part: bracket, origin: [100, 100] });
+        assert.equal(table.rows.length, 3);
+        assert.equal(table.columns[0], 'No.');
+        assert.ok(Math.abs((table.rows[0]?.diameter ?? 0) - 6) < 1e-12);
+        assert.ok(Math.abs((table.rows[2]?.depth ?? 0) - 6) < 1e-12);
+        assert.ok(table.created.every((entity) => entity.layer === 'holes'));
+
+        assert.throws(
+            () => document.holeTable({ part: { solids: [{ kind: 'box', min: [0, 0, 0], max: [1, 1, 1] }] } }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'hole-table/empty',
+        );
+        assert.throws(
+            () => document.explodedAssembly({ components: [] }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        assert.throws(
+            () => document.isometricView({ part: { solids: [], voids: [] } }),
+            (error: unknown) => error instanceof OpenCADError && error.code === 'session/argument-invalid',
+        );
+        document.close();
+    } finally {
+        await cad.dispose();
+    }
+});
+
+test('the leader-note CLI accepts a multi-point --points list', { skip: withAddon || (cliBuilt ? false : 'no built CLI is installed') }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-cli-leader-'));
+    try {
+        const file = path.join(dir, 'leader.ocad');
+        const cad = new OpenCAD();
+        try {
+            const document = await cad.create({ title: 'Leader CLI' });
+            document.addLine({ layer: '0', from: [0, 0], to: [30, 0] });
+            document.save({ target: file, overwrite: false });
+            document.close();
+        } finally {
+            await cad.dispose();
+        }
+
+        const run = spawnSync(
+            process.execPath,
+            [cliEntry, '--json', 'leader-note', file, '--points', '10,4 26,4 26,14', '--text', 'BREAK ALL EDGES UNLESS OTHERWISE NOTED'],
+            { encoding: 'utf8' },
+        );
+        assert.equal(run.status, 0, run.stderr);
+        const envelope = JSON.parse(run.stdout) as {
+            ok: boolean;
+            data: { created: { kind: { type: string; points?: [number, number][] } }[] };
+        };
+        const polyline = envelope.data.created.find((entity) => entity.kind.type === 'polyline');
+        assert.equal(polyline?.kind.points?.length, 3, 'the leader keeps every point of the list');
+
+        const quoted = spawnSync(
+            process.execPath,
+            [cliEntry, '--json', 'leader-note', file, '--points', '0,0 12,0 12,8', '--text', 'R5'],
+            { encoding: 'utf8' },
+        );
+        assert.equal(quoted.status, 0, quoted.stderr);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test('undo, redo, layers, entity edits and DXF import', { skip: withAddon }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cad-edits-'));
     const cad = new OpenCAD();

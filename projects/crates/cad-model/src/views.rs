@@ -6,7 +6,11 @@
 //! lays out first- or third-angle front, top and left views plus an isometric
 //! view with labels and the ISO projection symbol; `add_section_view` cuts the
 //! part by a plane and draws the cut outline with 45-degree hatch lines;
-//! `add_leader_note` draws a polyline leader with an arrowhead and a note.
+//! `add_leader_note` draws a polyline leader with an arrowhead and a note;
+//! `add_isometric_view` draws a standalone isometric view with an axis
+//! indicator; `add_exploded_assembly` spaces components apart and numbers
+//! them with balloons; `add_hole_table` tabulates the cylindrical voids of a
+//! part as a framed hole table.
 //!
 //! All projection, layout and hatching mathematics lives here; the binding and
 //! the SDK only forward the request. The exporters frame the sheet from the
@@ -227,9 +231,68 @@ impl Shape2 {
     }
 }
 
+/// Nearest point to `point` on a segment.
+fn nearest_on_segment(point: [f64; 2], from: [f64; 2], to: [f64; 2]) -> [f64; 2] {
+    let span = [to[0] - from[0], to[1] - from[1]];
+    let length = span[0] * span[0] + span[1] * span[1];
+    if length <= f64::EPSILON {
+        return from;
+    }
+    let t = (((point[0] - from[0]) * span[0] + (point[1] - from[1]) * span[1]) / length).clamp(0.0, 1.0);
+    [from[0] + span[0] * t, from[1] + span[1] * t]
+}
+
+/// Nearest point to `point` on the outline of a projected shape.
+fn nearest_on_shape(shape: &Shape2, point: [f64; 2]) -> [f64; 2] {
+    match shape {
+        Shape2::Rect(a, b) => {
+            let corners = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
+            (0..4)
+                .map(|index| nearest_on_segment(point, corners[index], corners[(index + 1) % 4]))
+                .min_by(|left, right| {
+                    let left = (left[0] - point[0]).powi(2) + (left[1] - point[1]).powi(2);
+                    let right = (right[0] - point[0]).powi(2) + (right[1] - point[1]).powi(2);
+                    left.total_cmp(&right)
+                })
+                .unwrap_or(*a)
+        }
+        Shape2::Disc(center, radius) => {
+            let span = [point[0] - center[0], point[1] - center[1]];
+            let length = (span[0] * span[0] + span[1] * span[1]).sqrt();
+            if length <= f64::EPSILON {
+                [center[0] + *radius, center[1]]
+            }
+            else {
+                [center[0] + span[0] / length * radius, center[1] + span[1] / length * radius]
+            }
+        }
+        Shape2::Poly(points) => {
+            if points.len() < 2 {
+                return points.first().copied().unwrap_or(point);
+            }
+            (0..points.len())
+                .map(|index| nearest_on_segment(point, points[index], points[(index + 1) % points.len()]))
+                .min_by(|left, right| {
+                    let left = (left[0] - point[0]).powi(2) + (left[1] - point[1]).powi(2);
+                    let right = (right[0] - point[0]).powi(2) + (right[1] - point[1]).powi(2);
+                    left.total_cmp(&right)
+                })
+                .unwrap_or(points[0])
+        }
+    }
+}
 /// Bounds of a shape list, `None` when the list is empty.
 fn shapes_bounds(shapes: &[Shape2]) -> Option<([f64; 2], [f64; 2])> {
-    shapes.iter().map(Shape2::bounds).reduce(|(a, b), (c, _)| ([a[0].min(c[0]), a[1].min(c[1])], [b[0].max(c[0]), b[1].max(c[1])]))
+    shapes.iter().map(Shape2::bounds).reduce(|(a, b), (c, d)| ([a[0].min(c[0]), a[1].min(c[1])], [b[0].max(d[0]), b[1].max(d[1])]))
+}
+
+/// Union of two optional bounds, `None` only when both are empty.
+fn union_bounds(left: Option<([f64; 2], [f64; 2])>, right: Option<([f64; 2], [f64; 2])>) -> Option<([f64; 2], [f64; 2])> {
+    match (left, right) {
+        (Some((a, b)), Some((c, d))) => Some(([a[0].min(c[0]), a[1].min(c[1])], [b[0].max(d[0]), b[1].max(d[1])])),
+        (Some(bounds), None) | (None, Some(bounds)) => Some(bounds),
+        (None, None) => None,
+    }
 }
 
 /// Bounds of a shape list, an argument error when the list is empty.
@@ -579,6 +642,11 @@ fn text_width(content: &str, text_height: f64) -> f64 {
     content.chars().count() as f64 * text_height * TEXT_WIDTH_FACTOR
 }
 
+/// Scale annotation such as `SCALE 1:2` for a model-to-paper factor.
+fn scale_annotation(scale: f64) -> String {
+    if scale >= 1.0 { format!("SCALE {}:1", format_number(scale)) } else { format!("SCALE 1:{}", format_number(1.0 / scale)) }
+}
+
 /// One placed view: its centre, size and outlines in view-local coordinates.
 struct PlacedView {
     label: &'static str,
@@ -596,7 +664,7 @@ fn place_view(label: &'static str, shapes: impl Iterator<Item = Shape2>, hidden:
     let bounds = shapes_bounds(&shapes)
         .into_iter()
         .chain(shapes_bounds(&hidden))
-        .reduce(|(a, b), (c, _)| ([a[0].min(c[0]), a[1].min(c[1])], [b[0].max(c[0]), b[1].max(c[1])]))
+        .reduce(|(a, b), (c, d)| ([a[0].min(c[0]), a[1].min(c[1])], [b[0].max(d[0]), b[1].max(d[1])]))
         .unwrap_or(([0.0, 0.0], [0.0, 0.0]));
     let size = [bounds.1[0] - bounds.0[0], bounds.1[1] - bounds.0[1]];
     let center = [(bounds.0[0] + bounds.1[0]) / 2.0, (bounds.0[1] + bounds.1[1]) / 2.0];
@@ -734,6 +802,15 @@ pub fn add_multiview_sheet(handle: u64, request: MultiViewSheetRequest) -> Resul
                     at: [view.center[0] - text_width(view.label, text_height) / 2.0, view.center[1] - view.size[1] / 2.0 - text_height * 1.5],
                     height: text_height,
                     content: view.label.to_string(),
+                },
+            ));
+            let scale_text = scale_annotation(scale);
+            kinds.push((
+                layer.clone(),
+                EntityKind::Text {
+                    at: [view.center[0] - text_width(&scale_text, text_height) / 2.0, view.center[1] - view.size[1] / 2.0 - text_height * 2.9],
+                    height: text_height,
+                    content: scale_text,
                 },
             ));
         }
@@ -1098,9 +1175,15 @@ pub fn add_section_view(handle: u64, request: SectionViewRequest) -> Result<Valu
             kinds.push(EntityKind::Line { from, to });
         }
         kinds.push(EntityKind::Text {
-            at: [(min[0] + max[0]) / 2.0 - text_width(&label, text_height) / 2.0, max[1] + text_height * 1.2],
+            at: [(min[0] + max[0]) / 2.0 - text_width(&label, text_height) / 2.0, max[1] + text_height * 3.4],
             height: text_height,
             content: label.clone(),
+        });
+        let scale_text = "SCALE 1:1";
+        kinds.push(EntityKind::Text {
+            at: [(min[0] + max[0]) / 2.0 - text_width(scale_text, text_height) / 2.0, max[1] + text_height * 1.5],
+            height: text_height,
+            content: scale_text.to_string(),
         });
         let indicator_y = min[1] - text_height * 2.0;
         kinds.push(EntityKind::Line { from: [min[0], indicator_y], to: [max[0], indicator_y] });
@@ -1189,8 +1272,8 @@ pub fn add_leader_note(handle: u64, request: LeaderNoteRequest) -> Result<Value,
             let wing = text_height * 1.5;
             for sign in [-1.0, 1.0] {
                 let (sin, cos) = (15f64.to_radians() * sign).sin_cos();
-                let bx = -dx;
-                let by = -dy;
+                let bx = dx;
+                let by = dy;
                 kinds.push(EntityKind::Line { from: tip, to: [tip[0] + (bx * cos - by * sin) * wing, tip[1] + (bx * sin + by * cos) * wing] });
             }
         }
@@ -1216,6 +1299,645 @@ pub fn add_leader_note(handle: u64, request: LeaderNoteRequest) -> Result<Value,
         json!({
             "revision": session.drawing.revision,
             "drawing": session.summary(),
+            "created": created,
+        })
+    })
+}
+
+/// Arguments of [`add_isometric_view`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct IsometricViewRequest {
+    /// The projected part; needs at least one solid feature.
+    pub part: PartSpec,
+    /// Linear scale factor applied to the view; defaults to `1`.
+    pub scale: Option<f64>,
+    /// Height of the view label and axis letters; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Lower-left corner of the placed view; defaults to the origin.
+    pub origin: Option<[f64; 2]>,
+    /// Caption under the view; defaults to `ISOMETRIC`.
+    pub label: Option<String>,
+    /// Layer carrying the outlines and labels; defaults to `views`.
+    pub layer: Option<String>,
+}
+
+/// Draws a standalone isometric view of a part with an axis indicator.
+///
+/// The solids project to visible outlines on `layer` (default `views`), voids
+/// to dashed hidden outlines on a generated `hidden` layer, and the view
+/// carries a caption centred below it plus a three-line axis indicator with
+/// `X`, `Y` and `Z` letters at its upper right. The whole group is scaled
+/// about the view origin and its lower-left corner is placed at `origin`.
+/// The edit is one history step and one revision, and the response carries
+/// `{ revision, drawing, created, view }` where `view` reports the placed
+/// centre and size.
+///
+/// A part without solids, a non-finite or non-positive scale or text height,
+/// a non-finite origin, an over-long label and a locked or frozen target
+/// layer report `session/argument-invalid`, `drawing/layer-locked` or
+/// `drawing/layer-frozen`.
+pub fn add_isometric_view(handle: u64, request: IsometricViewRequest) -> Result<Value, ServiceError> {
+    validate_part(&request.part)?;
+    let scale = request.scale.unwrap_or(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(argument("`scale` must be a positive finite number"));
+    }
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !text_height.is_finite() || text_height <= 0.0 {
+        return Err(argument("`textHeight` must be a positive finite number"));
+    }
+    let origin = request.origin.unwrap_or([0.0, 0.0]);
+    if !finite2(&origin) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    let label =
+        request.label.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).unwrap_or_else(|| "ISOMETRIC".to_string());
+    if label.chars().count() > PROPERTY_VALUE_LIMIT {
+        return Err(argument("the view label is too long"));
+    }
+    let layer = request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| VIEWS_LAYER.to_string());
+    let has_voids = !request.part.voids.is_empty();
+    let (created, size) = store::edit(handle, |drawing| {
+        ensure_layer(drawing, &layer);
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if has_voids {
+            ensure_hidden_layer(drawing);
+            if let Some(error) = locked_layer(drawing, HIDDEN_LAYER) {
+                return Err(error);
+            }
+        }
+        let view = place_view("ISO", request.part.solids.iter().flat_map(project_iso), request.part.voids.iter().flat_map(project_iso), scale);
+        let size = view.size;
+        let shift = [origin[0] + view.size[0] / 2.0, origin[1] + view.size[1] / 2.0];
+        let min = [origin[0], origin[1]];
+        let max = [origin[0] + view.size[0], origin[1] + view.size[1]];
+        let mut kinds: Vec<(String, EntityKind)> = Vec::new();
+        for shape in &view.shapes {
+            kinds.push((layer.clone(), shape.translated(shift).kind()));
+        }
+        for shape in &view.hidden {
+            kinds.push((HIDDEN_LAYER.to_string(), shape.translated(shift).kind()));
+        }
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text {
+                at: [shift[0] - text_width(&label, text_height) / 2.0, min[1] - text_height * 1.5],
+                height: text_height,
+                content: label.clone(),
+            },
+        ));
+        let scale_text = scale_annotation(scale);
+        kinds.push((
+            layer.clone(),
+            EntityKind::Text {
+                at: [shift[0] - text_width(&scale_text, text_height) / 2.0, min[1] - text_height * 2.9],
+                height: text_height,
+                content: scale_text,
+            },
+        ));
+        let (sin, cos) = FRAC_PI_6.sin_cos();
+        let anchor = [max[0] + text_height * 1.5, max[1] + text_height * 1.5];
+        let length = text_height * 4.0;
+        let arms = [("X", [cos * length, sin * length]), ("Y", [-cos * length, sin * length]), ("Z", [0.0, length])];
+        for (letter, direction) in arms {
+            let end = [anchor[0] + direction[0], anchor[1] + direction[1]];
+            kinds.push((layer.clone(), EntityKind::Line { from: anchor, to: end }));
+            let unit = [direction[0] / length, direction[1] / length];
+            kinds.push((
+                layer.clone(),
+                EntityKind::Text {
+                    at: [end[0] + unit[0] * text_height * 0.4 - text_width(letter, text_height) / 2.0, end[1] + unit[1] * text_height * 0.4],
+                    height: text_height,
+                    content: letter.to_string(),
+                },
+            ));
+        }
+        let mut created = Vec::with_capacity(kinds.len());
+        for (view_layer, kind) in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: view_layer, kind };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok((created, size))
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": created,
+            "view": {
+                "center": [origin[0] + size[0] / 2.0, origin[1] + size[1] / 2.0],
+                "width": size[0],
+                "height": size[1],
+            },
+        })
+    })
+}
+
+/// One component of an exploded assembly.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AssemblyComponent {
+    /// Optional component name written beside the balloon and in the BOM.
+    pub name: Option<String>,
+    /// The component part; needs at least one solid feature.
+    pub part: PartSpec,
+    /// Assembled position offset along the part axes; defaults to the origin.
+    pub position: Option<[f64; 3]>,
+    /// Explode translation applied on top of `position`; defaults to zero.
+    pub explode: Option<[f64; 3]>,
+    /// Quantity reported in the BOM; defaults to `1`.
+    pub quantity: Option<u32>,
+    /// Optional material reported in the BOM; defaults to an empty cell.
+    pub material: Option<String>,
+}
+
+/// Arguments of [`add_exploded_assembly`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ExplodedAssemblyRequest {
+    /// The exploded components; at least one, at most 64.
+    pub components: Vec<AssemblyComponent>,
+    /// Linear scale factor applied to every component; defaults to `1`.
+    pub scale: Option<f64>,
+    /// Height of the balloon numbers and names; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Lower-left corner of the placed group; defaults to the origin.
+    pub origin: Option<[f64; 2]>,
+    /// Layer carrying the outlines and balloons; defaults to `views`.
+    pub layer: Option<String>,
+}
+
+/// Maximum number of balloon items one exploded assembly may carry.
+const BALLOON_LIMIT: usize = 64;
+
+/// Projected shapes, hidden shapes and bounds of one exploded component.
+type PlacedComponent = (Vec<Shape2>, Vec<Shape2>, ([f64; 2], [f64; 2]));
+
+/// Draws an exploded assembly view with numbered balloons and a BOM.
+///
+/// Every component projects to an isometric image at `position + explode`;
+/// solids land on `layer` (default `views`), voids as dashed outlines on a
+/// generated `hidden` layer. Balloons carrying the 1-based component numbers
+/// are distributed evenly on a ring around the group, each leader ending on
+/// the nearest point of its component outline, and an optional `name` sits
+/// outside its balloon. A framed `BILL OF MATERIALS` table below the group
+/// lists `ITEM`, `PART`, `QTY` and `MATERIAL` from the component order,
+/// `quantity` (default `1`) and material. The group is scaled and its
+/// lower-left corner is placed at `origin`. The edit is one history step and
+/// one revision, and the response carries
+/// `{ revision, drawing, created, items }` where `items` reports the number,
+/// name, quantity, material, placed centre and balloon point of each
+/// component.
+///
+/// An empty or over-long component list, a component without solids, a
+/// non-finite position or explode offset, a non-finite or non-positive scale
+/// or text height, a non-finite origin, an over-long name or material and a
+/// locked or frozen target layer report `session/argument-invalid`,
+/// `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn add_exploded_assembly(handle: u64, request: ExplodedAssemblyRequest) -> Result<Value, ServiceError> {
+    if request.components.is_empty() {
+        return Err(argument("the assembly needs at least one component"));
+    }
+    if request.components.len() > BALLOON_LIMIT {
+        return Err(argument(format!("the assembly carries more than {BALLOON_LIMIT} components")));
+    }
+    for component in &request.components {
+        validate_part(&component.part)?;
+        if component.position.map(|value| !finite3(&value)).unwrap_or(false) {
+            return Err(argument("component `position` must contain finite coordinates"));
+        }
+        if component.explode.map(|value| !finite3(&value)).unwrap_or(false) {
+            return Err(argument("component `explode` must contain finite coordinates"));
+        }
+        if component.name.as_deref().map(|value| value.trim().chars().count() > PROPERTY_VALUE_LIMIT).unwrap_or(false) {
+            return Err(argument("a component name is too long"));
+        }
+        if component.material.as_deref().map(|value| value.trim().chars().count() > PROPERTY_VALUE_LIMIT).unwrap_or(false) {
+            return Err(argument("a component material is too long"));
+        }
+        if component.quantity == Some(0) {
+            return Err(argument("a component `quantity` must be at least 1"));
+        }
+    }
+    let scale = request.scale.unwrap_or(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(argument("`scale` must be a positive finite number"));
+    }
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !text_height.is_finite() || text_height <= 0.0 {
+        return Err(argument("`textHeight` must be a positive finite number"));
+    }
+    let origin = request.origin.unwrap_or([0.0, 0.0]);
+    if !finite2(&origin) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    let layer = request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| VIEWS_LAYER.to_string());
+    let has_voids = request.components.iter().any(|component| !component.part.voids.is_empty());
+    let created_items = store::edit(handle, |drawing| {
+        ensure_layer(drawing, &layer);
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        if has_voids {
+            ensure_hidden_layer(drawing);
+            if let Some(error) = locked_layer(drawing, HIDDEN_LAYER) {
+                return Err(error);
+            }
+        }
+        let mut placed: Vec<PlacedComponent> = Vec::with_capacity(request.components.len());
+        for component in &request.components {
+            let delta = [
+                component.position.map(|p| p[0]).unwrap_or(0.0) + component.explode.map(|e| e[0]).unwrap_or(0.0),
+                component.position.map(|p| p[1]).unwrap_or(0.0) + component.explode.map(|e| e[1]).unwrap_or(0.0),
+                component.position.map(|p| p[2]).unwrap_or(0.0) + component.explode.map(|e| e[2]).unwrap_or(0.0),
+            ];
+            let shift2 = iso_point(&delta);
+            let shapes: Vec<Shape2> =
+                component.part.solids.iter().flat_map(project_iso).map(|shape| shape.scaled(scale).translated(shift2)).collect();
+            let hidden: Vec<Shape2> =
+                component.part.voids.iter().flat_map(project_iso).map(|shape| shape.scaled(scale).translated(shift2)).collect();
+            let bounds = union_bounds(shapes_bounds(&shapes), shapes_bounds(&hidden)).unwrap_or(([0.0, 0.0], [0.0, 0.0]));
+            placed.push((shapes, hidden, bounds));
+        }
+        let group = placed
+            .iter()
+            .filter_map(|(shapes, hidden, _)| union_bounds(shapes_bounds(shapes), shapes_bounds(hidden)))
+            .reduce(|acc, item| union_bounds(Some(acc), Some(item)).unwrap_or(item))
+            .unwrap_or(([0.0, 0.0], [0.0, 0.0]));
+        let group_min = group.0;
+        let group_max = group.1;
+        let shift = [origin[0] - group_min[0], origin[1] - group_min[1]];
+        let center = [(group_min[0] + group_max[0]) / 2.0, (group_min[1] + group_max[1]) / 2.0];
+        let reach = placed
+            .iter()
+            .map(|(_, _, (min, max))| {
+                [[min[0], min[1]], [max[0], min[1]], [min[0], max[1]], [max[0], max[1]]]
+                    .iter()
+                    .map(|corner| ((corner[0] - center[0]).powi(2) + (corner[1] - center[1]).powi(2)).sqrt())
+                    .fold(0.0_f64, f64::max)
+            })
+            .fold(0.0_f64, f64::max);
+        let radius = text_height * 1.5;
+        let ring = reach + VIEW_GAP + radius * 2.0;
+        let mut order: Vec<usize> = (0..placed.len()).collect();
+        order.sort_by(|left, right| {
+            let left_angle = (placed[*left].2.0[1] - center[1]).atan2(placed[*left].2.0[0] - center[0]);
+            let right_angle = (placed[*right].2.0[1] - center[1]).atan2(placed[*right].2.0[0] - center[0]);
+            left_angle.total_cmp(&right_angle).then(left.cmp(right))
+        });
+        let start_angle = order
+            .first()
+            .map(|index| (placed[*index].2.0[1] - center[1]).atan2(placed[*index].2.0[0] - center[0]))
+            .unwrap_or(std::f64::consts::FRAC_PI_2);
+        let step = std::f64::consts::TAU / placed.len() as f64;
+        let mut kinds: Vec<(String, EntityKind)> = Vec::new();
+        let mut items: Vec<Value> = Vec::with_capacity(placed.len());
+        let mut balloon_floor = f64::INFINITY;
+        for (rank, index) in order.iter().copied().enumerate() {
+            let (shapes, hidden, _) = &placed[index];
+            for shape in shapes {
+                kinds.push((layer.clone(), shape.translated(shift).kind()));
+            }
+            for shape in hidden {
+                kinds.push((HIDDEN_LAYER.to_string(), shape.translated(shift).kind()));
+            }
+            let angle = start_angle + step * rank as f64;
+            let balloon = [center[0] + ring * angle.cos() + shift[0], center[1] + ring * angle.sin() + shift[1]];
+            let local = [balloon[0] - shift[0], balloon[1] - shift[1]];
+            let target_local = shapes
+                .iter()
+                .map(|shape| nearest_on_shape(shape, local))
+                .min_by(|left, right| {
+                    let left = (left[0] - local[0]).powi(2) + (left[1] - local[1]).powi(2);
+                    let right = (right[0] - local[0]).powi(2) + (right[1] - local[1]).powi(2);
+                    left.total_cmp(&right)
+                })
+                .unwrap_or(local);
+            let target = [target_local[0] + shift[0], target_local[1] + shift[1]];
+            let span = ((target[0] - balloon[0]).powi(2) + (target[1] - balloon[1]).powi(2)).sqrt();
+            let direction = if span > 0.0 { [(target[0] - balloon[0]) / span, (target[1] - balloon[1]) / span] } else { [1.0, 0.0] };
+            let start = [balloon[0] + direction[0] * radius, balloon[1] + direction[1] * radius];
+            kinds.push((layer.clone(), EntityKind::Line { from: start, to: target }));
+            kinds.push((layer.clone(), EntityKind::Circle { center: balloon, radius }));
+            let number = (index + 1).to_string();
+            kinds.push((
+                layer.clone(),
+                EntityKind::Text {
+                    at: [balloon[0] - text_width(&number, text_height) / 2.0, balloon[1] - text_height / 2.0],
+                    height: text_height,
+                    content: number.clone(),
+                },
+            ));
+            let name = request.components[index].name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+            if let Some(name) = name {
+                let outward = radius + text_height * 0.5;
+                let text_x = if angle.cos() >= 0.0 { balloon[0] + outward } else { balloon[0] - outward - text_width(name, text_height) };
+                kinds.push((
+                    layer.clone(),
+                    EntityKind::Text { at: [text_x, balloon[1] - text_height / 2.0], height: text_height, content: name.to_string() },
+                ));
+            }
+            balloon_floor = balloon_floor.min(balloon[1] - radius);
+            let quantity = request.components[index].quantity.unwrap_or(1).max(1);
+            let material = request.components[index].material.as_deref().map(str::trim).filter(|value| !value.is_empty());
+            items.push(json!({
+                "number": index + 1,
+                "name": name,
+                "quantity": quantity,
+                "material": material,
+                "center": target,
+                "balloon": balloon,
+            }));
+        }
+        push_bom(&mut kinds, &layer, &request.components, [origin[0], origin[1].min(balloon_floor) - VIEW_GAP], text_height);
+        let mut created = Vec::with_capacity(kinds.len());
+        for (view_layer, kind) in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: view_layer, kind };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok((created, items))
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "created": created_items.0,
+            "items": created_items.1,
+        })
+    })
+}
+
+/// Column headers of the exploded-assembly bill of materials.
+const BOM_COLUMNS: [&str; 4] = ["ITEM", "PART", "QTY", "MATERIAL"];
+
+/// Fraction of the BOM width each column occupies, left to right.
+const BOM_COLUMN_SHARE: [f64; 4] = [0.1, 0.5, 0.12, 0.28];
+
+/// Caption of the exploded-assembly bill of materials.
+const BOM_TITLE: &str = "BILL OF MATERIALS";
+
+/// Appends a framed, column-aligned bill of materials below the balloons.
+fn push_bom(kinds: &mut Vec<(String, EntityKind)>, layer: &str, components: &[AssemblyComponent], top_left: [f64; 2], text_height: f64) {
+    let width = 70.0 * text_height;
+    let row_height = 2.5 * text_height;
+    let row_count = components.len() + 2;
+    let left = top_left[0];
+    let top = top_left[1];
+    let bottom = top - row_count as f64 * row_height;
+    let right = left + width;
+    let line = |from: [f64; 2], to: [f64; 2]| EntityKind::Line { from, to };
+    kinds.push((layer.to_string(), line([left, top], [right, top])));
+    kinds.push((layer.to_string(), line([right, top], [right, bottom])));
+    kinds.push((layer.to_string(), line([right, bottom], [left, bottom])));
+    kinds.push((layer.to_string(), line([left, bottom], [left, top])));
+    for row in 1..row_count {
+        let y = top - row as f64 * row_height;
+        kinds.push((layer.to_string(), line([left, y], [right, y])));
+    }
+    let mut column = left;
+    let mut separators = Vec::with_capacity(BOM_COLUMNS.len());
+    for share in BOM_COLUMN_SHARE.iter().take(BOM_COLUMNS.len() - 1) {
+        column += width * share;
+        separators.push(column);
+        kinds.push((layer.to_string(), line([column, top - row_height], [column, bottom])));
+    }
+    let inset = text_height * 0.5;
+    let baseline = |row: usize| top - (row + 1) as f64 * row_height + (row_height - text_height) * 0.5;
+    kinds.push((layer.to_string(), EntityKind::Text { at: [left + inset, baseline(0)], height: text_height, content: BOM_TITLE.to_string() }));
+    for (column_index, title) in BOM_COLUMNS.iter().enumerate() {
+        let x = if column_index == 0 { left } else { separators[column_index - 1] };
+        kinds.push((layer.to_string(), EntityKind::Text { at: [x + inset, baseline(1)], height: text_height, content: (*title).to_string() }));
+    }
+    for (index, component) in components.iter().enumerate() {
+        let row = index + 2;
+        let name = component
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("PART {}", index + 1));
+        let values = [
+            (index + 1).to_string(),
+            name,
+            component.quantity.unwrap_or(1).max(1).to_string(),
+            component.material.as_deref().map(str::trim).unwrap_or("").to_string(),
+        ];
+        for (column_index, value) in values.iter().enumerate() {
+            if value.is_empty() {
+                continue;
+            }
+            let x = if column_index == 0 { left } else { separators[column_index - 1] };
+            kinds.push((layer.to_string(), EntityKind::Text { at: [x + inset, baseline(row)], height: text_height, content: value.clone() }));
+        }
+    }
+}
+
+/// Arguments of [`add_hole_table`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HoleTableRequest {
+    /// The part whose cylindrical voids are tabulated; needs at least one.
+    pub part: PartSpec,
+    /// Lower-left corner of the table; defaults to the origin.
+    pub origin: Option<[f64; 2]>,
+    /// Height of the table text; defaults to `3.5`.
+    pub text_height: Option<f64>,
+    /// Table caption; defaults to `HOLE TABLE`.
+    pub title: Option<String>,
+    /// Layer carrying the table; defaults to `holes`.
+    pub layer: Option<String>,
+}
+
+/// Layer and default caption of the hole table.
+const HOLE_TABLE_LAYER: &str = "holes";
+const HOLE_TABLE_TITLE: &str = "HOLE TABLE";
+
+/// Column headers of the hole table, left to right.
+const HOLE_COLUMNS: [&str; 6] = ["No.", "Axis", "Pos A", "Pos B", "Dia", "Depth"];
+
+/// Fraction of the table width each hole column occupies, left to right.
+const HOLE_COLUMN_SHARE: [f64; 6] = [0.1, 0.12, 0.2, 0.2, 0.19, 0.19];
+
+/// Formats one table number with at most three decimals and no trailing zeros.
+fn format_number(value: f64) -> String {
+    if !value.is_finite() || value.abs() < 0.0005 {
+        return "0".to_string();
+    }
+    let mut text = format!("{value:.3}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
+}
+
+/// Tabulates the cylindrical voids of a part as a framed hole table.
+///
+/// Every `cylinder` void becomes one numbered row in void order: the two
+/// coordinates transverse to its axis (ascending axis order) are `Pos A` and
+/// `Pos B`, the diameter is twice the radius and the depth is the axial
+/// length. A caption row sits above the
+/// header unless `title` is empty; the bottom-left corner sits at `origin`,
+/// the width is `70 * textHeight` and every row is `2.5 * textHeight` tall.
+/// The edit is one history step and one revision, and the response carries
+/// `{ revision, drawing, columns, rows, created }`.
+///
+/// A part without cylindrical voids reports `hole-table/empty`; a non-finite
+/// or non-positive text height, a non-finite origin and an over-long caption
+/// report `session/argument-invalid`; a locked or frozen layer reports
+/// `drawing/layer-locked` or `drawing/layer-frozen`.
+pub fn add_hole_table(handle: u64, request: HoleTableRequest) -> Result<Value, ServiceError> {
+    validate_part(&request.part)?;
+    let text_height = request.text_height.unwrap_or(3.5);
+    if !text_height.is_finite() || text_height <= 0.0 {
+        return Err(argument("`textHeight` must be a positive finite number"));
+    }
+    let origin = request.origin.unwrap_or([0.0, 0.0]);
+    if !finite2(&origin) {
+        return Err(argument("`origin` must contain finite coordinates"));
+    }
+    let caption = match request.title.as_deref() {
+        None => Some(HOLE_TABLE_TITLE.to_string()),
+        Some(raw) => {
+            let value = raw.trim().to_string();
+            if value.chars().count() > PROPERTY_VALUE_LIMIT {
+                return Err(argument("the table title is too long"));
+            }
+            (!value.is_empty()).then_some(value)
+        }
+    };
+    let layer =
+        request.layer.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()).unwrap_or_else(|| HOLE_TABLE_LAYER.to_string());
+    let width = text_height * 70.0;
+    if !width.is_finite() {
+        return Err(argument("`textHeight` is too large"));
+    }
+    let row_height = text_height * 2.5;
+    let (created, rows) = store::edit(handle, |drawing| {
+        let holes: Vec<(Axis3, [f64; 2], f64, f64, f64)> = request
+            .part
+            .voids
+            .iter()
+            .filter_map(|feature| {
+                if let Feature3d::Cylinder { axis, center, from, to, radius } = feature {
+                    Some((*axis, *center, from.min(*to), from.max(*to), *radius))
+                }
+                else {
+                    None
+                }
+            })
+            .collect();
+        if holes.is_empty() {
+            return Err(ServiceError::new("hole-table/empty", "the part has no cylindrical void features to tabulate"));
+        }
+        ensure_layer(drawing, &layer);
+        if let Some(error) = locked_layer(drawing, &layer) {
+            return Err(error);
+        }
+        let cells: Vec<[String; 6]> = holes
+            .iter()
+            .enumerate()
+            .map(|(index, (axis, center, from, to, radius))| {
+                [
+                    (index + 1).to_string(),
+                    match axis {
+                        Axis3::X => "X".to_string(),
+                        Axis3::Y => "Y".to_string(),
+                        Axis3::Z => "Z".to_string(),
+                    },
+                    format_number(center[0]),
+                    format_number(center[1]),
+                    format_number(2.0 * radius),
+                    format_number(to - from),
+                ]
+            })
+            .collect();
+        let rows: Vec<Value> = holes
+            .iter()
+            .enumerate()
+            .map(|(index, (axis, center, from, to, radius))| {
+                json!({
+                    "no": index + 1,
+                    "axis": match axis { Axis3::X => "x", Axis3::Y => "y", Axis3::Z => "z" },
+                    "posA": center[0],
+                    "posB": center[1],
+                    "diameter": 2.0 * radius,
+                    "depth": to - from,
+                })
+            })
+            .collect();
+        let [x0, y0] = origin;
+        let x1 = x0 + width;
+        let y1 = y0 + row_height * (cells.len() + 1 + usize::from(caption.is_some())) as f64;
+        let mut kinds = Vec::new();
+        kinds.extend_from_slice(&[
+            EntityKind::Line { from: [x0, y0], to: [x1, y0] },
+            EntityKind::Line { from: [x1, y0], to: [x1, y1] },
+            EntityKind::Line { from: [x1, y1], to: [x0, y1] },
+            EntityKind::Line { from: [x0, y1], to: [x0, y0] },
+        ]);
+        let mut separator = y1;
+        if caption.is_some() {
+            separator -= row_height;
+            kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
+        }
+        separator -= row_height;
+        kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
+        for _ in 1..cells.len() {
+            separator -= row_height;
+            kinds.push(EntityKind::Line { from: [x0, separator], to: [x1, separator] });
+        }
+        let mut column_x = [0.0f64; HOLE_COLUMN_SHARE.len()];
+        let mut cursor = x0;
+        for (index, share) in HOLE_COLUMN_SHARE.iter().enumerate() {
+            column_x[index] = cursor;
+            cursor += width * share;
+        }
+        let inset = text_height * 0.5;
+        let header_bottom = y1 - row_height * (1.0 + f64::from(u8::from(caption.is_some())));
+        for x in &column_x[1..] {
+            kinds.push(EntityKind::Line { from: [*x, y0], to: [*x, header_bottom] });
+        }
+        let mut baseline = y1 - row_height + (row_height - text_height) / 2.0;
+        if let Some(caption) = &caption {
+            kinds.push(EntityKind::Text { at: [x0 + inset, baseline], height: text_height, content: caption.clone() });
+            baseline -= row_height;
+        }
+        for (index, header) in HOLE_COLUMNS.iter().enumerate() {
+            kinds.push(EntityKind::Text { at: [column_x[index] + inset, baseline], height: text_height, content: (*header).to_string() });
+        }
+        baseline -= row_height;
+        for row in &cells {
+            for (index, value) in row.iter().enumerate() {
+                kinds.push(EntityKind::Text { at: [column_x[index] + inset, baseline], height: text_height, content: value.clone() });
+            }
+            baseline -= row_height;
+        }
+        let mut created = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let entity = Entity { id: drawing.take_entity_id(), layer: layer.clone(), kind };
+            drawing.entities.push(entity.clone());
+            created.push(entity);
+        }
+        drawing.revision += 1;
+        Ok((created, rows))
+    })?;
+    store::read(handle, |session| {
+        json!({
+            "revision": session.drawing.revision,
+            "drawing": session.summary(),
+            "columns": HOLE_COLUMNS,
+            "rows": rows,
             "created": created,
         })
     })

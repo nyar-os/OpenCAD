@@ -149,6 +149,12 @@ impl Frame {
             Some(extents) => {
                 let width = extents.width().max(1.0);
                 let height = extents.height().max(1.0);
+                if has_generated_sheet(drawing) {
+                    // The authored sheet already includes its borders and title
+                    // block; exporting it at exact extents keeps the page size
+                    // (A3/A4) and avoids a second, offset frame.
+                    return Self { min_x: extents.min.x, min_y: extents.min.y, width, height };
+                }
                 let pad = (width.max(height) * 0.08).max(frame_margin(drawing.units) * 1.6);
                 // The title block hangs from the inner border's bottom-right corner, so the
                 // bottom padding must clear the block's full height plus a gap; otherwise a
@@ -157,7 +163,7 @@ impl Frame {
                     Units::Mm => 1.0,
                     Units::Inch => 1.0 / 25.4,
                 };
-                let bottom = (frame_margin(drawing.units) + 28.0 * sheet).max(pad);
+                let bottom = (frame_margin(drawing.units) + 32.0 * sheet).max(pad);
                 Self { min_x: extents.min.x - pad, min_y: extents.min.y - bottom, width: width + pad * 2.0, height: height + pad + bottom }
             }
             None => Self { min_x: 0.0, min_y: 0.0, width: 297.0, height: 210.0 },
@@ -616,29 +622,64 @@ impl SheetLayout {
     }
 }
 
-/// The title block's text: title, byline, units and revision.
-fn title_block_labels(drawing: &Drawing) -> [String; 4] {
+/// The title block's text: title, number, byline, scale, units, sheet,
+/// revision and projection convention.
+fn title_block_labels(drawing: &Drawing) -> [String; 8] {
     let byline = [drawing.properties.author.as_str(), drawing.properties.company.as_str(), drawing.properties.project.as_str()]
         .into_iter()
         .filter(|value| !value.trim().is_empty())
         .collect::<Vec<_>>()
         .join(" / ");
     let byline = if byline.is_empty() { String::from("Unattributed") } else { byline };
+    let scale = drawing
+        .entities
+        .iter()
+        .find_map(|entity| match &entity.kind {
+            EntityKind::Text { content, .. } => content.trim().strip_prefix("SCALE ").map(str::trim).filter(|value| !value.is_empty()),
+            _ => None,
+        })
+        .map(str::to_string)
+        .or_else(|| drawing.layouts.first().map(|layout| format!("1:{}", num(1.0 / layout.scale.max(1e-9)))))
+        .unwrap_or_else(|| String::from("NTS"));
+    let projection = if drawing
+        .entities
+        .iter()
+        .any(|entity| matches!(&entity.kind, EntityKind::Text { content, .. } if content.trim().eq_ignore_ascii_case("THIRD ANGLE")))
+    {
+        String::from("THIRD ANGLE")
+    }
+    else {
+        String::from("FIRST ANGLE")
+    };
     [
         drawing.title.as_deref().unwrap_or("Untitled drawing").to_string(),
+        format!("No. {}", drawing.id),
         byline,
-        format!("Units: {}", drawing.units.as_str()),
-        format!("Rev {}", drawing.revision),
+        format!("SCALE {scale}"),
+        format!("UNITS {}", drawing.units.as_str().to_ascii_uppercase()),
+        String::from("SHEET 1/1"),
+        format!("REV {}", drawing.revision),
+        projection,
     ]
+}
+
+/// The generated title block lives on this layer; the exporters then keep the
+/// authored sheet instead of drawing a second frame around it.
+const GENERATED_TITLE_BLOCK_LAYER: &str = "titleblock";
+
+/// Whether the drawing already carries an authored sheet frame.
+fn has_generated_sheet(drawing: &Drawing) -> bool {
+    drawing.entities.iter().any(|entity| entity.layer == GENERATED_TITLE_BLOCK_LAYER)
 }
 
 /// Pushes the engineering sheet frame and title block onto a scene.
 ///
 /// Two borders inset from the sheet edge follow drafting practice; the title
 /// block sits in the lower-right corner of the inner border and reports the
-/// drawing title, its author, company and project, the declared units and the
-/// current revision. The shapes are placed in canvas coordinates directly
-/// because the sheet, unlike the entities, is not projected from the model.
+/// drawing title and number, author, scale, units, sheet count, revision and
+/// the first- or third-angle projection symbol. The shapes are placed in canvas
+/// coordinates directly because the sheet, unlike the entities, is not
+/// projected from the model.
 fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, sheet: FlatSize, stroke: f64, layout: &SheetLayout) {
     let border = Style::stroke(EXPORT_INK, stroke.max(0.35));
     let label = Style::fill(EXPORT_INK);
@@ -658,10 +699,11 @@ fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, sheet: FlatSize, 
     else {
         return;
     };
-    let row = block.height / 3.0;
-    let size = (row * 0.5).max(0.5);
+    let row = block.height / 4.0;
+    let pad = row * 0.18;
+    let size = (row * 0.42).max(0.5);
     flat.push(Element::new(rectangle(block.left, block.top, block.width, block.height), border.clone()));
-    for index in 1..3 {
+    for index in 1..4 {
         let y = block.top + row * index as f64;
         flat.push(Element::new(
             Shape::Line { from: FlatPoint::new(block.left, y), to: FlatPoint::new(block.left + block.width, y) },
@@ -669,17 +711,66 @@ fn push_sheet_frame(flat: &mut FlatDrawing, drawing: &Drawing, sheet: FlatSize, 
         ));
     }
     let meta_x = block.left + block.width * 0.55;
-    flat.push(Element::new(
-        Shape::Line { from: FlatPoint::new(meta_x, block.top + row * 2.0), to: FlatPoint::new(meta_x, block.top + block.height) },
-        border.clone(),
-    ));
-
-    let [title, byline, units, revision] = title_block_labels(drawing);
-    let baseline = |index: usize| block.top + row * (index as f64 + 1.0) - row * 0.28;
-    let cells = [(title, block.left, 0usize), (byline, block.left, 1), (units, block.left, 2), (revision, meta_x, 2)];
-    for (value, x, index) in cells {
-        flat.push(Element::new(Shape::Text { at: FlatPoint::new(x + row * 0.3, baseline(index)), text: value, size }, label.clone()));
+    for index in 0..2 {
+        let y = block.top + row * index as f64;
+        flat.push(Element::new(Shape::Line { from: FlatPoint::new(meta_x, y), to: FlatPoint::new(meta_x, y + row) }, border.clone()));
     }
+    let third = block.width / 3.0;
+    for index in 1..3 {
+        let x = block.left + third * index as f64;
+        flat.push(Element::new(
+            Shape::Line { from: FlatPoint::new(x, block.top + row * 2.0), to: FlatPoint::new(x, block.top + row * 3.0) },
+            border.clone(),
+        ));
+    }
+
+    let [title, number, byline, scale, units, sheet_count, revision, projection] = title_block_labels(drawing);
+    let baseline = |index: usize| block.top + row * (index as f64 + 1.0) - row * 0.28;
+    let cells = [
+        (title, block.left, 0usize),
+        (number, meta_x, 0),
+        (byline, block.left, 1),
+        (scale, meta_x, 1),
+        (units, block.left, 2),
+        (sheet_count, block.left + third, 2),
+        (revision, block.left + third * 2.0, 2),
+    ];
+    for (value, x, index) in cells {
+        flat.push(Element::new(Shape::Text { at: FlatPoint::new(x + pad, baseline(index)), text: value, size }, label.clone()));
+    }
+
+    let first_angle = projection == "FIRST ANGLE";
+    let symbol_x = block.left + pad;
+    let center_y = block.top + row * 3.5;
+    let half = row * 0.28;
+    let width = row * 1.8;
+    let trapezoid = if first_angle {
+        vec![
+            FlatPoint::new(symbol_x, center_y - half),
+            FlatPoint::new(symbol_x + width * 0.5, center_y - half * 0.35),
+            FlatPoint::new(symbol_x + width * 0.5, center_y + half * 0.35),
+            FlatPoint::new(symbol_x, center_y + half),
+        ]
+    }
+    else {
+        vec![
+            FlatPoint::new(symbol_x, center_y - half * 0.35),
+            FlatPoint::new(symbol_x + width * 0.5, center_y - half),
+            FlatPoint::new(symbol_x + width * 0.5, center_y + half),
+            FlatPoint::new(symbol_x, center_y + half * 0.35),
+        ]
+    };
+    let circle_x = symbol_x + width * 0.5 + row * 0.62;
+    flat.push(Element::new(Shape::Line { from: trapezoid[0], to: trapezoid[1] }, border.clone()));
+    flat.push(Element::new(Shape::Line { from: trapezoid[1], to: trapezoid[2] }, border.clone()));
+    flat.push(Element::new(Shape::Line { from: trapezoid[2], to: trapezoid[3] }, border.clone()));
+    flat.push(Element::new(Shape::Line { from: trapezoid[3], to: trapezoid[0] }, border.clone()));
+    flat.push(Element::new(Shape::Circle { center: FlatPoint::new(circle_x, center_y), radius: half * 0.55 }, border.clone()));
+    flat.push(Element::new(Shape::Circle { center: FlatPoint::new(circle_x, center_y), radius: half }, border));
+    flat.push(Element::new(
+        Shape::Text { at: FlatPoint::new(circle_x + half + row * 0.5, center_y - size * 0.35), text: projection, size },
+        label,
+    ));
 }
 
 fn svg_document(drawing: &Drawing, frame: Frame) -> String {
@@ -696,8 +787,10 @@ fn svg_document(drawing: &Drawing, frame: Frame) -> String {
         dim_styles: &drawing.dim_styles,
     };
     let mut flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
-    let layout = SheetLayout::for_svg(drawing, frame, stroke);
-    push_sheet_frame(&mut flat, drawing, FlatSize::new(frame.width, frame.height), stroke, &layout);
+    if !has_generated_sheet(drawing) {
+        let layout = SheetLayout::for_svg(drawing, frame, stroke);
+        push_sheet_frame(&mut flat, drawing, FlatSize::new(frame.width, frame.height), stroke, &layout);
+    }
     let svg = flat.to_svg().unwrap_or_else(|_| {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n</svg>\n",
@@ -1301,6 +1394,30 @@ fn pdf_text(value: &str) -> (String, usize) {
 /// reserved, using the same [`SheetLayout`] the SVG writer draws. The frame is
 /// appended after the entities, so it paints on top like drafting furniture.
 fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
+    if has_generated_sheet(drawing) {
+        // Plot the authored A3/A4 page at 1:1 instead of fitting it onto a
+        // fixed A4 sheet, so the emitted PDF keeps the requested paper size.
+        let frame = Frame::of(drawing);
+        let factor = match drawing.units {
+            Units::Mm => PDF_POINTS_PER_MILLIMETRE,
+            Units::Inch => 72.0,
+        };
+        let width = frame.width * factor;
+        let height = frame.height * factor;
+        let map = |point: [f64; 2]| FlatPoint::new((point[0] - frame.min_x) * factor, (frame.min_y + frame.height - point[1]) * factor);
+        let projection = Projection {
+            map: &map,
+            scale: factor,
+            stroke: PDF_FRAME_STROKE,
+            lineweight_scale: factor,
+            label_offset: 1.75,
+            label_size: (1.75 * factor).max(7.0),
+            min_text_size: 7.0,
+            dim_styles: &drawing.dim_styles,
+        };
+        let flat = build_drawing(drawing, FlatSize::new(width, height), &projection);
+        return (flat, SheetLayout { outer: 0.0, inner: 0.0, block: None });
+    }
     let extents = visible_extents(drawing);
     let (min_x, min_y, width, height) = match extents {
         Some(extents) => (extents.min.x, extents.min.y, extents.width().max(1.0), extents.height().max(1.0)),

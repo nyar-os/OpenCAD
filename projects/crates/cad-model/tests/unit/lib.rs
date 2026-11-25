@@ -6283,11 +6283,11 @@ fn title_block_generates_a_framed_sheet_with_defaults() {
     let result = add_title_block(handle, TitleBlockRequest::default()).expect("title block");
     assert_eq!(result["revision"], json!(3), "one block is one revision");
     let created = result["created"].as_array().expect("created");
-    assert_eq!(created.len(), 32, "19 grid lines and 13 default texts");
+    assert_eq!(created.len(), 36, "17 grid lines, 3 projection-symbol shapes and 16 texts");
     let lines = created.iter().filter(|entity| entity["kind"]["type"] == json!("line")).count();
-    assert_eq!(lines, 19, "outer border, inner frame, block frame, six row separators and one label divider");
+    assert_eq!(lines, 17, "outer border, inner frame, block frame, four row separators and one column divider");
     let texts = created_text(&result["created"]);
-    for expected in ["Title", "Number", "Revision", "Scale", "Date", "Author", "Sheet", "Site plan", "drawing-1", "1:1", "Ada"] {
+    for expected in ["Site plan", "NO.", "drawing-1", "REV", "1", "SCALE", "1:1", "SHEET", "UNITS", "MM", "PROJ.", "FIRST", "AUTHOR", "Ada"] {
         assert!(texts.iter().any(|text| text == expected), "missing `{expected}` in {texts:?}");
     }
     let drawing = drawing_of(handle);
@@ -6318,6 +6318,7 @@ fn title_block_honours_overrides_and_a_custom_sheet() {
             date: Some("2026-11-23".to_string()),
             author: Some("Lin".to_string()),
             sheet: Some("2".to_string()),
+            ..TitleBlockRequest::default()
         },
     )
     .expect("custom block");
@@ -6329,6 +6330,38 @@ fn title_block_honours_overrides_and_a_custom_sheet() {
     assert!(drawing.layer("Sheet").is_some());
     assert!(drawing.entities.iter().all(|entity| entity.layer == "Sheet"));
     close(handle).expect("close");
+}
+
+#[test]
+fn title_block_supports_standard_formats_and_third_angle() {
+    let created = create(CreateRequest::default()).expect("create");
+    let handle = handle_of(&created);
+    let result = add_title_block(
+        handle,
+        TitleBlockRequest {
+            format: Some("a4".to_string()),
+            orientation: Some("portrait".to_string()),
+            projection: Some("third".to_string()),
+            scale: Some("1:2".to_string()),
+            ..TitleBlockRequest::default()
+        },
+    )
+    .expect("a4 portrait sheet");
+    let texts = created_text(&result["created"]);
+    for expected in ["THIRD", "1:2", "SHEET", "UNITS"] {
+        assert!(texts.iter().any(|text| text == expected), "missing `{expected}` in {texts:?}");
+    }
+    let drawing = drawing_of(handle);
+    let extents = drawing
+        .entities
+        .iter()
+        .flat_map(|entity| entity.bounds_points())
+        .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(min, max), point| {
+            ([min[0].min(point[0]), min[1].min(point[1])], [max[0].max(point[0]), max[1].max(point[1])])
+        });
+    close(handle).expect("close");
+    assert!((extents.1[0] - extents.0[0] - 210.0).abs() < 1e-6, "portrait A4 is 210 wide");
+    assert!((extents.1[1] - extents.0[1] - 297.0).abs() < 1e-6, "portrait A4 is 297 tall");
 }
 
 #[test]

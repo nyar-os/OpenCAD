@@ -97,6 +97,12 @@ import type {
     QuantityTableResult,
     LeaderNoteRequest,
     LeaderNoteResult,
+    ExplodedAssemblyRequest,
+    ExplodedAssemblyResult,
+    HoleTableRequest,
+    HoleTableResult,
+    IsometricViewRequest,
+    IsometricViewResult,
     MultiViewSheetRequest,
     MultiViewSheetResult,
     SectionViewRequest,
@@ -1063,6 +1069,27 @@ export class DrawingDocument {
      */
     leaderNote(request: LeaderNoteRequest): LeaderNoteResult {
         return this.edit((handle) => service.leaderNote(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Draws a standalone isometric view of a declarative part model with an axis indicator. */
+    isometricView(request: IsometricViewRequest): IsometricViewResult {
+        return this.edit((handle) => service.isometricView(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Draws an exploded assembly view of declarative components with numbered balloons. */
+    explodedAssembly(request: ExplodedAssemblyRequest): ExplodedAssemblyResult {
+        return this.edit((handle) => service.explodedAssembly(handle, request), (result) => {
+            this.state = result.drawing;
+        });
+    }
+
+    /** Tabulates the cylindrical voids of a declarative part model as a framed hole table. */
+    holeTable(request: HoleTableRequest): HoleTableResult {
+        return this.edit((handle) => service.holeTable(handle, request), (result) => {
             this.state = result.drawing;
         });
     }

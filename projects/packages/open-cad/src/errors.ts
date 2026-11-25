@@ -48,6 +48,8 @@ export const errorCodes = [
     'hatch/spacing-too-fine',
     'section/empty',
     'titleblock/invalid-sheet',
+    'titleblock/content-overflow',
+    'hole-table/empty',
     'dimension/unsupported-entity',
     'polyline/invalid-iterations',
     'polyline/invalid-ratio',

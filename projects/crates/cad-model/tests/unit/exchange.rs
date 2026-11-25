@@ -168,9 +168,13 @@ fn svg_export_draws_sheet_frame_and_title_block() {
         kind: EntityKind::Line { from: [0.0, 0.0], to: [100.0, 40.0] },
     });
     let svg = svg(&drawing);
-    assert!(svg.contains("Units: mm"), "the title block declares the units: {svg}");
-    assert!(svg.contains("Rev 1"), "the title block reports the revision: {svg}");
+    assert!(svg.contains("UNITS MM"), "the title block declares the units: {svg}");
+    assert!(svg.contains("REV 1"), "the title block reports the revision: {svg}");
     assert!(svg.contains("Ada"), "the title block reports the author: {svg}");
+    assert!(svg.contains("No. drawing-1"), "the title block reports the drawing number: {svg}");
+    assert!(svg.contains("SCALE NTS"), "the title block declares the scale: {svg}");
+    assert!(svg.contains("SHEET 1/1"), "the title block reports the sheet count: {svg}");
+    assert!(svg.contains("FIRST ANGLE"), "the title block carries the projection marker: {svg}");
     assert!(svg.matches("<path").count() >= 3, "the borders and the title block are closed paths: {svg}");
 }
 
@@ -186,9 +190,11 @@ fn pdf_export_draws_sheet_frame_and_title_block() {
     let (pdf, losses) = pdf(&drawing);
     assert!(pdf.starts_with("%PDF-1.7"), "a PDF header: {pdf}");
     assert!(pdf.contains("(Bracket) Tj"), "the title block reports the title: {pdf}");
-    assert!(pdf.contains("(Units: mm) Tj"), "the title block declares the units: {pdf}");
-    assert!(pdf.contains("(Rev 1) Tj"), "the title block reports the revision: {pdf}");
+    assert!(pdf.contains("(UNITS MM) Tj"), "the title block declares the units: {pdf}");
+    assert!(pdf.contains("(REV 1) Tj"), "the title block reports the revision: {pdf}");
     assert!(pdf.contains("(Ada) Tj"), "the title block reports the author: {pdf}");
+    assert!(pdf.contains("(No. drawing-1) Tj"), "the title block reports the drawing number: {pdf}");
+    assert!(pdf.contains("(FIRST ANGLE) Tj"), "the title block carries the projection marker: {pdf}");
     assert!(losses.is_empty(), "ASCII sheet text needs no encoding loss: {losses:?}");
     // Two borders, the block frame and its three rules, plus the entity itself.
     let strokes = pdf.matches("\nS\n").count();

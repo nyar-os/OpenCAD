@@ -53,6 +53,9 @@
             "multiview-sheet": "Project a JSON part model into first- or third-angle views plus an isometric view and save the file",
             "section-view": "Cut a JSON part model by a plane and draw the hatched section view and save the file",
             "leader-note": "Draw a leader with an arrowhead and a note and save the file",
+            "isometric-view": "Project a JSON part model into a standalone isometric view with an axis indicator and save the file",
+            "exploded-assembly": "Space JSON assembly components apart into an exploded isometric view with numbered balloons and save the file",
+            "hole-table": "Tabulate the cylindrical voids of a JSON part model as a framed hole table and save the file",
             "select": "Select entities inside or crossing a rectangular window without changing the drawing",
             "snap": "Compute endpoint, midpoint, centre and line-intersection snap points without changing the drawing",
             "ucs": "Convert points and entities between world and user coordinates and save the file",
@@ -128,6 +131,9 @@
             "format": "Exchange format to write: dxf, obj, step, stl, svg or pdf (obj, step and stl extrude closed profiles)",
             "layer": "Target layer id (defaults to 0; dimensions default to dimensions)",
             "title-block-layer": "Target layer for the frame and block; defaults to titleblock",
+            "title-block-format": "Standard sheet format: a4, a3 or a2; overrides --width and --height",
+            "title-block-orientation": "Sheet orientation: landscape (default) or portrait",
+            "title-block-projection": "Projection convention in the title block: first (default) or third",
             "from": "Start point as x,y",
             "to": "End point as x,y",
             "center": "Circle, arc or ellipse centre as x,y",
@@ -281,7 +287,10 @@
             "leader-text": "Note text; non-empty",
             "leader-text-height": "Height of the note text; defaults to 3.5",
             "leader-arrow": "Arrowhead at the first leader point: on or off; defaults to on",
-            "notes-layer": "Layer carrying the leader note; defaults to notes"
+            "notes-layer": "Layer carrying the leader note; defaults to notes",
+            "iso-label": "Caption under the isometric view; defaults to ISOMETRIC",
+            "components": "JSON array of assembly components as [{\"name\":\"...\",\"part\":{...},\"position\":[x,y,z],\"explode\":[x,y,z]}]; at least one",
+            "hole-table-layer": "Target layer for the hole table; defaults to holes"
         },
         "error": {
             "hatch-pattern-required": "`--id <entity>` is required",
@@ -292,6 +301,7 @@
             "dimension-update-required": "`--id <entity>` and at least one of `--from`, `--to`, `--offset` or `--style` are required",
             "origin-invalid": "`--origin x,y` needs two numbers",
             "part-invalid": "`--part <json>` needs a JSON object with a non-empty `solids` list",
+            "components-invalid": "`--components <json>` needs a non-empty JSON array of `{name, part, position, explode}` objects",
             "section-cut-required": "`--axis x|y|z` and `--at <number>` are required",
             "leader-note-required": "`--points \"x,y x,y ...\"` with at least two points and `--text <note>` are required"
         }

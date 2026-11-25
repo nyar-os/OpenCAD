@@ -1001,6 +1001,10 @@ export interface HatchPatternResult {
 export interface TitleBlockRequest {
     /** Layer that carries the frame and block; defaults to `titleblock`. */
     readonly layer?: LayerId;
+    /** Standard sheet format, `a3` (default) or `a4`; overrides `width`/`height`. */
+    readonly format?: "a4" | "a3" | "a2";
+    /** Sheet orientation, `landscape` (default) or `portrait`. */
+    readonly orientation?: "landscape" | "portrait";
     /** Sheet width; defaults to the A3 landscape width. */
     readonly width?: number;
     /** Sheet height; defaults to the A3 landscape height. */
@@ -1023,6 +1027,8 @@ export interface TitleBlockRequest {
     readonly author?: string;
     /** Sheet label; defaults to `1`. */
     readonly sheet?: string;
+    /** Projection convention in the title block; defaults to `first`. */
+    readonly projection?: "first" | "third";
 }
 
 /** Result of `titleBlock()`. `created` holds the grid and text entities. */
@@ -1635,6 +1641,111 @@ export interface LeaderNoteRequest {
 export interface LeaderNoteResult {
     readonly revision: number;
     readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+}
+
+/** Arguments of `isometricView()`. */
+export interface IsometricViewRequest {
+    /** The projected part; needs at least one solid feature. */
+    readonly part: PartSpec;
+    /** Linear scale factor applied to the view; defaults to 1. */
+    readonly scale?: number;
+    /** Height of the view label and axis letters; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Lower-left corner of the placed view; defaults to the origin. */
+    readonly origin?: Point;
+    /** Caption under the view; defaults to `ISOMETRIC`. */
+    readonly label?: string;
+    /** Layer carrying the outlines and labels; defaults to `views`. */
+    readonly layer?: LayerId;
+}
+
+/** Result of `isometricView()`. `view` reports the placed box. */
+export interface IsometricViewResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+    readonly view: PlacedView;
+}
+
+/** One component of an exploded assembly. */
+export interface AssemblyComponent {
+    /** Optional component name written beside the balloon and in the BOM. */
+    readonly name?: string;
+    /** The component part; needs at least one solid feature. */
+    readonly part: PartSpec;
+    /** Assembled position offset along the part axes; defaults to the origin. */
+    readonly position?: readonly [number, number, number];
+    /** Explode translation applied on top of `position`; defaults to zero. */
+    readonly explode?: readonly [number, number, number];
+    /** Quantity reported in the BOM; defaults to `1`. */
+    readonly quantity?: number;
+    /** Optional material reported in the BOM. */
+    readonly material?: string;
+}
+
+/** Arguments of `explodedAssembly()`. */
+export interface ExplodedAssemblyRequest {
+    /** The exploded components; at least one, at most 64. */
+    readonly components: readonly AssemblyComponent[];
+    /** Linear scale factor applied to every component; defaults to 1. */
+    readonly scale?: number;
+    /** Height of the balloon numbers and names; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Lower-left corner of the placed group; defaults to the origin. */
+    readonly origin?: Point;
+    /** Layer carrying the outlines and balloons; defaults to `views`. */
+    readonly layer?: LayerId;
+}
+
+/** One balloon item reported by `explodedAssembly()`. */
+export interface AssemblyItem {
+    readonly number: number;
+    readonly name?: string;
+    readonly quantity: number;
+    readonly material?: string;
+    readonly center: Point;
+    readonly balloon: Point;
+}
+
+/** Result of `explodedAssembly()`. `items` reports the placed balloons. */
+export interface ExplodedAssemblyResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly created: readonly Entity[];
+    readonly items: readonly AssemblyItem[];
+}
+
+/** Arguments of `holeTable()`. */
+export interface HoleTableRequest {
+    /** The part whose cylindrical voids are tabulated; needs at least one. */
+    readonly part: PartSpec;
+    /** Lower-left corner of the table; defaults to the origin. */
+    readonly origin?: Point;
+    /** Height of the table text; defaults to 3.5. */
+    readonly textHeight?: number;
+    /** Table caption; defaults to `HOLE TABLE`. An empty string omits it. */
+    readonly title?: string;
+    /** Layer carrying the table; defaults to `holes`. */
+    readonly layer?: LayerId;
+}
+
+/** One hole row reported by `holeTable()`. */
+export interface HoleTableRow {
+    readonly no: number;
+    readonly axis: Axis3;
+    readonly posA: number;
+    readonly posB: number;
+    readonly diameter: number;
+    readonly depth: number;
+}
+
+/** Result of `holeTable()`. `rows` lists the tabulated holes. */
+export interface HoleTableResult {
+    readonly revision: number;
+    readonly drawing: Drawing;
+    readonly columns: readonly string[];
+    readonly rows: readonly HoleTableRow[];
     readonly created: readonly Entity[];
 }
 
