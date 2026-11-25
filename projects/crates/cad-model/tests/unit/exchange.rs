@@ -59,6 +59,7 @@ fn every_dimension_kind_lowers_solid_arrowheads() {
         lineweight_scale: 1.0,
         label_offset: 1.0,
         label_size: 1.75,
+        min_text_size: 0.0,
         dim_styles: &drawing.dim_styles,
     };
     let flat = build_drawing(&drawing, FlatSize::new(frame.width, frame.height), &projection);
@@ -95,6 +96,7 @@ fn dimension_arrow_follows_the_referenced_style() {
         lineweight_scale: 1.0,
         label_offset: 1.0,
         label_size: 1.75,
+        min_text_size: 0.0,
         dim_styles: &drawing.dim_styles,
     };
     let flat = build_drawing(&drawing, FlatSize::new(frame.width, frame.height), &projection);
@@ -195,6 +197,30 @@ fn pdf_export_keeps_dimension_text_legible() {
     assert!(!sizes.is_empty(), "the sheet writes text: {pdf}");
     let smallest = sizes.iter().copied().fold(f64::INFINITY, f64::min);
     assert!(smallest >= 7.0, "dimension text stays legible after fitting: {smallest} pt in {sizes:?}");
+}
+
+#[test]
+fn pdf_export_keeps_small_text_legible_after_fitting() {
+    let mut drawing = Drawing::empty(Some("Plate".to_string()), Units::Mm);
+    drawing.entities.push(Entity {
+        id: "line-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Line { from: [0.0, 0.0], to: [1000.0, 800.0] },
+    });
+    drawing.entities.push(Entity {
+        id: "text-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Text { at: [10.0, 10.0], height: 2.0, content: "Weld symbol".to_string() },
+    });
+    let (pdf, _) = pdf(&drawing);
+    let shown = pdf.find("(Weld symbol) Tj").expect("the note is drawn");
+    let size = pdf[..shown]
+        .rsplit("/F1 ")
+        .next()
+        .and_then(|tail| tail.split(' ').next())
+        .and_then(|value| value.parse::<f64>().ok())
+        .expect("a font size precedes the note");
+    assert!(size >= 7.0, "the fitted note stays above the legible print floor: {size}");
 }
 
 #[test]

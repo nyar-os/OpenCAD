@@ -293,6 +293,10 @@ struct Projection<'a> {
     lineweight_scale: f64,
     label_offset: f64,
     label_size: f64,
+    /// Smallest font size a model `Text` entity may render at, in flat-drawing
+    /// units. The fitted PDF page uses the legible print floor of 7 pt; the
+    /// unscaled SVG writer keeps text at its authored size.
+    min_text_size: f64,
     /// Dimension styles consulted for arrowhead sizes; the first entry is the
     /// fallback for entities without a style reference.
     dim_styles: &'a [DimensionStyle],
@@ -460,7 +464,7 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
         }
         EntityKind::Text { at, height, content } => {
             flat.push(Element::new(
-                Shape::Text { at: map(*at), text: content.clone(), size: (height.abs() * scale).max(0.01) },
+                Shape::Text { at: map(*at), text: content.clone(), size: (height.abs() * scale).max(projection.min_text_size).max(0.01) },
                 text_style.clone(),
             ));
         }
@@ -683,6 +687,7 @@ fn svg_document(drawing: &Drawing, frame: Frame) -> String {
         lineweight_scale: 1.0,
         label_offset: 1.0,
         label_size: stroke * 3.5,
+        min_text_size: 0.0,
         dim_styles: &drawing.dim_styles,
     };
     let mut flat = build_drawing(drawing, FlatSize::new(frame.width, frame.height), &projection);
@@ -1318,6 +1323,7 @@ fn pdf_page(drawing: &Drawing) -> (FlatDrawing, SheetLayout) {
         // text drops below the legible print floor; keep annotations at least
         // 7 pt so dimensions stay readable on paper.
         label_size: (1.75 * scale).max(7.0),
+        min_text_size: 7.0,
         dim_styles: &drawing.dim_styles,
     };
     let mut flat = build_drawing(drawing, FlatSize::new(PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT), &projection);
