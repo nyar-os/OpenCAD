@@ -246,7 +246,7 @@ every exporter carries the fill. A solid fill reports
 zero-area boundary reports `hatch/degenerate-boundary`; a non-positive
 `--spacing` reports `hatch/invalid-spacing`.
 
-`title-block` adds a standard sheet frame and a compact five-row title block to
+`title-block` adds a standard sheet frame and a compact four-row title block to
 an existing drawing and saves the file. `--format a4|a3|a2` picks a standard
 sheet, `--orientation landscape|portrait` rotates it, and explicit `--width` /
 `--height` values apply when no format is given. The sheet defaults to A3
@@ -320,6 +320,8 @@ open-cad --json diff current.ocad baseline.ocad > diff.json
 | `isometric-view` | `--part '<json>'`, `--scale n`, `--text-height n`, `--origin x,y`, `--label <text>`, `--layer <name>` |
 | `exploded-assembly` | `--components '<json>'`, `--scale n`, `--text-height n`, `--origin x,y`, `--layer <name>` |
 | `hole-table` | `--part '<json>'`, `--origin x,y`, `--text-height n`, `--title <text>`, `--layer <name>` |
+| `detail-view` | `--part '<json>'`, `--view front\|top\|left\|iso`, `--center x,y`, `--radius n`, `--scale n`, `--text-height n`, `--origin x,y`, `--label <text>`, `--layer <name>` |
+| `auxiliary-view` | `--part '<json>'`, `--angle deg`, `--plane front\|top`, `--scale n`, `--text-height n`, `--origin x,y`, `--label <text>`, `--layer <name>` |
 | `select` | `--box x1,y1,x2,y2`, `--crossing`, `--layer <name>` |
 | `snap` | `--modes <list>`, `--near x,y`, `--tolerance n`, `--layer <name>`, `--ids a,b` |
 | `ucs` | `--origin x,y`, `--rotation deg`, `--direction to-world\|to-ucs`, `--points "x,y ..."`, `--ids a,b` (at least one of points or ids) |
@@ -406,26 +408,44 @@ layer. `--scale`, `--origin` and the part validation behave as for
 `exploded-assembly` takes `--components` as a JSON array
 `[{"name":"...","part":{...},"position":[x,y,z],"explode":[x,y,z],"quantity":n,"material":"..."}]`
 of at most 64 parts, projects each one isometrically at `position + explode`
-and places its numbered balloon on a ring around the group, evenly spaced by
-angle so the balloons clear the outlines. Each balloon carries the 1-based
-index, leads to the nearest point of its component outline and shows the
-optional `name` outside the ring. A framed `BILL OF MATERIALS` table is drawn
-below the group with `ITEM`, `PART`, `QTY` and `MATERIAL` columns from the
-component order, `quantity` (default `1`) and material; the columns share fixed
-fractions of the table width so header and cells align. `--scale`, `--origin`
-and `--layer` (default `views`) behave as for `isometric-view`.
+and places its numbered balloon in one vertical column left of the group,
+ordered top to bottom with the components. Each balloon carries the 1-based
+index and a three-segment leader that reaches the nearest point of its own
+outline without crossing another component; the optional `name` sits left of
+the balloon. A framed `BILL OF MATERIALS` table is drawn right of the group
+with `ITEM`, `PART`, `QTY` and `MATERIAL` columns measured from their widest
+header or cell, numeric cells right-aligned. `--scale`, `--origin` and
+`--layer` (default `views`) behave as for `isometric-view`.
 
 `hole-table` tabulates every `cylinder` void of the part model as one row —
 `No.`, `Axis`, `Pos A`, `Pos B`, `Dia`, `Depth`, where the two positions are
 the coordinates transverse to the hole axis in ascending axis order — inside a
 framed table with a caption row (`--title`, default `HOLE TABLE`, suppressed
-by `--title ""`). The bottom-left corner comes from `--origin`, the width is
-`70 × --text-height` (default `3.5`) and every row is `2.5 × --text-height`
-tall, all on `--layer` (default `holes`, created when missing). A part without
-cylindrical voids reports `hole-table/empty`; an empty or malformed
-`--components` array, a non-positive `--text-height` and a non-finite
-`--origin` report `session/argument-invalid`; a locked or frozen layer reports
+by `--title ""`). The bottom-left corner comes from `--origin`; the columns are
+measured from their widest header or cell before placement, numeric cells are
+right-aligned under their headers, headers are centred, and every row is
+`2.2 × --text-height` (default `3.5`) tall, all on `--layer` (default `holes`,
+created when missing). A part without cylindrical voids reports
+`hole-table/empty`; an empty or malformed `--components` array, a non-positive
+`--text-height` and a non-finite `--origin` report
+`session/argument-invalid`; a locked or frozen layer reports
 `drawing/layer-locked` or `drawing/layer-frozen`.
+
+`detail-view` draws a circled detail of one base view (`--view`, default
+`top`) at `--scale` (default `2`). The base view is drawn at 1:1 with the
+callout circle at `--center` (default: the view centre) and `--radius`
+(default: 40% of the larger extent), and the enlarged copy sits to its right:
+projected geometry is clipped to the circle and scaled about that centre, with
+its boundary circle, centre marks, the `DETAIL A` caption (`--label`) and the
+scale annotation. A circle that misses every outline reports
+`detail-view/empty`.
+
+`auxiliary-view` projects the part along the plan angle `--angle` (default
+`45`), measured from X towards Y. `--plane front` (default) keeps Z vertical
+for a rotated elevation; `--plane top` keeps the plan. The view carries a
+direction arrow with the `A` marker, the `VIEW A` caption (`--label`) and the
+scale annotation. Both views accept `--text-height`, `--origin` and `--layer`
+(default `views`).
 
 ```bash
 open-cad multiview-sheet bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --projection third
@@ -434,6 +454,8 @@ open-cad leader-note bracket.ocad --points "10,4 26,4 26,14" --text "R5"
 open-cad isometric-view bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --origin 90,0
 open-cad exploded-assembly bracket.ocad --components '[{"name":"BASE","part":{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,10]}]}},{"name":"PLATE","part":{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,2]}]},"position":[0,0,10],"explode":[0,0,30]}]'
 open-cad hole-table bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,10]}],"voids":[{"kind":"cylinder","axis":"z","center":[10,10],"from":0,"to":10,"radius":3}]}'
+open-cad detail-view bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,10]}],"voids":[{"kind":"cylinder","axis":"z","center":[20,10],"from":0,"to":10,"radius":4}]}' --view top --center 20,10 --radius 12 --scale 2
+open-cad auxiliary-view bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[40,20,10]}]}' --angle 45 --plane front
 ```
 
 ## Layers

@@ -40,7 +40,7 @@ Operations reported as supported: `transform`, `copy`, `array`, `explode`,
 `distribute`, `stretch`, `overkill`, `hatch-pattern`, `title-block`,
 `polyline-smooth`, `polyline-chamfer`, `diff`, `quantity-table`,
 `multiview-sheet`, `section-view`, `leader-note`, `isometric-view`,
-`exploded-assembly`, `hole-table`, `measure`,
+`exploded-assembly`, `hole-table`, `detail-view`, `auxiliary-view`, `measure`,
 `measure-entity`, `measure-points`, `stats`,
 `dimension-style`, `text-style`, `text-search`, `group`, `select`, `properties`,
 `snap`, `linetype`, `ucs`.
@@ -633,7 +633,7 @@ including locked and frozen layers
 
 ## Title block
 
-`titleBlock(request)` draws a standard sheet frame and a compact five-row title
+`titleBlock(request)` draws a standard sheet frame and a compact four-row title
 block on one layer. `format` selects A4, A3 (default) or A2 and `orientation`
 picks landscape or portrait; explicit `width` / `height` apply when no format is
 given. The operation writes an outer border, an inner frame inset by `margin`
@@ -935,11 +935,14 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
   compare geometry by tolerance, styles, line types, groups, layouts, draw order
   or revisions, and it does not write a merged drawing.
 - Exploded assemblies list every component as its own BOM row; identical parts
-  are not grouped or rolled up, the table has four fixed columns and the
-  balloons cover at most 64 items. Detail (enlarged) views are not generated.
-- Multi-view, section, isometric and exploded views are flat drawings: they
-  project the declared feature model and do not replace or edit the source
-  solids, and the hidden outlines are not trimmed against one another.
+  are not grouped or rolled up, the table has four measured columns and the
+  balloons cover at most 64 items.
+- Multi-view, section, isometric, exploded, detail and auxiliary views are flat
+  drawings: they project the declared feature model and do not replace or edit
+  the source solids, and the hidden outlines are not trimmed against one
+  another. A detail view clips projected outlines to its circle instead of
+  keeping a true broken-out section, and an auxiliary view projects each
+  feature's silhouette rather than a full boolean intersection.
 - Hole tables tabulate the declared `cylinder` voids only: they do not detect
   holes from solids, bores, countersinks or other features, and the table is a
   static snapshot that a later edit does not refresh.
