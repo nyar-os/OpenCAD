@@ -60,9 +60,9 @@ types.
 | History | `undo`, `redo`, `close` |
 | Save and export | `save`, `export` |
 
-`export({ format })` accepts `dxf`, `dxf-r12`, `svg`, `pdf`, `stl`, `obj` and
-`step`. The result reports what the target kept in `losses`, so a successful
-export does not imply a lossless file. `convertUnits` switches a drawing between
+`export({ format })` accepts `dxf`, `dxf-r12`, `svg`, `pdf`, `stl`, `obj`,
+`step` and `iges`. The result reports what the target kept in `losses`, so a
+successful export does not imply a lossless file. `convertUnits` switches a drawing between
 `mm` and `inch`.
 
 ## Constraints

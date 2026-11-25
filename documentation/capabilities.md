@@ -25,7 +25,8 @@ Every unsupported route answers with `capability/not-implemented`.
 | STEP | partial | Export direction only (AP203 solids and faces). |
 | OBJ | partial | Export direction only (triangle meshes). |
 | STL | export target only | Recorded as `unsupported` under `formats` because there is no STL reader; `exportTargets.stl` is `supported`. |
-| DWG, IGES/IGS, PNG, JPG | unsupported | No reader and no writer. |
+| IGES/IGS | partial | Export direction only (a declared IGES-5.3 deck subset); no reader. |
+| DWG, PNG, JPG | unsupported | No reader and no writer. |
 | Interactive viewport | unsupported | SVG output is the only renderer; the studio does not paint geometry. |
 | Constraint solver, 3D kernel | unsupported | No constraints, booleans, analytic surfaces or solids beyond faceted projection. |
 
@@ -121,6 +122,40 @@ are ordinary `LINE` records and are written in full.
 Not written: `DWG`, blocks, `XREF`, images, layouts and paper space, proprietary
 or proxy objects, text styles beyond the declared table fields, and any
 3D content.
+
+## IGES export
+
+`iges` writes an IGES-5.3 ASCII deck (80-column cards, `S`, `G`, `D`, `P` and
+`T` sections) containing the drawing's curve entities in the XY plane. The deck
+is deterministic: the same drawing always produces the same bytes. The global
+section declares the producer, the IGES version, the card width and the units
+taken from the drawing (`MILLIMETE` or `INCH`); the deck carries curve entities
+only, with no transform, section or property definition entities.
+
+| Entity | IGES type |
+| :--- | :--- |
+| `LINE` | 110 (straight segment) |
+| `POINT` | 100 (general point) |
+| `CIRCLE` | 112 (circle) |
+| `ARC` (full sweep) | 112 (circle) |
+| `ARC` (partial) | 126 exact rational quadratic B-spline, split at 90° turns |
+| `SPLINE` | 126 cubic B-spline through the Catmull-Rom fit points |
+| `ELLIPSE` (full) | 114 (ellipse) |
+| `ELLIPSE` (partial) | 110 segments sampled from the arc |
+| `POLYLINE` | one 110 per segment; a closed polyline repeats the first point |
+
+Text, every dimension kind and hatch are annotation entities and are skipped.
+Layer colours, lineweights and line types have no IGES counterpart in this
+subset and are dropped. The export report carries the written entity count in
+`entities`.
+
+| Code | Severity | Meaning |
+| :--- | :--- | :--- |
+| `iges/unsupported-entity` | warning | One message for the total count of text, dimension and hatch entities skipped. |
+| `iges/ellipse-polyline` | warning | One message for the total count of partial ellipses flattened to line segments. |
+| `iges/layer-info` | warning | The drawing carries layers beyond the built-in pair; their names, colours and line types are not written. |
+
+There is no IGES reader.
 
 ## SVG and PDF
 
@@ -748,7 +783,8 @@ malformed refusals (`diff_reports_unreadable_and_malformed_projects`).
 
 ## Boundaries that stay unsupported
 
-- No DWG, IGES, PNG or JPG reading or writing.
+- No DWG, PNG or JPG reading or writing. IGES is export-only; there is no
+  reader.
 - No full DXF reader or writer; only the subset above.
 - No interactive viewport, zoom/pan canvas or hover picking. The studio is a
   shell; SVG is the preview.
