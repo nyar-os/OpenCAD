@@ -8295,3 +8295,7 @@ pub fn diff(left: &Path, right: &Path) -> Result<Value, ServiceError> {
 #[cfg(test)]
 #[path = "../tests/unit/lib.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/layout.rs"]
+mod layout;
