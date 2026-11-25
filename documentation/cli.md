@@ -306,6 +306,9 @@ open-cad --json diff current.ocad baseline.ocad > diff.json
 | `measure-points` | `--points "x,y x,y"` or `--points "x,y x,y x,y"` (two or three points) |
 | `stats` | `--group-by layer\|type\|color\|linetype` (defaults to `layer`) |
 | `quantity-table` | `--group-by layer\|type\|color\|linetype`, `--layer <name>`, `--origin x,y`, `--text-height n`, `--title <text>` |
+| `multiview-sheet` | `--part '<json>'`, `--projection first\|third`, `--scale n`, `--text-height n`, `--origin x,y`, `--layer <name>` |
+| `section-view` | `--part '<json>'`, `--axis x\|y\|z`, `--at n`, `--hatch-angle deg`, `--hatch-spacing n`, `--text-height n`, `--origin x,y`, `--label <text>`, `--layer <name>` |
+| `leader-note` | `--points "x,y x,y ..."`, `--text <note>`, `--text-height n`, `--arrow on\|off`, `--layer <name>` |
 | `select` | `--box x1,y1,x2,y2`, `--crossing`, `--layer <name>` |
 | `snap` | `--modes <list>`, `--near x,y`, `--tolerance n`, `--layer <name>`, `--ids a,b` |
 | `ucs` | `--origin x,y`, `--rotation deg`, `--direction to-world\|to-ucs`, `--points "x,y ..."`, `--ids a,b` (at least one of points or ids) |
@@ -352,6 +355,40 @@ a locked or frozen layer reports `drawing/layer-locked` or
 open-cad stats plan.ocad --group-by type
 open-cad quantity-table plan.ocad --group-by layer --origin 0,-2500 --text-height 120
 open-cad quantity-table plan.ocad --group-by type --layer Schedule --title "Bill of quantities"
+```
+
+`multiview-sheet` projects a declarative part model — a JSON object
+`{"solids":[...],"voids":[...]}` whose features are `box` (`min`, `max`),
+`cylinder` and `cone` (`axis`, `center`, `from`, `to`, `radius` or
+`baseRadius`/`topRadius`), `sphere` (`center`, `radius`) and `wedge` (`min`,
+`max`, `topFrom`, `topTo`) — onto the sheet as first- or third-angle front,
+top and left views plus an isometric view, each with a label, and draws the
+ISO projection symbol; void features project as dashed hidden outlines on a
+`hidden` layer. `--scale` scales every view, `--origin` places the lower-left
+corner of the group and `--layer` (default `views`, created when missing)
+carries the outlines, labels and symbol; the result reports the placed view
+boxes. A part without solids, a non-positive `--scale` or a malformed `--part`
+reports `session/argument-invalid`.
+
+`section-view` cuts the same part model by a plane perpendicular to `--axis`
+at `--at` and draws the cut outline with hatch lines at `--hatch-angle`
+degrees (default 45) every `--hatch-spacing` units (default 4), plus the
+section label (`--label`, default `SECTION A-A`) and the cutting-plane
+indicator, all on `--layer` (default `views`). A plane that misses the part
+reports `section/empty`; a spacing that needs more than 2000 hatch lines
+reports `hatch/spacing-too-fine`.
+
+`leader-note` draws an open polyline through `--points`, an arrowhead at the
+first point unless `--arrow off`, and the `--text` note beside the last
+point, on `--layer` (default `notes`, created when missing). Fewer than two
+points, repeated consecutive points, a blank note or a non-positive
+`--text-height` reports `session/argument-invalid`; a locked or frozen target
+layer reports `drawing/layer-locked` or `drawing/layer-frozen`.
+
+```bash
+open-cad multiview-sheet bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --projection third
+open-cad section-view bracket.ocad --part '{"solids":[{"kind":"box","min":[0,0,0],"max":[20,12,8]}]}' --axis z --at 4
+open-cad leader-note bracket.ocad --points "10,4 26,4 26,14" --text "R5"
 ```
 
 ## Layers
