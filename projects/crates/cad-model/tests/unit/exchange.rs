@@ -118,6 +118,47 @@ fn dimension_arrow_follows_the_referenced_style() {
 }
 
 #[test]
+fn tight_linear_dimension_moves_arrowheads_outside_the_extension_lines() {
+    let mut drawing = Drawing::empty(Some("Tight".to_string()), Units::Mm);
+    drawing.entities.push(Entity {
+        id: "dimension-1".to_string(),
+        layer: "0".to_string(),
+        kind: EntityKind::Dimension { from: [0.0, 0.0], to: [3.0, 0.0], offset: 12.0, text: None, style: None },
+    });
+    let frame = Frame::of(&drawing);
+    let map = |point: [f64; 2]| frame.map(point);
+    let projection = Projection {
+        map: &map,
+        scale: 1.0,
+        stroke: 0.5,
+        lineweight_scale: 1.0,
+        label_offset: 1.0,
+        label_size: 1.75,
+        min_text_size: 0.0,
+        dim_styles: &drawing.dim_styles,
+    };
+    let flat = build_drawing(&drawing, FlatSize::new(frame.width, frame.height), &projection);
+    let arrows = flat
+        .elements
+        .iter()
+        .filter_map(|element| {
+            let Shape::Polygon { points } = &element.shape
+            else {
+                return None;
+            };
+            Some(points.iter().map(|point| point.x).collect::<Vec<_>>())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(arrows.len(), 2, "the tight dimension still draws two arrowheads: {arrows:?}");
+    // The 3 mm span cannot hold two 2.5 mm arrowheads and the label, so the
+    // triangles sit outside the extension lines instead of crossing the span.
+    let p1 = frame.map([0.0, 12.0]).x;
+    let p2 = frame.map([3.0, 12.0]).x;
+    assert!(arrows[0].iter().all(|x| *x <= p1 + 1e-9), "the first arrowhead stays left of the first extension line: {:?}", arrows[0]);
+    assert!(arrows[1].iter().all(|x| *x >= p2 - 1e-9), "the second arrowhead stays right of the second extension line: {:?}", arrows[1]);
+}
+
+#[test]
 fn svg_export_draws_sheet_frame_and_title_block() {
     let mut drawing = Drawing::empty(Some("Bracket".to_string()), Units::Mm);
     drawing.properties.author = "Ada".to_string();

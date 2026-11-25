@@ -474,13 +474,18 @@ fn push_entity(flat: &mut FlatDrawing, entity: &Entity, color: Color, stroke_sty
                 flat.push(Element::new(Shape::Line { from: map(start), to: map(end) }, stroke_style.clone()));
             }
             let arrow = arrow_length(style.as_deref(), projection);
-            push_arrowhead(flat, map, color, p1, [p1[0] - p2[0], p1[1] - p2[1]], arrow);
-            push_arrowhead(flat, map, color, p2, [p2[0] - p1[0], p2[1] - p1[1]], arrow);
+            let label = dimension_label(*from, *to, text);
+            // When the span cannot hold two arrowheads and the label, the
+            // arrowheads move outside the extension lines and point inward,
+            // the drafting convention that keeps a tight dimension readable.
+            let axis = [p2[0] - p1[0], p2[1] - p1[1]];
+            let span = (axis[0] * axis[0] + axis[1] * axis[1]).sqrt() * scale;
+            let text_width = projection.label_size * 0.6 * label.chars().count() as f64;
+            let (first, second) = if span < 2.0 * arrow + text_width { (axis, [-axis[0], -axis[1]]) } else { ([-axis[0], -axis[1]], axis) };
+            push_arrowhead(flat, map, color, p1, first, arrow);
+            push_arrowhead(flat, map, color, p2, second, arrow);
             let midpoint = [(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0 + projection.label_offset];
-            flat.push(Element::new(
-                Shape::Text { at: map(midpoint), text: dimension_label(*from, *to, text), size: projection.label_size.max(0.01) },
-                text_style.clone(),
-            ));
+            flat.push(Element::new(Shape::Text { at: map(midpoint), text: label, size: projection.label_size.max(0.01) }, text_style.clone()));
         }
         EntityKind::RadialDimension { center, radius, angle, offset, diameter, text } => {
             let target = radial_target(*center, *radius, *angle);
