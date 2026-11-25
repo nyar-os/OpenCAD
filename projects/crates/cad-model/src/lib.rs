@@ -27,6 +27,7 @@ mod import;
 mod inspection;
 mod schema;
 mod store;
+mod views;
 
 pub use schema::{
     CONTINUOUS_LINETYPE, CURVE_STEP_DEGREES, DEFAULT_LAYER, DEFAULT_LAYOUT_HEIGHT, DEFAULT_LAYOUT_WIDTH, DIMENSION_LAYER, DimensionStyle,
@@ -34,6 +35,11 @@ pub use schema::{
     PROPERTY_VALUE_LIMIT, TextStyle, Units, angular_points, angular_sweep, angular_value, arc_point, arc_sweep, default_dimension_styles,
     default_hatch_pattern, default_linetypes, default_text_styles, ellipse_point, finite_point, normalize_angle, offset_points,
     ordinate_points, ordinate_value, radial_label, radial_target, sample_arc, sample_ellipse, sample_spline,
+};
+
+pub use views::{
+    Axis3, Feature3d, LeaderNoteRequest, MultiViewSheetRequest, PartSpec, SectionViewRequest, add_leader_note, add_multiview_sheet,
+    add_section_view,
 };
 
 /// Stable code reported by every operation that is not wired yet.
@@ -120,8 +126,11 @@ fn argument(message: impl Into<String>) -> ServiceError {
 /// operations (transform, copy, rectangular/polar array, polyline explode,
 /// offset, trim, extend, break, join, fillet, chamfer, align, distribute,
 /// overkill, hatch-pattern, title-block, polyline-smooth, polyline-chamfer,
-/// quantity-table, diff and measure);
-/// constraint solving and a 3D kernel stay unsupported.
+/// quantity-table, multiview-sheet, section-view, leader-note, diff and
+/// measure);
+/// constraint solving and a 3D kernel stay unsupported; the multiview and
+/// section operations project a small declarative part description and do not
+/// add a modelling kernel.
 pub fn capabilities() -> Value {
     let map = |keys: &[&str], level: fn(&str) -> &'static str| {
         let mut entries = Map::new();
@@ -216,6 +225,9 @@ pub fn capabilities() -> Value {
                 "polyline-chamfer",
                 "diff",
                 "quantity-table",
+                "multiview-sheet",
+                "section-view",
+                "leader-note",
                 "constraints",
                 "kernel3d",
             ],
@@ -223,7 +235,7 @@ pub fn capabilities() -> Value {
                 "transform" | "copy" | "array" | "explode" | "offset" | "trim" | "extend" | "break" | "join" | "fillet" | "chamfer" | "align"
                 | "distribute" | "stretch" | "overkill" | "measure" | "measure-entity" | "measure-points" | "stats" | "dimension-style" | "text-style" | "text-search"
                 | "group" | "select" | "properties" | "snap" | "linetype" | "ucs" | "hatch-pattern" | "title-block" | "polyline-smooth"
-                | "polyline-chamfer" | "diff" | "quantity-table" => {
+                | "polyline-chamfer" | "diff" | "quantity-table" | "multiview-sheet" | "section-view" | "leader-note" => {
                     "supported"
                 }
                 _ => "unsupported",
